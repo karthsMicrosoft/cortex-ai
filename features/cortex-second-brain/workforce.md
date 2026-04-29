@@ -41,16 +41,16 @@
 | reviewer-spec-auditor | Spec Auditor Findings | BLOCKING, HIGH, MEDIUM |
 
 ## Phase Status
-- [>] Phase 1 — Requirements
-- [ ] Phase 2 — Design + Research
+- [x] Phase 1 — Requirements (COMPLEX: 23 stories)
+- [>] Phase 2 — Design + Research
 - [ ] Phase 3 — Critique
 - [ ] Phase 4 — Coding (Phase 1 MVP items 1-21, then Phase 2 items 22-34)
 - [ ] Phase 5 — Review (with spec auditor)
 
 ## Current State
-**Active phase:** 1 — Requirements
-**Active agents:** pm (teammate)
-**Waiting for:** `PM complete: /features/cortex-second-brain/requirements/requirements.md — {assessment}`
+**Active phase:** 2 — Design + Research
+**Active agents:** architect, researcher (teammates)
+**Waiting for:** `Architect complete: /features/cortex-second-brain/designs/design.md and /features/cortex-second-brain/tasks/` AND `researcher complete: features/cortex-second-brain/designs/research.md`
 
 ## Review Base Commit
 <!-- Written when Phase 5 begins -->

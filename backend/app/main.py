@@ -149,12 +149,19 @@ from app.api.voice import router as voice_router
 from app.api.search import router as search_router
 from app.api.tags import router as tags_router       # B6 — dedicated tags module
 from app.api.sync import router as sync_router
+from app.api.dictionary import router as dictionary_router  # US-7 — personal dictionary
+from app.api.insights import ai_summary_router, insights_router  # US-6 — insights
+from app.api.export import router as export_router               # US-6 — export
 
-app.include_router(auth_router,   prefix="/api/auth",   tags=["auth"])
-app.include_router(notes_router,  prefix="/api/notes",  tags=["notes"])
-app.include_router(ai_router,     prefix="/api/ai",     tags=["ai"])
-app.include_router(upload_router, prefix="/api",        tags=["upload"])
-app.include_router(voice_router,  prefix="/api/voice",  tags=["voice"])
-app.include_router(search_router, prefix="/api/search", tags=["search"])
-app.include_router(tags_router,   prefix="/api/tags",   tags=["tags"])
-app.include_router(sync_router,   prefix="/api/sync",   tags=["sync"])
+app.include_router(auth_router,         prefix="/api/auth",       tags=["auth"])
+app.include_router(notes_router,        prefix="/api/notes",      tags=["notes"])
+app.include_router(ai_router,           prefix="/api/ai",         tags=["ai"])
+app.include_router(ai_summary_router,   prefix="/api/ai",         tags=["ai"])
+app.include_router(upload_router,       prefix="/api",            tags=["upload"])
+app.include_router(voice_router,        prefix="/api/voice",      tags=["voice"])
+app.include_router(search_router,       prefix="/api/search",     tags=["search"])
+app.include_router(tags_router,         prefix="/api/tags",       tags=["tags"])
+app.include_router(sync_router,         prefix="/api/sync",       tags=["sync"])
+app.include_router(dictionary_router,   prefix="/api/dictionary", tags=["dictionary"])
+app.include_router(insights_router,     prefix="/api/insights",   tags=["insights"])
+app.include_router(export_router,       prefix="/api",            tags=["export"])

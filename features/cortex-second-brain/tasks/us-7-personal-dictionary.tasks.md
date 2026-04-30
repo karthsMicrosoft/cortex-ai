@@ -18,8 +18,8 @@
 - Settings page renders `<PersonalDictionary />` with chip-style list, type selector, color-coded chips, type filter, and instant add/delete.
 
 ## Status
-**Status**: Not Started
-**Started**: TBD
+**Status**: In Progress
+**Started**: 2026-04-29
 **Completed**: TBD
 
 ## Relevant Documentation

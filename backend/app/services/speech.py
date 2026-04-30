@@ -3,6 +3,8 @@ Azure Speech SDK adapter — file-mode transcription.
 
 Exposes:
 - transcribe_audio_file(audio_bytes, language) → str
+- load_user_phrase_list(recognizer, user_id, db, max_phrases) → int   [US-7]
+- increment_term_usage(content, user_id, db)                          [US-7]
 
 WebSocket streaming STT is added in US-9; this module handles only file-mode
 recognition using SpeechRecognizer.recognize_once_async().
@@ -11,11 +13,9 @@ Environment:
 - AZURE_SPEECH_KEY
 - AZURE_SPEECH_REGION  (default: westus2)
 """
-import io
 import logging
 import tempfile
 import os
-from typing import Optional
 
 import azure.cognitiveservices.speech as speechsdk
 
@@ -95,3 +95,78 @@ async def _recognize_once(recognizer: speechsdk.SpeechRecognizer):
     # The SDK returns a concurrent.futures-style Future; run it in executor.
     result = await loop.run_in_executor(None, future.get)
     return result
+
+
+# ---------------------------------------------------------------------------
+# US-7 — Personal Dictionary helpers
+# ---------------------------------------------------------------------------
+
+async def load_user_phrase_list(
+    recognizer: speechsdk.SpeechRecognizer,
+    user_id,
+    db,
+    max_phrases: int = 500,
+) -> int:
+    """Load the user's personal dictionary into the STT recognizer via PhraseListGrammar.
+
+    Selects up to *max_phrases* terms ordered by usage_count DESC and adds each
+    term (plus pronunciation_hint when present) to the grammar.
+
+    Args:
+        recognizer:   Azure SpeechRecognizer instance (before recognition starts).
+        user_id:      UUID of the authenticated user.
+        db:           Async SQLAlchemy session.
+        max_phrases:  Cap on phrases loaded (Azure limit ~500 per session).
+
+    Returns:
+        Number of UserVocabulary rows loaded (not total phrase strings added,
+        since each row may add 1 or 2 phrases).
+    """
+    from sqlalchemy import select
+    from app.models.vocabulary import UserVocabulary
+
+    result = await db.execute(
+        select(UserVocabulary)
+        .where(UserVocabulary.user_id == user_id)
+        .order_by(UserVocabulary.usage_count.desc())
+        .limit(max_phrases)
+    )
+    terms = result.scalars().all()
+    if not terms:
+        return 0
+
+    phrase_list = speechsdk.PhraseListGrammar.from_recognizer(recognizer)
+    for term in terms:
+        phrase_list.addPhrase(term.term)
+        if term.pronunciation_hint:
+            phrase_list.addPhrase(term.pronunciation_hint)
+
+    return len(terms)
+
+
+async def increment_term_usage(content: str, user_id, db) -> None:
+    """After STT, increment usage_count for each user vocabulary term found in *content*.
+
+    Uses case-insensitive substring scan; commits all increments in one transaction.
+
+    Args:
+        content:  The transcribed text returned by STT.
+        user_id:  UUID of the authenticated user.
+        db:       Async SQLAlchemy session.
+    """
+    from sqlalchemy import select
+    from app.models.vocabulary import UserVocabulary
+
+    result = await db.execute(
+        select(UserVocabulary).where(UserVocabulary.user_id == user_id)
+    )
+    terms = result.scalars().all()
+    if not terms:
+        return
+
+    content_lower = content.lower()
+    for term in terms:
+        if term.term.lower() in content_lower:
+            term.usage_count += 1
+
+    await db.commit()

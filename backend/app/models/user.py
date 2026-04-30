@@ -50,3 +50,6 @@ class User(Base):
     daily_summaries: Mapped[list["DailySummary"]] = relationship(  # noqa: F821
         "DailySummary", back_populates="user", cascade="all, delete-orphan"
     )
+    vocabulary: Mapped[list["UserVocabulary"]] = relationship(  # noqa: F821
+        "UserVocabulary", back_populates="user", cascade="all, delete-orphan"
+    )

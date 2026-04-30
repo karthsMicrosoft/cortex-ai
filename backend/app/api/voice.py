@@ -3,7 +3,7 @@ Voice endpoints.
 
 Endpoints:
   POST /api/voice/upload  — multipart audio → STT → NoteOut (pipeline scheduled)
-  WS   /api/voice/stream  — real-time streaming STT (US-9; stub here)
+  WS   /api/voice/stream  — real-time streaming STT (US-9)
 
 The POST upload route:
 1. Validates file size (≤ 50 MB).
@@ -19,12 +19,12 @@ import hashlib
 import logging
 import uuid
 
-from fastapi import APIRouter, BackgroundTasks, Depends, File, HTTPException, UploadFile, status
+from fastapi import APIRouter, BackgroundTasks, Depends, File, HTTPException, Query, UploadFile, WebSocket, WebSocketDisconnect, status
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from sqlalchemy.orm import selectinload
 
-from app.auth.jwt import get_current_user
+from app.auth.jwt import get_current_user, validate_ws_token
 from app.config import settings
 from app.database import get_db
 from app.models.note import Note
@@ -32,6 +32,13 @@ from app.pipeline.processor import AIPipeline
 from app.schemas.note import NoteOut
 from app.services.blob_storage import upload_blob
 from app.services.speech import transcribe_audio_file
+
+# B16 soft-fail: import US-7 phrase-list helpers if available; degrade gracefully otherwise.
+try:
+    from app.services.speech import load_user_phrase_list, increment_term_usage  # type: ignore[attr-defined]
+except ImportError:
+    load_user_phrase_list = None  # type: ignore[assignment]
+    increment_term_usage = None  # type: ignore[assignment]
 
 logger = logging.getLogger(__name__)
 
@@ -79,8 +86,15 @@ async def voice_upload(
         content_type=content_type,
     )
 
-    # 4. Transcribe
+    # 4. Transcribe — load personal dictionary phrase list before recognition
     raw_transcription = await transcribe_audio_file(audio_bytes)
+
+    # 4b. Increment usage counts for matched terms (B16 soft-fail; US-7 may not be merged yet)
+    if increment_term_usage is not None and raw_transcription:
+        try:
+            await increment_term_usage(raw_transcription, current_user_id, db)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("voice_upload: increment_term_usage failed for user=%s: %s", current_user_id, exc)
 
     # 5. Create note
     note = Note(
@@ -109,11 +123,123 @@ async def voice_upload(
 
 
 # ---------------------------------------------------------------------------
-# WS /api/voice/stream  (stub — implemented in US-9)
+# WS /api/voice/stream  — US-9 real-time STT streaming
 # ---------------------------------------------------------------------------
 
-# The WebSocket streaming endpoint is added in US-9. The route definition
-# is deliberately absent here to avoid confusing testers in US-2.
+@router.websocket("/stream")
+async def voice_stream(
+    websocket: WebSocket,
+    token: str = Query(..., description="JWT access token for WebSocket auth"),
+    db: AsyncSession = Depends(get_db),
+) -> None:
+    """Stream audio from client → Azure Speech SDK → partial/final transcripts back.
+
+    Authentication is done via ?token=<jwt> query param before accept()
+    (critique mitigation #4).
+
+    Protocol:
+      - Client sends raw audio bytes (PCM/webm chunks, every 250 ms).
+      - Server sends JSON frames:
+          {"type": "partial", "text": "...", "is_final": false}   — from recognizing
+          {"type": "transcription", "text": "...", "is_final": true} — from recognized
+          {"type": "error", "message": "..."}                     — on SDK init failure
+    """
+    import asyncio
+    import azure.cognitiveservices.speech as speechsdk
+
+    # ------------------------------------------------------------------ auth
+    # Validate token BEFORE accept() so rejected connections get a clean close.
+    # validate_ws_token is synchronous and raises WebSocketException on failure.
+    user_id = validate_ws_token(token)
+
+    await websocket.accept()
+    logger.info("voice_stream: WS accepted for user=%s", user_id)
+
+    # --------------------------------------------------------- Speech SDK setup
+    try:
+        speech_config = speechsdk.SpeechConfig(
+            subscription=settings.AZURE_SPEECH_KEY,
+            region=settings.AZURE_SPEECH_REGION,
+        )
+        speech_config.speech_recognition_language = "en-US"
+
+        push_stream = speechsdk.audio.PushAudioInputStream()
+        audio_config = speechsdk.audio.AudioConfig(stream=push_stream)
+        recognizer = speechsdk.SpeechRecognizer(
+            speech_config=speech_config,
+            audio_config=audio_config,
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.error("voice_stream: Speech SDK init failed for user=%s: %s", user_id, exc)
+        await websocket.send_json({"type": "error", "message": "Speech SDK initialization failed"})
+        await websocket.close(code=1011)
+        return
+
+    # ------------------------------------------------ phrase-list (US-7 hook)
+    if load_user_phrase_list is not None:
+        try:
+            phrase_count = await load_user_phrase_list(recognizer, user_id, db)
+            logger.info("Loaded %d phrases for user %s", phrase_count, user_id)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("voice_stream: phrase list load failed for user=%s: %s", user_id, exc)
+    else:
+        logger.warning(
+            "Personal dictionary unavailable (US-7 not merged); STT runs unboosted."
+        )
+
+    # --------------------------------------------- event wiring (thread-safe)
+    loop = asyncio.get_event_loop()
+    final_transcript_parts: list[str] = []
+
+    def _on_recognizing(evt) -> None:  # type: ignore[type-arg]
+        text = evt.result.text
+        if text:
+            asyncio.run_coroutine_threadsafe(
+                websocket.send_json({"type": "partial", "text": text, "is_final": False}),
+                loop,
+            )
+
+    def _on_recognized(evt) -> None:  # type: ignore[type-arg]
+        text = evt.result.text
+        if text:
+            final_transcript_parts.append(text)
+            asyncio.run_coroutine_threadsafe(
+                websocket.send_json({"type": "transcription", "text": text, "is_final": True}),
+                loop,
+            )
+
+    recognizer.recognizing.connect(_on_recognizing)
+    recognizer.recognized.connect(_on_recognized)
+
+    # Use _async variant (returns a Future); fall back to sync if not available
+    start_result = recognizer.start_continuous_recognition_async()
+    if hasattr(start_result, "get"):
+        start_result.get()
+    logger.info("voice_stream: continuous recognition started for user=%s", user_id)
+
+    # -------------------------------------------------- receive audio chunks
+    try:
+        while True:
+            data = await websocket.receive_bytes()
+            push_stream.write(data)
+    except WebSocketDisconnect:
+        logger.info("voice_stream: WS disconnected for user=%s", user_id)
+    finally:
+        push_stream.close()
+        stop_result = recognizer.stop_continuous_recognition_async()
+        if hasattr(stop_result, "get"):
+            stop_result.get()
+        logger.info("voice_stream: recognition stopped for user=%s", user_id)
+
+    # ------------------------------------------ post-disconnect: term usage
+    final_transcript = " ".join(final_transcript_parts)
+    if increment_term_usage is not None and final_transcript:
+        try:
+            await increment_term_usage(final_transcript, user_id, db)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                "voice_stream: increment_term_usage failed for user=%s: %s", user_id, exc
+            )
 
 
 # ---------------------------------------------------------------------------

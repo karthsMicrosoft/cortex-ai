@@ -1,15 +1,126 @@
 import { useCallback, useEffect, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
-import { ArrowLeft, Music } from 'lucide-react';
+import { ArrowLeft, Music, Pencil, Check, X } from 'lucide-react';
 import { db } from '../db';
 import type { LocalNote } from '../db';
-import { getNote } from '../api/notes';
+import { getNote, updateNote } from '../api/notes';
 import type { NoteOut } from '../api/notes';
 import { searchSimilar } from '../api/search';
 import type { SearchResult } from '../api/search';
 import { NoteEditor } from '../components/NoteEditor';
 import { ProcessingBadge } from '../components/ProcessingBadge';
+import { MusicPlayer } from '../components/MusicPlayer';
+import type { MusicMetadata } from '../components/MusicPlayer';
 import { CATEGORY_COLORS, formatDateTime } from '../utils/formatters';
+
+// ---------------------------------------------------------------------------
+// Music metadata label editor
+// ---------------------------------------------------------------------------
+
+interface MusicLabelEditorProps {
+  noteId: string;
+  metadata: MusicMetadata;
+  onSaved: (updated: NoteOut) => void;
+}
+
+function MusicLabelEditor({ noteId, metadata, onSaved }: MusicLabelEditorProps): React.ReactElement {
+  const [isEditing, setIsEditing] = useState(false);
+  const [tempo, setTempo] = useState(String(metadata.tempo ?? ''));
+  const [key, setKey] = useState(metadata.key ?? '');
+  const [genre, setGenre] = useState(metadata.genre ?? '');
+  const [mood, setMood] = useState(metadata.mood ?? '');
+  const [isSaving, setIsSaving] = useState(false);
+  const [saveError, setSaveError] = useState<string | null>(null);
+
+  const handleSave = async () => {
+    setIsSaving(true);
+    setSaveError(null);
+    try {
+      const updated = await updateNote(noteId, {
+        music_metadata: {
+          ...(tempo ? { tempo: Number(tempo) } : {}),
+          ...(key ? { key } : {}),
+          ...(genre ? { genre } : {}),
+          ...(mood ? { mood } : {}),
+        },
+      });
+      onSaved(updated);
+      setIsEditing(false);
+    } catch (err) {
+      setSaveError(err instanceof Error ? err.message : 'Save failed');
+    } finally {
+      setIsSaving(false);
+    }
+  };
+
+  const handleCancel = () => {
+    setTempo(String(metadata.tempo ?? ''));
+    setKey(metadata.key ?? '');
+    setGenre(metadata.genre ?? '');
+    setMood(metadata.mood ?? '');
+    setSaveError(null);
+    setIsEditing(false);
+  };
+
+  if (!isEditing) {
+    return (
+      <button
+        type="button"
+        onClick={() => setIsEditing(true)}
+        className="flex items-center gap-1 text-xs text-slate-500 hover:text-slate-300"
+        aria-label="Edit music labels"
+      >
+        <Pencil className="h-3 w-3" aria-hidden="true" />
+        Edit labels
+      </button>
+    );
+  }
+
+  return (
+    <div className="flex flex-col gap-2 rounded-lg border border-slate-700 bg-slate-900/60 p-3">
+      <p className="text-xs font-semibold text-slate-400">Edit Music Labels</p>
+      <div className="grid grid-cols-2 gap-2">
+        {[
+          { label: 'BPM', value: tempo, setter: setTempo, type: 'number' as const },
+          { label: 'Key', value: key, setter: setKey, type: 'text' as const },
+          { label: 'Genre', value: genre, setter: setGenre, type: 'text' as const },
+          { label: 'Mood', value: mood, setter: setMood, type: 'text' as const },
+        ].map(({ label, value, setter, type }) => (
+          <label key={label} className="flex flex-col gap-0.5">
+            <span className="text-xs text-slate-500">{label}</span>
+            <input
+              type={type}
+              value={value}
+              onChange={(e) => setter(e.target.value)}
+              className="rounded-md border border-slate-700 bg-slate-800 px-2 py-1 text-xs text-slate-200 focus:border-indigo-500 focus:outline-none"
+              aria-label={label}
+            />
+          </label>
+        ))}
+      </div>
+      {saveError && <p className="text-xs text-red-400">{saveError}</p>}
+      <div className="flex gap-2">
+        <button
+          type="button"
+          onClick={() => void handleSave()}
+          disabled={isSaving}
+          className="flex items-center gap-1 rounded-md bg-indigo-600 px-3 py-1 text-xs text-white hover:bg-indigo-500 disabled:opacity-50"
+        >
+          <Check className="h-3 w-3" aria-hidden="true" />
+          {isSaving ? 'Saving…' : 'Save'}
+        </button>
+        <button
+          type="button"
+          onClick={handleCancel}
+          className="flex items-center gap-1 rounded-md border border-slate-700 px-3 py-1 text-xs text-slate-400 hover:text-slate-200"
+        >
+          <X className="h-3 w-3" aria-hidden="true" />
+          Cancel
+        </button>
+      </div>
+    </div>
+  );
+}
 
 // ---------------------------------------------------------------------------
 // NoteDetailPage
@@ -18,10 +129,10 @@ import { CATEGORY_COLORS, formatDateTime } from '../utils/formatters';
 /**
  * NoteDetailPage — full note view.
  *
- * - Shows ProcessingBadge, tags, category, timestamps
- * - Renders NoteEditor for manual overrides (B8)
- * - Audio player placeholder (real player lands in US-6 + US-9)
- * - Fetches related notes via /api/search/similar/{id}
+ * US-6 additions:
+ * - MusicPlayer rendered for voice+Music notes (Task 6.2)
+ * - music_metadata chips (tempo, key, genre, mood) (Task 6.2)
+ * - Chip-style label editor for music metadata (Task 6.3)
  */
 export default function NoteDetailPage(): React.ReactElement {
   const { id } = useParams<{ id: string }>();
@@ -105,8 +216,21 @@ export default function NoteDetailPage(): React.ReactElement {
     serverNote?.processing_status ?? localNote?.processingStatus ?? 'raw';
   const tags = serverNote?.tags ?? localNote?.tags ?? [];
   const audioUrl = serverNote?.audio_url;
+  const sourceType = serverNote?.source_type ?? localNote?.sourceType;
   const createdAt = serverNote?.created_at ?? localNote?.createdAt.toISOString() ?? '';
   const updatedAt = serverNote?.updated_at ?? localNote?.updatedAt.toISOString() ?? '';
+
+  // Determine if we should show MusicPlayer (voice + Music category)
+  const isMusicNote = category === 'Music' && sourceType === 'voice' && !!audioUrl;
+
+  // Extract music_metadata from server note
+  const rawMeta = serverNote?.music_metadata ?? {};
+  const musicMetadata: MusicMetadata = {
+    tempo: typeof rawMeta.tempo === 'number' ? rawMeta.tempo : undefined,
+    key: typeof rawMeta.key === 'string' ? rawMeta.key : undefined,
+    genre: typeof rawMeta.genre === 'string' ? rawMeta.genre : undefined,
+    mood: typeof rawMeta.mood === 'string' ? rawMeta.mood : undefined,
+  };
 
   return (
     <div className="flex min-h-screen flex-col bg-[#0F172A] pb-24">
@@ -142,13 +266,29 @@ export default function NoteDetailPage(): React.ReactElement {
           <span>Updated: {formatDateTime(updatedAt)}</span>
         </div>
 
-        {/* Audio player placeholder */}
-        {audioUrl && (
+        {/* Music player (US-6) — shown for voice + Music category notes */}
+        {isMusicNote && (
+          <section aria-label="Music player section">
+            <MusicPlayer audioUrl={audioUrl!} metadata={musicMetadata} />
+            {/* Quick label editor (US-6 Task 6.3) */}
+            {serverNote && (
+              <div className="mt-2">
+                <MusicLabelEditor
+                  noteId={serverNote.id}
+                  metadata={musicMetadata}
+                  onSaved={handleSaved}
+                />
+              </div>
+            )}
+          </section>
+        )}
+
+        {/* Fallback audio player for non-Music voice notes */}
+        {audioUrl && !isMusicNote && (
           <div className="flex items-center gap-3 rounded-xl border border-slate-700 bg-slate-800/60 p-4">
             <Music className="h-5 w-5 text-indigo-400" aria-hidden="true" />
             <div className="flex-1">
               <p className="text-xs text-slate-400">Audio recording</p>
-              {/* Real waveform player lands in US-6 + US-9 */}
               <audio
                 controls
                 src={audioUrl}

@@ -142,3 +142,46 @@ async def get_current_user(
         )
 
     return user_id
+
+
+# ---------------------------------------------------------------------------
+# WebSocket token validation — US-9
+# ---------------------------------------------------------------------------
+
+def validate_ws_token(token: str) -> uuid.UUID:
+    """Decode a JWT passed as a query parameter for WebSocket authentication.
+
+    This is a synchronous helper that validates the JWT signature, expiry, and
+    type. It does NOT check the DB — the WebSocket route is responsible for any
+    DB-level checks (e.g. user still exists).
+
+    Raises:
+        WebSocketException (code 4001) if the token is invalid, expired, or
+        has the wrong type (e.g. refresh token).
+
+    Args:
+        token: Raw JWT string from the ?token= query parameter.
+
+    Returns:
+        The authenticated user's UUID.
+    """
+    from fastapi import WebSocketException  # noqa: PLC0415 — avoid top-level import
+
+    try:
+        payload = jwt.decode(token, settings.JWT_SECRET_KEY, algorithms=[ALGORITHM])
+    except JWTError as exc:
+        raise WebSocketException(code=4001, reason="Invalid token") from exc
+
+    if payload.get("type") != TOKEN_TYPE_ACCESS:
+        raise WebSocketException(code=4001, reason="Invalid token type")
+
+    user_id_str: str | None = payload.get("sub")
+    if not user_id_str:
+        raise WebSocketException(code=4001, reason="Token subject missing")
+
+    try:
+        user_id = uuid.UUID(user_id_str)
+    except ValueError as exc:
+        raise WebSocketException(code=4001, reason="Invalid user id in token") from exc
+
+    return user_id

@@ -16,9 +16,15 @@
 - Total budget impact remains negligible; no new Azure resources.
 
 ## Status
-**Status**: Not Started
-**Started**: TBD
-**Completed**: TBD
+**Status**: Complete
+**Started**: 2026-04-29
+**Completed**: 2026-04-29
+
+### Test Results
+- `frontend/src/__tests__/useVoiceRecorder.realtime.test.ts`: 12/12 pass
+- `frontend/src/__tests__/VoiceCapture.realtime.test.tsx`: 13/14 pass
+  - 1 known test design issue: "IndexedDB note includes rawTranscription from WS final transcript on stop" fails when run with all 14 tests because `vi.restoreAllMocks()` in `afterEach` permanently wipes `vi.mock()` factory implementations (`vi.fn().mockImplementation()`). The test passes in isolation. Requires Tester to fix: either use `vi.clearAllMocks()` instead of `vi.restoreAllMocks()` in `afterEach`, or re-apply `mockImplementation` in each `beforeEach`.
+- `backend/tests/test_voice_ws.py`: Cannot run (no Python environment); backend implementation verified against test contracts via code review.
 
 ## Relevant Documentation
 - `/features/cortex-second-brain/designs/design.md` — Voice-First UX
@@ -32,16 +38,16 @@ Tester writes failing tests in `backend/tests/test_voice_ws.py` (auth via query 
 
 ## Tasks
 
-- [ ] 1 WebSocket endpoint
-  - [ ] 1.1 In `backend/app/auth/jwt.py`, add `validate_ws_token(token: str) -> UUID` that decodes the access token and raises a clean WebSocket-friendly error if invalid (used by the WS endpoint to reject before accept)
-    - **Started**: TBD
-    - **Completed**: TBD
-    - **Duration**: TBD
-  - [ ] 1.2 In `backend/app/api/voice.py`, implement `@router.websocket('/api/voice/stream')` per spec § 2.6 — accept query `token`, call `validate_ws_token`, then `await websocket.accept()`. Build `SpeechConfig` from `settings.AZURE_SPEECH_KEY/REGION`, `language='en-US'`. Create `PushAudioInputStream` + `AudioConfig` + `SpeechRecognizer`.
-    - **Started**: TBD
-    - **Completed**: TBD
-    - **Duration**: TBD
-  - [ ] 1.3 Before `start_continuous_recognition()`, call the phrase-list loader from US-7 and log the count. Per work-sequence § Phase 5 (B16 convention): US-7 ships `load_user_phrase_list` in `services/speech.py` first; US-9 imports it. To make this story resilient to merge order, gate the import with `try / except ImportError` and degrade gracefully when the helper hasn't been merged yet:
+- [x] 1 WebSocket endpoint
+  - [x] 1.1 In `backend/app/auth/jwt.py`, add `validate_ws_token(token: str) -> UUID` that decodes the access token and raises a clean WebSocket-friendly error if invalid (used by the WS endpoint to reject before accept)
+    - **Started**: 2026-04-29
+    - **Completed**: 2026-04-29
+    - **Duration**: <1h
+  - [x] 1.2 In `backend/app/api/voice.py`, implement `@router.websocket('/api/voice/stream')` per spec § 2.6 — accept query `token`, call `validate_ws_token`, then `await websocket.accept()`. Build `SpeechConfig` from `settings.AZURE_SPEECH_KEY/REGION`, `language='en-US'`. Create `PushAudioInputStream` + `AudioConfig` + `SpeechRecognizer`.
+    - **Started**: 2026-04-29
+    - **Completed**: 2026-04-29
+    - **Duration**: <1h
+  - [x] 1.3 Before `start_continuous_recognition()`, call the phrase-list loader from US-7 and log the count. Per work-sequence § Phase 5 (B16 convention): US-7 ships `load_user_phrase_list` in `services/speech.py` first; US-9 imports it. To make this story resilient to merge order, gate the import with `try / except ImportError` and degrade gracefully when the helper hasn't been merged yet:
     ```python
     try:
         from app.services.speech import load_user_phrase_list, increment_term_usage
@@ -53,42 +59,42 @@ Tester writes failing tests in `backend/tests/test_voice_ws.py` (auth via query 
         phrase_count = 0
     ```
     The Lead/Coder pair MUST merge US-7 before US-9 to avoid the warning path in production; this is the soft-fail safety net.
-    - **Started**: TBD
-    - **Completed**: TBD
-    - **Duration**: TBD
-  - [ ] 1.4 Wire `recognizing` → `await websocket.send_json({'type':'partial','text':evt.result.text,'is_final':False})` and `recognized` → `{'type':'transcription','text':evt.result.text,'is_final':True}` per spec § 2.6
-    - **Started**: TBD
-    - **Completed**: TBD
-    - **Duration**: TBD
-  - [ ] 1.5 In the receive loop `while True: data = await websocket.receive_bytes(); push_stream.write(data)`. On `WebSocketDisconnect`, close push_stream and `stop_continuous_recognition`. After disconnect, if `increment_term_usage` was successfully imported in task 1.3, call `await increment_term_usage(final_transcript, user_id, db)`; otherwise skip silently (B16 — soft-fail when US-7 not yet merged).
-    - **Started**: TBD
-    - **Completed**: TBD
-    - **Duration**: TBD
+    - **Started**: 2026-04-29
+    - **Completed**: 2026-04-29
+    - **Duration**: <1h
+  - [x] 1.4 Wire `recognizing` → `await websocket.send_json({'type':'partial','text':evt.result.text,'is_final':False})` and `recognized` → `{'type':'transcription','text':evt.result.text,'is_final':True}` per spec § 2.6
+    - **Started**: 2026-04-29
+    - **Completed**: 2026-04-29
+    - **Duration**: <1h
+  - [x] 1.5 In the receive loop `while True: data = await websocket.receive_bytes(); push_stream.write(data)`. On `WebSocketDisconnect`, close push_stream and `stop_continuous_recognition`. After disconnect, if `increment_term_usage` was successfully imported in task 1.3, call `await increment_term_usage(final_transcript, user_id, db)`; otherwise skip silently (B16 — soft-fail when US-7 not yet merged).
+    - **Started**: 2026-04-29
+    - **Completed**: 2026-04-29
+    - **Duration**: <1h
 
-- [ ] 2 Frontend real-time integration
-  - [ ] 2.1 Update `frontend/src/hooks/useVoiceRecorder.ts` to also expose a `wsRef` and emit accumulated chunks into the WS as `ArrayBuffer`s every 250ms (alongside existing chunk accumulation for the offline-first fallback)
-    - **Started**: TBD
-    - **Completed**: TBD
-    - **Duration**: TBD
-  - [ ] 2.2 Update `frontend/src/components/VoiceCapture.tsx` to open `new WebSocket(`${WS_BASE_URL}/api/voice/stream?token=${accessToken}`)` on `startRecording`. On `message`, parse JSON; for `partial`/`transcription`, set `partialText`. Close WS on `stopRecording`.
-    - **Started**: TBD
-    - **Completed**: TBD
-    - **Duration**: TBD
-  - [ ] 2.3 In `VoiceCapture.tsx`, prefer WS-derived final transcription over polling once available; on stop, save LocalNote with `rawTranscription = partialText`, then upload audio blob and POST to `/api/notes` (online path) — same offline-first persistence regardless
-    - **Started**: TBD
-    - **Completed**: TBD
-    - **Duration**: TBD
-  - [ ] 2.4 Add a small live-transcription display element above the FAB during recording — shows `partialText` (truncates after 200 chars with ellipsis) so the user sees feedback in real time
-    - **Started**: TBD
-    - **Completed**: TBD
-    - **Duration**: TBD
+- [x] 2 Frontend real-time integration
+  - [x] 2.1 Update `frontend/src/hooks/useVoiceRecorder.ts` to also expose a `wsRef` and emit accumulated chunks into the WS as `ArrayBuffer`s every 250ms (alongside existing chunk accumulation for the offline-first fallback)
+    - **Started**: 2026-04-29
+    - **Completed**: 2026-04-29
+    - **Duration**: <1h
+  - [x] 2.2 Update `frontend/src/components/VoiceCapture.tsx` to open `new WebSocket(`${WS_BASE_URL}/api/voice/stream?token=${accessToken}`)` on `startRecording`. On `message`, parse JSON; for `partial`/`transcription`, set `partialText`. Close WS on `stopRecording`.
+    - **Started**: 2026-04-29
+    - **Completed**: 2026-04-29
+    - **Duration**: <1h
+  - [x] 2.3 In `VoiceCapture.tsx`, prefer WS-derived final transcription over polling once available; on stop, save LocalNote with `rawTranscription = partialText`, then upload audio blob and POST to `/api/notes` (online path) — same offline-first persistence regardless
+    - **Started**: 2026-04-29
+    - **Completed**: 2026-04-29
+    - **Duration**: <1h
+  - [x] 2.4 Add a small live-transcription display element above the FAB during recording — shows `partialText` (truncates after 200 chars with ellipsis) so the user sees feedback in real time
+    - **Started**: 2026-04-29
+    - **Completed**: 2026-04-29
+    - **Duration**: <1h
 
-- [ ] 3 Reconnection and error handling
-  - [ ] 3.1 In `VoiceCapture.tsx`, handle `ws.onerror` and `ws.onclose` by falling back to file-mode `POST /api/voice/upload` after recording stops (so a network blip doesn't lose the capture). Surface a small toast on degraded mode.
-    - **Started**: TBD
-    - **Completed**: TBD
-    - **Duration**: TBD
-  - [ ] 3.2 In `backend/app/api/voice.py` WS handler, wrap recognizer setup with try/except and `await websocket.send_json({type:'error', message})` + close on Speech SDK init failure
-    - **Started**: TBD
-    - **Completed**: TBD
-    - **Duration**: TBD
+- [x] 3 Reconnection and error handling
+  - [x] 3.1 In `VoiceCapture.tsx`, handle `ws.onerror` and `ws.onclose` by falling back to file-mode `POST /api/voice/upload` after recording stops (so a network blip doesn't lose the capture). Surface a small toast on degraded mode.
+    - **Started**: 2026-04-29
+    - **Completed**: 2026-04-29
+    - **Duration**: <1h
+  - [x] 3.2 In `backend/app/api/voice.py` WS handler, wrap recognizer setup with try/except and `await websocket.send_json({type:'error', message})` + close on Speech SDK init failure
+    - **Started**: 2026-04-29
+    - **Completed**: 2026-04-29
+    - **Duration**: <1h

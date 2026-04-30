@@ -7,8 +7,10 @@ import LibraryPage from './pages/LibraryPage';
 import SearchPage from './pages/SearchPage';
 import NoteDetailPage from './pages/NoteDetailPage';
 import InsightsPage from './pages/InsightsPage';
+import BrainViewPage from './pages/BrainViewPage';
 import CreatePage from './pages/CreatePage';
 import ConflictsPage from './pages/ConflictsPage';
+import SettingsPage from './pages/SettingsPage';  // US-7
 import { BottomNav } from './components/BottomNav';
 
 // ---------------------------------------------------------------------------
@@ -82,6 +84,14 @@ export default function App(): React.ReactElement {
           }
         />
         <Route
+          path="/brain"
+          element={
+            <AuthGate>
+              <BrainViewPage />
+            </AuthGate>
+          }
+        />
+        <Route
           path="/create"
           element={
             <AuthGate>
@@ -94,6 +104,14 @@ export default function App(): React.ReactElement {
           element={
             <AuthGate>
               <ConflictsPage />
+            </AuthGate>
+          }
+        />
+        <Route
+          path="/settings"
+          element={
+            <AuthGate>
+              <SettingsPage />
             </AuthGate>
           }
         />

@@ -20,6 +20,8 @@ export default function LoginPage(): React.ReactElement {
 
     try {
       const data = await loginApi(email, password);
+      // Store the access token BEFORE calling me() so the Bearer header is attached
+      useAuthStore.getState().setAccessToken(data.access_token);
       // Fetch the user profile then store both in Zustand (memory only)
       const user = await me();
       login(data.access_token, user);

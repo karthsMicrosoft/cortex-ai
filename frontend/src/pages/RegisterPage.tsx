@@ -24,6 +24,8 @@ export default function RegisterPage(): React.ReactElement {
       await registerApi(email, password, displayName);
       // Auto-login after successful registration
       const data = await loginApi(email, password);
+      // Store the access token BEFORE calling me() so the Bearer header is attached
+      useAuthStore.getState().setAccessToken(data.access_token);
       const user = await me();
       login(data.access_token, user);
       navigate('/', { replace: true });

@@ -20,9 +20,14 @@ depends_on = None
 
 
 def upgrade() -> None:
+    # CONCURRENTLY removed: alembic wraps each migration in a transaction by default
+    # and Postgres prohibits CONCURRENTLY inside a transaction block. For a fresh DB
+    # the brief lock during a non-concurrent build is fine; for production schema
+    # changes against a live notes table, run this as a separate manual operation
+    # outside the alembic upgrade or set `transaction_per_migration=False` in env.py.
     op.execute(
         """
-        CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_notes_content_fts
+        CREATE INDEX IF NOT EXISTS idx_notes_content_fts
         ON notes USING gin(to_tsvector('english', content))
         """
     )

@@ -111,25 +111,27 @@ async def _recognize_once(recognizer: speechsdk.SpeechRecognizer):
 # ---------------------------------------------------------------------------
 
 async def load_user_phrase_list(
-    recognizer: speechsdk.SpeechRecognizer,
+    recognizer,
     user_id,
     db,
     max_phrases: int = 500,
-) -> int:
-    """Load the user's personal dictionary into the STT recognizer via PhraseListGrammar.
+) -> int | list[str]:
+    """Load the user's personal dictionary.
 
-    Selects up to *max_phrases* terms ordered by usage_count DESC and adds each
-    term (plus pronunciation_hint when present) to the grammar.
+    Two modes based on *recognizer*:
+    - recognizer is a SpeechRecognizer: adds phrases to grammar via PhraseListGrammar;
+      returns count (int) of rows loaded. Used by the WebSocket streaming path.
+    - recognizer is None: returns a list of phrase strings for caller to pass to
+      transcribe_audio_file(phrase_list=...). Used by the file-mode upload path.
 
     Args:
-        recognizer:   Azure SpeechRecognizer instance (before recognition starts).
+        recognizer:   Azure SpeechRecognizer instance, or None for file-mode uploads.
         user_id:      UUID of the authenticated user.
         db:           Async SQLAlchemy session.
         max_phrases:  Cap on phrases loaded (Azure limit ~500 per session).
 
     Returns:
-        Number of UserVocabulary rows loaded (not total phrase strings added,
-        since each row may add 1 or 2 phrases).
+        int (count) when recognizer is provided; list[str] when recognizer is None.
     """
     from sqlalchemy import select
     from app.models.vocabulary import UserVocabulary
@@ -142,15 +144,23 @@ async def load_user_phrase_list(
     )
     terms = result.scalars().all()
     if not terms:
-        return 0
+        return 0 if recognizer is not None else []
 
-    phrase_list = speechsdk.PhraseListGrammar.from_recognizer(recognizer)
-    for term in terms:
-        phrase_list.addPhrase(term.term)
-        if term.pronunciation_hint:
-            phrase_list.addPhrase(term.pronunciation_hint)
-
-    return len(terms)
+    if recognizer is not None:
+        grammar = speechsdk.PhraseListGrammar.from_recognizer(recognizer)
+        for term in terms:
+            grammar.addPhrase(term.term)
+            if term.pronunciation_hint:
+                grammar.addPhrase(term.pronunciation_hint)
+        return len(terms)
+    else:
+        # File-mode: return phrase strings for transcribe_audio_file(phrase_list=...)
+        phrases: list[str] = []
+        for term in terms:
+            phrases.append(term.term)
+            if term.pronunciation_hint:
+                phrases.append(term.pronunciation_hint)
+        return phrases
 
 
 async def increment_term_usage(content: str, user_id, db) -> None:

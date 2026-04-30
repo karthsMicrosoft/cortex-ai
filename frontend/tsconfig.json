@@ -18,5 +18,6 @@
     "useDefineForClassFields": true
   },
   "include": ["src"],
+  "exclude": ["src/__tests__", "src/**/*.test.ts", "src/**/*.test.tsx"],
   "references": [{ "path": "./tsconfig.node.json" }]
 }

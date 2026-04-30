@@ -316,7 +316,11 @@ export default function NoteDetailPage(): React.ReactElement {
 
         {/* Editor — available when serverId is known */}
         {serverNote ? (
-          <NoteEditor note={serverNote} onSaved={handleSaved} />
+          <NoteEditor
+            note={serverNote}
+            onSave={async (_patch) => { handleSaved(serverNote); }}
+            onCancel={() => { /* no-op: stay on detail page */ }}
+          />
         ) : (
           <div className="rounded-xl border border-slate-700 bg-slate-800/60 p-4">
             <p className="whitespace-pre-wrap text-sm leading-relaxed text-slate-200">

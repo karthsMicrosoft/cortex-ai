@@ -388,18 +388,10 @@ class TestRefreshEndpoint:
         email = _unique_email()
         await _register(client, email)
         login_resp = await _login(client, email)
-        body = login_resp.json()
-        refresh_token = body["refresh_token"]
 
-        # Use refresh token via cookie (as set by login) or body
-        resp = await client.post(
-            "/api/auth/refresh",
-            json={"refresh_token": refresh_token},
-        )
-        # Accept either cookie-based (no body token) or body-based refresh
-        if resp.status_code == 422:
-            # Try cookie-based — login already set the cookie
-            resp = await client.post("/api/auth/refresh")
+        # Refresh token is set as an HttpOnly cookie by login — use cookie-based refresh
+        # (AsyncClient preserves cookies automatically across requests)
+        resp = await client.post("/api/auth/refresh")
 
         assert resp.status_code == 200, (
             f"Expected 200 from /api/auth/refresh, got {resp.status_code}: {resp.text}"
@@ -651,34 +643,22 @@ class TestAuthRateLimiting:
     def test_login_handler_has_rate_limit_decorator(self):
         """
         SEC-03: The /api/auth/login handler must have a slowapi rate-limit
-        decoration (i.e. a '_rate_limit' or similar attribute injected by
-        @limiter.limit(...)).
+        decoration applied via @limiter.limit(...).
 
-        Inspect the registered route's endpoint callable for slowapi markers.
+        SlowAPI stores registered limits in limiter._route_limits keyed by
+        '{module}.{function_name}'. We check that the login function is registered.
         """
         try:
-            from app.main import app
-            login_route = None
-            for route in app.routes:
-                if hasattr(route, "path") and route.path == "/api/auth/login":
-                    login_route = route
-                    break
-            if login_route is None:
-                pytest.skip("Login route not found in app routes (prefix may differ)")
+            from app.main import app  # noqa: F401 — ensures routes are registered
+            from app.limiter import limiter
 
-            endpoint = login_route.endpoint
-            # slowapi decorates the handler with _rate_limit_key or similar
-            # The presence of a '_limits' attribute on the function or its
-            # __wrapped__ equivalent signals the decorator was applied.
-            has_limit = (
-                hasattr(endpoint, "_rate_limit_key")
-                or hasattr(endpoint, "_limits")
-                or hasattr(endpoint, "_rate_limits")
-                or "limit" in str(getattr(endpoint, "__dict__", {}))
-            )
+            # SlowAPI registers limits in _route_limits keyed by 'module.funcname'
+            rate_limited_keys = list(limiter._route_limits.keys())
+            has_limit = any("login" in key for key in rate_limited_keys)
             assert has_limit, (
                 "SEC-03 NOT FIXED: /api/auth/login handler is missing the "
                 "@limiter.limit('5/minute') decorator. "
+                f"Registered rate-limited routes: {rate_limited_keys}. "
                 "Add it as specified in review-comments.tasks.md 1.3."
             )
         except ImportError as exc:
@@ -687,27 +667,20 @@ class TestAuthRateLimiting:
     def test_refresh_handler_has_rate_limit_decorator(self):
         """
         SEC-03: The /api/auth/refresh handler must have a slowapi rate-limit decoration.
+
+        SlowAPI stores registered limits in limiter._route_limits keyed by
+        '{module}.{function_name}'. We check that the refresh function is registered.
         """
         try:
-            from app.main import app
-            refresh_route = None
-            for route in app.routes:
-                if hasattr(route, "path") and route.path == "/api/auth/refresh":
-                    refresh_route = route
-                    break
-            if refresh_route is None:
-                pytest.skip("Refresh route not found in app routes (prefix may differ)")
+            from app.main import app  # noqa: F401 — ensures routes are registered
+            from app.limiter import limiter
 
-            endpoint = refresh_route.endpoint
-            has_limit = (
-                hasattr(endpoint, "_rate_limit_key")
-                or hasattr(endpoint, "_limits")
-                or hasattr(endpoint, "_rate_limits")
-                or "limit" in str(getattr(endpoint, "__dict__", {}))
-            )
+            rate_limited_keys = list(limiter._route_limits.keys())
+            has_limit = any("refresh" in key for key in rate_limited_keys)
             assert has_limit, (
                 "SEC-03 NOT FIXED: /api/auth/refresh handler is missing the "
                 "@limiter.limit('5/minute') decorator. "
+                f"Registered rate-limited routes: {rate_limited_keys}. "
                 "Add it as specified in review-comments.tasks.md 1.3."
             )
         except ImportError as exc:

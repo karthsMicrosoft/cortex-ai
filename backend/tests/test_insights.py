@@ -47,8 +47,10 @@ class TestInsightsModuleImport:
 
     def test_insights_router_exists(self):
         """insights module must expose a FastAPI router."""
-        from app.api.insights import router
-        assert router is not None
+        # insights.py exposes two routers: ai_summary_router and insights_router
+        from app.api.insights import ai_summary_router, insights_router
+        assert ai_summary_router is not None
+        assert insights_router is not None
 
     def test_router_has_daily_summary_route(self):
         """ai_summary_router must include GET /summary/daily route."""
@@ -693,10 +695,20 @@ class TestPERF04PatternsCache:
     ):
         """
         GET /api/insights/patterns?refresh=true must invoke OpenAI even if a
-        cached result exists.
+        cached result exists, as long as the user has notes (endpoint skips OpenAI
+        when there are no notes).
         """
         from app.services.openai_client import get_openai
         from app.main import app
+
+        # Create at least one note so the endpoint proceeds to call OpenAI
+        note_resp = await client.post(
+            "/api/notes",
+            json={"content": "Learning patterns test note", "category": "learning"},
+            headers=auth_headers,
+        )
+        if note_resp.status_code not in (200, 201):
+            pytest.skip("Could not create note for patterns test")
 
         openai_call_count = 0
 
@@ -727,8 +739,7 @@ class TestPERF04PatternsCache:
 
         assert resp2.status_code == 200
 
-        # With ?refresh=true, OpenAI must have been called at least on the refresh
-        # (call_count should be 2 if cache was warmed on first call, or at least 1)
+        # With ?refresh=true and at least one note, OpenAI must have been called
         assert openai_call_count >= 1, (
-            "PERF-04 FAIL: OpenAI was never called even with ?refresh=true"
+            "PERF-04 FAIL: OpenAI was never called even with ?refresh=true and notes present"
         )

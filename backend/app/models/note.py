@@ -53,7 +53,7 @@ class Note(Base):
             "sync_status IN ('pending','synced','conflict')", name="ck_notes_sync_status"
         ),
         CheckConstraint(
-            "shadow_reader_status IN ('pending','asked','answered','dismissed','skipped')",
+            "shadow_reader_status IN ('pending','asked','answered','dismissed','skipped','answer_pending')",
             name="ck_notes_shadow_reader_status",
         ),
     )

@@ -22,6 +22,9 @@ if [ -z "${DB_ADMIN_PASSWORD:-}" ] || [ -z "${JWT_SECRET_KEY:-}" ]; then
   exit 1
 fi
 
+# First-deploy bootstrap: useBootstrapImage=true makes Container App start with
+# a public placeholder so Bicep does not try to pull an image that does not yet
+# exist in the (also-being-created) ACR. Step 4 below swaps to the real image.
 DEPLOY_OUTPUT=$(az deployment group create \
   --resource-group "$RESOURCE_GROUP" \
   --template-file infra/main.bicep \
@@ -29,6 +32,7 @@ DEPLOY_OUTPUT=$(az deployment group create \
   --parameters appName="$APP_NAME" \
   --parameters dbAdminPassword="$DB_ADMIN_PASSWORD" \
   --parameters jwtSecretKey="$JWT_SECRET_KEY" \
+  --parameters useBootstrapImage=true \
   --output json)
 
 # Extract outputs from the Bicep deployment
@@ -39,13 +43,13 @@ SWA_NAME=$(echo "$DEPLOY_OUTPUT" | python3 -c "import sys,json; d=json.load(sys.
 
 echo '=== Step 3: Build and Push Backend Container ==='
 ACR_NAME=$(az acr list --resource-group "$RESOURCE_GROUP" --query '[0].name' -o tsv)
-az acr build --registry "$ACR_NAME" --image cortex-api:latest ./backend
+az acr build --registry "$ACR_NAME" --image ${APP_NAME}-api:latest ./backend
 
 echo '=== Step 4: Deploy Backend to Container Apps ==='
 az containerapp update \
   --name "${APP_NAME}-api" \
   --resource-group "$RESOURCE_GROUP" \
-  --image "${ACR_NAME}.azurecr.io/cortex-api:latest"
+  --image "${ACR_NAME}.azurecr.io/${APP_NAME}-api:latest"
 
 echo '=== Step 5: Run Database Migrations ==='
 az containerapp exec \

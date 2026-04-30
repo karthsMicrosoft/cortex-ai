@@ -140,7 +140,8 @@ function ConflictRow({ note, onResolved }: ConflictRowProps): React.ReactElement
                 content: note.content, // prefill with local content
               } as NoteOut
             }
-            onSaved={(updated) => void handleMergeEditorSave(updated)}
+            onSave={async (_patch) => { void handleMergeEditorSave(serverVersion as NoteOut); }}
+            onCancel={() => { /* no-op: dialog stays open via outer cancel button */ }}
           />
         </div>
       )}

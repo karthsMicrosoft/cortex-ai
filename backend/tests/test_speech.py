@@ -26,11 +26,17 @@ class FakeSpeechRecognitionResult:
 
     def __init__(self, text: str, reason_value: int = 3):  # 3 = RecognizedSpeech
         self.text = text
-        self._reason = reason_value
+        self._reason_value = reason_value
 
     @property
     def reason(self):
-        return self._reason
+        # Return the actual SDK enum so that comparisons like
+        # result.reason == speechsdk.ResultReason.RecognizedSpeech work correctly.
+        import azure.cognitiveservices.speech as speechsdk
+        for member in speechsdk.ResultReason:
+            if member.value == self._reason_value:
+                return member
+        return self._reason_value
 
 
 # ---------------------------------------------------------------------------

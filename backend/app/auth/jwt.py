@@ -114,17 +114,25 @@ def decode_token(token: str) -> dict[str, Any]:
 # FastAPI dependency — get_current_user
 # ---------------------------------------------------------------------------
 
-_bearer_scheme = HTTPBearer()
+# Use auto_error=False so missing/invalid scheme raises HTTP 401 (not 403).
+# The 403 from auto_error=True is misleading — missing auth should be 401.
+_bearer_scheme = HTTPBearer(auto_error=False)
 
 
 async def get_current_user(
-    credentials: HTTPAuthorizationCredentials = Depends(_bearer_scheme),
+    credentials: HTTPAuthorizationCredentials | None = Depends(_bearer_scheme),
     db: AsyncSession = Depends(get_db),
 ) -> uuid.UUID:
     """
     Decode the Bearer token and return the authenticated user's UUID.
-    Raises HTTP 401 if the token is invalid or the user does not exist.
+    Raises HTTP 401 if the token is missing, invalid, or the user does not exist.
     """
+    if credentials is None:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Not authenticated",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
     payload = decode_token(credentials.credentials)
 
     if payload.get("type") != TOKEN_TYPE_ACCESS:

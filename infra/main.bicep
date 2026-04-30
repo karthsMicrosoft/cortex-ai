@@ -13,6 +13,9 @@ param openaiLocation string = 'westus'
 @description('Container image tag deployed to the API Container App')
 param containerImageTag string = 'latest'
 
+@description('Bootstrap image to use when ACR image has not been pushed yet (used on first deploy). The deploy.sh script swaps to the real image via az containerapp update after running az acr build.')
+param useBootstrapImage bool = false
+
 @description('Frontend origin used for CORS in the backend')
 param frontendOrigin string = 'https://${appName}-app.azurestaticapps.net'
 
@@ -147,7 +150,7 @@ resource containerApp 'Microsoft.App/containerApps@2024-03-01' = {
       containers: [
         {
           name: '${appName}-api'
-          image: '${acr.properties.loginServer}/${appName}-api:${containerImageTag}'
+          image: useBootstrapImage ? 'mcr.microsoft.com/azuredocs/containerapps-helloworld:latest' : '${acr.properties.loginServer}/${appName}-api:${containerImageTag}'
           resources: { cpu: json('0.5'), memory: '1Gi' }
           env: [
             { name: 'DATABASE_URL',                   secretRef: 'database-url' }

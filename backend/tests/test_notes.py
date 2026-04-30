@@ -896,13 +896,29 @@ class TestNoteContentSizeLimit:
             from app.schemas.note import NoteUpdate
             schema = NoteUpdate.model_json_schema()
             content_schema = schema.get("properties", {}).get("content", {})
-            assert "maxLength" in content_schema, (
+            # In Pydantic v2, Optional[str] with max_length appears as:
+            # {"anyOf": [{"maxLength": 50000, "type": "string"}, {"type": "null"}], ...}
+            # so check both top-level and inside anyOf variants.
+            has_max_length = "maxLength" in content_schema
+            if not has_max_length:
+                for variant in content_schema.get("anyOf", []):
+                    if "maxLength" in variant:
+                        has_max_length = True
+                        break
+            assert has_max_length, (
                 "SEC-05 NOT FIXED: NoteUpdate.content has no maxLength in JSON schema. "
                 "Add: content: Optional[str] = Field(None, max_length=50_000)"
             )
-            assert content_schema["maxLength"] <= 50_000, (
+            # Find the actual maxLength value
+            max_length_val = content_schema.get("maxLength")
+            if max_length_val is None:
+                for variant in content_schema.get("anyOf", []):
+                    if "maxLength" in variant:
+                        max_length_val = variant["maxLength"]
+                        break
+            assert max_length_val <= 50_000, (
                 f"SEC-05: NoteUpdate.content maxLength must be ≤ 50,000, "
-                f"got {content_schema['maxLength']}"
+                f"got {max_length_val}"
             )
         except ImportError as exc:
             pytest.skip(f"app.schemas.note not importable: {exc}")

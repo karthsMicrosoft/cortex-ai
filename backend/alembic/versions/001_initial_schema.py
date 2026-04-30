@@ -43,11 +43,11 @@ def upgrade() -> None:
         sa.Column("email", sa.String(255), unique=True, nullable=False),
         sa.Column("password_hash", sa.String(255), nullable=False),
         sa.Column("display_name", sa.String(100), nullable=True),
-        sa.Column("shadow_reader_enabled", sa.Boolean(), server_default="true"),
+        sa.Column("shadow_reader_enabled", sa.Boolean(), server_default=sa.text("true")),
         sa.Column(
             "shadow_reader_disabled_categories",
             postgresql.JSONB(),
-            server_default="'[]'::jsonb",
+            server_default=sa.text("'[]'::jsonb"),
         ),
         sa.Column(
             "created_at",
@@ -86,9 +86,9 @@ def upgrade() -> None:
         sa.Column("audio_url", sa.Text(), nullable=True),
         sa.Column("image_url", sa.Text(), nullable=True),
         sa.Column("audio_duration_seconds", sa.Float(), nullable=True),
-        sa.Column("entities", postgresql.JSONB(), server_default="'[]'::jsonb"),
+        sa.Column("entities", postgresql.JSONB(), server_default=sa.text("'[]'::jsonb")),
         sa.Column("mood", sa.String(30), nullable=True),
-        sa.Column("music_metadata", postgresql.JSONB(), server_default="'{}'::jsonb"),
+        sa.Column("music_metadata", postgresql.JSONB(), server_default=sa.text("'{}'::jsonb")),
         sa.Column("processing_status", sa.String(20), server_default="raw"),
         # vector(1536) — raw DDL because SQLAlchemy doesn't know this type
         sa.Column("embedding", sa.Text(), nullable=True),  # placeholder; real DDL via raw SQL below
@@ -251,7 +251,7 @@ def upgrade() -> None:
         ),
         sa.Column("summary_date", sa.Date(), nullable=False),
         sa.Column("summary_text", sa.Text(), nullable=False),
-        sa.Column("key_themes", postgresql.JSONB(), server_default="'[]'::jsonb"),
+        sa.Column("key_themes", postgresql.JSONB(), server_default=sa.text("'[]'::jsonb")),
         sa.Column("note_count", sa.Integer(), server_default="0"),
         sa.Column("mood_summary", sa.String(50), nullable=True),
         sa.Column(

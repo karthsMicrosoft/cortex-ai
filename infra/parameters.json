@@ -3,19 +3,16 @@
   "contentVersion": "1.0.0.0",
   "parameters": {
     "appName": {
-      "value": "cortex"
+      "value": "cortexks"
     },
     "location": {
-      "value": "westus2"
+      "value": "centralus"
     },
     "openaiLocation": {
-      "value": "westus"
+      "value": "eastus"
     },
     "containerImageTag": {
       "value": "latest"
-    },
-    "frontendOrigin": {
-      "value": "https://cortex-app.azurestaticapps.net"
     }
   }
 }

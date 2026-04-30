@@ -18,7 +18,7 @@ from datetime import datetime, date
 from typing import Optional
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, status
-from sqlalchemy import func, select
+from sqlalchemy import func, insert, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -115,9 +115,15 @@ async def create_note(
     await db.flush()
 
     # Handle tags
+    # Insert directly into the note_tags association table instead of using the
+    # ORM relationship assignment which would trigger a lazy load on the new note.
     if payload.tags:
         tag_objs = await _get_or_create_tags(db, current_user_id, payload.tags)
-        note.tags = tag_objs
+        if tag_objs:
+            await db.execute(
+                insert(note_tags_table),
+                [{"note_id": note.id, "tag_id": t.id} for t in tag_objs],
+            )
         await db.flush()
 
     await db.refresh(note)
@@ -126,7 +132,6 @@ async def create_note(
 
     # QA-06 fix: commit BEFORE scheduling background tasks so the note row is
     # fully visible in any fresh DB session the background task opens.
-    # This eliminates the SimpleNamespace race in _run_ocr_and_pipeline.
     await db.commit()
 
     # Eagerly load tags for the response (re-fetch after commit)
@@ -343,9 +348,9 @@ async def _run_ocr_and_pipeline(note_id: uuid.UUID, image_url: str) -> None:
     """Run OCR then AI pipeline for an image note.
 
     QA-06 fix: create_note now commits before scheduling this task, so the note
-    is guaranteed to be visible in the fresh session below.  The SimpleNamespace
-    fallback is removed — if the note is not found, we log an error and abort
-    rather than passing a fragile stub to process_image_note.
+    is guaranteed to be visible in the fresh session below.  If the note is not
+    found in the fresh session, log an error and abort rather than proceeding
+    with missing data.
     """
     from app.database import SessionLocal
     from app.services.openai_client import get_openai_client

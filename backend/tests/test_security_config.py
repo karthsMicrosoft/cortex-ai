@@ -67,7 +67,12 @@ class TestJWTSecretKeyProductionGuard:
         # Force re-import of the settings module so monkeypatched env vars take effect
         try:
             import app.config as config_mod
-            importlib.reload(config_mod)
+            try:
+                importlib.reload(config_mod)
+            except (RuntimeError, ValueError):
+                # reload() raises RuntimeError/ValueError when check_production_secrets()
+                # fires at module level — this is the expected guard behaviour.
+                return  # test passes: the guard correctly rejected the placeholder
             # If we reach here, the Settings class was instantiated without error.
             # Check that the instantiated settings STILL raises a dedicated error
             # via a validator (some implementations defer the check).
@@ -79,14 +84,20 @@ class TestJWTSecretKeyProductionGuard:
                     JWT_SECRET_KEY=_DEV_PLACEHOLDER,
                     ENVIRONMENT="production",
                 )
-                # If instantiation succeeded without raising, the guard is missing.
-                # We expect the validator to have raised; if not, fail the test.
-                pytest.fail(
-                    "SEC-01 NOT FIXED: Settings must raise when JWT_SECRET_KEY equals "
-                    f"'{_DEV_PLACEHOLDER}' and ENVIRONMENT='production'. "
-                    "Add a @field_validator or @model_validator to enforce this."
-                )
-            except (ValidationError, ValueError):
+                # If instantiation succeeded, try calling check_production_secrets()
+                # (some implementations defer the check to a startup call).
+                try:
+                    new_settings.check_production_secrets()
+                    # If we reach here without raising, the guard is missing.
+                    pytest.fail(
+                        "SEC-01 NOT FIXED: Settings must raise when JWT_SECRET_KEY equals "
+                        f"'{_DEV_PLACEHOLDER}' and ENVIRONMENT='production'. "
+                        "Add a @field_validator or @model_validator to enforce this."
+                    )
+                except (ValidationError, ValueError, RuntimeError):
+                    # Expected — the guard correctly rejected the placeholder.
+                    pass
+            except (ValidationError, ValueError, RuntimeError):
                 # Expected — the validator correctly rejected the placeholder.
                 pass
         except ImportError as exc:

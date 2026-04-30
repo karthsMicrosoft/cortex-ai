@@ -246,29 +246,29 @@ class TestNotesImageIntegration:
     async def test_post_notes_with_image_schedules_ocr(self, client, auth_headers):
         """
         POST /api/notes with source_type='image' and image_url must schedule
-        process_image_note as a BackgroundTask (before the main AI pipeline).
+        the OCR+pipeline background task (_run_ocr_and_pipeline).
+
+        We patch the entire background task function to avoid opening a real DB
+        session (the background task uses SessionLocal, not the test's in-memory DB).
         """
         from unittest.mock import AsyncMock as AM, patch as pt
 
-        ocr_mock = AM()
-        pipeline_mock = AM()
+        ocr_pipeline_mock = AM()
 
-        with pt("app.api.notes.process_image_note", ocr_mock):
-            with pt("app.api.notes.AIPipeline") as mock_cls:
-                mock_cls.return_value.process_note = pipeline_mock
-                resp = await client.post(
-                    "/api/notes",
-                    json={
-                        "content": "Image note",
-                        "source_type": "image",
-                        "image_url": FAKE_IMAGE_URL,
-                    },
-                    headers=auth_headers,
-                )
+        with pt("app.api.notes._run_ocr_and_pipeline", ocr_pipeline_mock):
+            resp = await client.post(
+                "/api/notes",
+                json={
+                    "content": "Image note",
+                    "source_type": "image",
+                    "image_url": FAKE_IMAGE_URL,
+                },
+                headers=auth_headers,
+            )
 
         assert resp.status_code == 201
-        # OCR must have been scheduled (BackgroundTasks run immediately in TestClient)
-        ocr_mock.assert_called_once()
+        # OCR+pipeline background task must have been scheduled and called
+        ocr_pipeline_mock.assert_called_once()
 
     async def test_post_notes_text_does_not_schedule_ocr(self, client, auth_headers):
         """

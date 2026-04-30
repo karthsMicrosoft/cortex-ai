@@ -34,11 +34,16 @@ from app.schemas.note import NoteOut
 from app.services.blob_storage import upload_blob
 from app.services.speech import transcribe_audio_file
 
-# B16 soft-fail: import increment_term_usage if available; degrade gracefully otherwise.
+# B16 soft-fail: import optional speech-service helpers; degrade gracefully if unavailable.
 try:
     from app.services.speech import increment_term_usage  # type: ignore[attr-defined]
 except ImportError:
     increment_term_usage = None  # type: ignore[assignment]
+
+try:
+    from app.services.speech import load_user_phrase_list  # type: ignore[attr-defined]
+except ImportError:
+    load_user_phrase_list = None  # type: ignore[assignment]
 
 logger = logging.getLogger(__name__)
 
@@ -87,24 +92,16 @@ async def voice_upload(
     )
 
     # 4. Load personal dictionary phrase list (QA-08 / US-7 task 3.3 fix).
+    # load_user_phrase_list(None, user_id, db) returns phrase strings for file-mode.
     loaded_phrases: list[str] = []
-    try:
-        from sqlalchemy import select as _select
-        from app.models.vocabulary import UserVocabulary
-        vocab_result = await db.execute(
-            _select(UserVocabulary)
-            .where(UserVocabulary.user_id == current_user_id)
-            .order_by(UserVocabulary.usage_count.desc())
-            .limit(500)
-        )
-        vocab_terms = vocab_result.scalars().all()
-        for vt in vocab_terms:
-            loaded_phrases.append(vt.term)
-            if vt.pronunciation_hint:
-                loaded_phrases.append(vt.pronunciation_hint)
-        logger.info("voice_upload: loaded %d phrases for user=%s", len(loaded_phrases), current_user_id)
-    except Exception as exc:  # noqa: BLE001
-        logger.warning("voice_upload: phrase list load failed for user=%s: %s", current_user_id, exc)
+    if load_user_phrase_list is not None:
+        try:
+            result = await load_user_phrase_list(None, current_user_id, db)
+            if isinstance(result, list):
+                loaded_phrases = result
+            logger.info("voice_upload: loaded %d phrases for user=%s", len(loaded_phrases), current_user_id)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("voice_upload: phrase list load failed for user=%s: %s", current_user_id, exc)
 
     raw_transcription = await transcribe_audio_file(audio_bytes, phrase_list=loaded_phrases or None)
 

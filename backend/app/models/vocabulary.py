@@ -10,7 +10,7 @@ The Alembic migration uses PostgreSQL-specific types for production.
 import uuid
 from datetime import datetime
 
-from sqlalchemy import DateTime, Float, Integer, String, Uuid, func
+from sqlalchemy import DateTime, Float, Integer, String, Uuid, UniqueConstraint, func
 from sqlalchemy import ForeignKey
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -21,6 +21,9 @@ _TERM_TYPES = ("name", "music_term", "technical", "place", "acronym", "general")
 
 class UserVocabulary(Base):
     __tablename__ = "user_vocabulary"
+    __table_args__ = (
+        UniqueConstraint("user_id", "term", name="uq_user_vocabulary_user_term"),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(
         Uuid(as_uuid=True),

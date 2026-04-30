@@ -147,15 +147,15 @@ export function PersonalDictionary(): React.ReactElement {
           if (!Array.isArray(parsed)) {
             throw new Error('JSON file must be an array of term objects.');
           }
-          termPayloads = (parsed as VocabularyTermCreate[]).map((item) => ({
-            term: String((item as Record<string, unknown>).term ?? ''),
-            term_type:
-              ((item as Record<string, unknown>).term_type as TermType | undefined) ?? 'general',
-            pronunciation_hint:
-              ((item as Record<string, unknown>).pronunciation_hint as string | undefined) ?? null,
-            boost_weight:
-              ((item as Record<string, unknown>).boost_weight as number | undefined) ?? 1.0,
-          }));
+          termPayloads = (parsed as unknown[]).map((rawItem) => {
+            const item = rawItem as Record<string, unknown>;
+            return {
+              term: String(item.term ?? ''),
+              term_type: (item.term_type as TermType | undefined) ?? 'general',
+              pronunciation_hint: (item.pronunciation_hint as string | undefined) ?? null,
+              boost_weight: (item.boost_weight as number | undefined) ?? 1.0,
+            };
+          });
         } else {
           // CSV: one term per line; optional second column for term_type
           const lines = text.split('\n').map((l) => l.trim()).filter(Boolean);

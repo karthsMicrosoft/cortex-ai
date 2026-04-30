@@ -69,5 +69,4 @@
 **Waiting for:** `Coder done: features/cortex-second-brain/tasks/us-1-foundation.tasks.md` AND `Tester done: features/cortex-second-brain/tasks/us-1-foundation.tasks.md`
 
 ## Review Base Commit
-<!-- Written when Phase 5 begins -->
-TBD
+3851ee8bb7af66aeccdc589eabea76577601660e

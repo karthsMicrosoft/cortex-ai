@@ -1,5 +1,7 @@
 # Deployment Guide
 
+> **Currently deployed state (2026-04-30):** See `HANDOFF.md` § 2 for live URLs, resource names, and region splits. The "spec defaults" below describe a fresh deploy; current live deploy uses `appName=cortexks`, `location=centralus`, `openaiLocation=eastus`. See `DECISIONS.md` § 1 for why those differ from spec.
+
 ## Prerequisites
 
 - **Azure CLI** (`az`) version 2.60+ — `az --version`

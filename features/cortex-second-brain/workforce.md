@@ -44,15 +44,15 @@
 - [x] Phase 1 — Requirements (COMPLEX: 23 stories)
 - [x] Phase 2 — Design + Research (9 user stories; 9 OQs flagged from research)
 - [x] Phase 3 — Critique (ALL 17 BLOCKING items RESOLVED Round 2; 6 CONCERN folded; 3 NIT acknowledged)
-- [>] Phase 4 — Coding (TDD)
-  - [>] Coding Phase 0 — us-1-foundation (in progress)
-  - [ ] Coding Phase 1 — us-2-ai-pipeline
-  - [ ] Coding Phase 2 — us-3-frontend-setup
-  - [ ] Coding Phase 3 — us-4-voice-ux-offline
-  - [ ] Coding Phase 4 — us-5-deployment
-  - [ ] Coding Phase 5 — us-6-insights · us-7-personal-dictionary · us-9-realtime-stt (parallel)
-  - [ ] Coding Phase 6 — us-8-shadow-reader
-- [ ] Phase 5 — Review (with spec auditor)
+- [x] Phase 4 — Coding (TDD)
+  - [x] Coding Phase 0 — us-1-foundation
+  - [x] Coding Phase 1 — us-2-ai-pipeline
+  - [x] Coding Phase 2 — us-3-frontend-setup
+  - [x] Coding Phase 3 — us-4-voice-ux-offline
+  - [x] Coding Phase 4 — us-5-deployment
+  - [x] Coding Phase 5 — us-6-insights · us-7-personal-dictionary · us-9-realtime-stt (parallel)
+  - [x] Coding Phase 6 — us-8-shadow-reader
+- [x] Phase 5 — Review (Round 1: 32 above-threshold findings → fixed in 3 parallel pairs; Round 2: security/performance/quality PASSED, spec-auditor 1 MEDIUM fixed in-line by Lead — ALL PASSED)
 
 ## Open Questions Surfaced by Researcher (must be resolved before Phase 4)
 - OQ-1 (BLOCKING): Azure OpenAI not in westus2 — needs separate `openaiLocation` Bicep param
@@ -64,9 +64,9 @@
 - OQ-3, OQ-6, OQ-8: low-severity version-bump recommendations
 
 ## Current State
-**Active phase:** 4 — Coding (Phase 0: us-1-foundation)
-**Active agents:** coder-us-1-foundation, tester-us-1-foundation (TDD pair)
-**Waiting for:** `Coder done: features/cortex-second-brain/tasks/us-1-foundation.tasks.md` AND `Tester done: features/cortex-second-brain/tasks/us-1-foundation.tasks.md`
+**Active phase:** Complete — workforce delivered Phase 1 MVP + Phase 2 (Personal Dictionary + Shadow Reader)
+**Active agents:** None
+**Waiting for:** User approval / feedback
 
 ## Review Base Commit
 3851ee8bb7af66aeccdc589eabea76577601660e

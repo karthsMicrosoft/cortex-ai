@@ -2,6 +2,7 @@
 FastAPI application entry point.
 """
 import logging
+import os
 import re
 from contextlib import asynccontextmanager
 
@@ -63,7 +64,18 @@ async def lifespan(app: FastAPI):
     """
     Start APScheduler background scheduler at startup so the nightly distill
     cron job fires even with minReplicas=1 (no scale-to-zero).
+
+    Gated on SCHEDULER_ENABLED (default "false") because BackgroundScheduler
+    runs jobs in a thread that creates a fresh asyncio event loop each tick,
+    which conflicts with the asyncpg connection pool shared with the FastAPI
+    event loop and causes "another operation is in progress" InterfaceError on
+    concurrent request traffic. For production, run the distill cron as a
+    Container Apps Job instead of in-process.
     """
+    if os.getenv("SCHEDULER_ENABLED", "false").lower() not in ("true", "1", "yes"):
+        yield
+        return
+
     try:
         from apscheduler.schedulers.background import BackgroundScheduler
 

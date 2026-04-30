@@ -38,6 +38,15 @@ async function parseErrorBody(res: Response): Promise<{ code: string; detail: st
   }
 }
 
+// API base URL — set via VITE_API_BASE_URL at build time. Falls back to relative
+// (same-origin) URLs in dev where Vite's proxy handles the forwarding.
+const API_BASE = (import.meta.env.VITE_API_BASE_URL ?? '').replace(/\/$/, '');
+
+function resolveUrl(url: string): string {
+  if (!API_BASE || /^https?:\/\//.test(url)) return url;
+  return `${API_BASE}${url.startsWith('/') ? '' : '/'}${url}`;
+}
+
 async function fetchWithAuth(
   url: string,
   options: RequestOptions = {},
@@ -58,14 +67,15 @@ async function fetchWithAuth(
     ...options,
     headers,
     body: options.body !== undefined ? JSON.stringify(options.body) : undefined,
+    credentials: 'include', // send/accept httpOnly refresh cookie cross-origin
   };
 
-  const res = await fetch(url, init);
+  const res = await fetch(resolveUrl(url), init);
 
   // On 401 — attempt token refresh once, then retry
   if (res.status === 401 && !_isRetry) {
     try {
-      const refreshRes = await fetch('/api/auth/refresh', { method: 'POST', credentials: 'include' });
+      const refreshRes = await fetch(resolveUrl('/api/auth/refresh'), { method: 'POST', credentials: 'include' });
       if (refreshRes.ok) {
         const data = (await refreshRes.json()) as { access_token: string };
         useAuthStore.getState().setAccessToken(data.access_token);

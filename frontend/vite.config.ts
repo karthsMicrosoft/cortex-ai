@@ -39,6 +39,8 @@ export default defineConfig({
         ],
       },
       workbox: {
+        clientsClaim: true,
+        skipWaiting: true,
         runtimeCaching: [
           {
             // NetworkFirst for all /api/* requests

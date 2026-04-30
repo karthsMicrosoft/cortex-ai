@@ -11,6 +11,7 @@ import { NoteEditor } from '../components/NoteEditor';
 import { ProcessingBadge } from '../components/ProcessingBadge';
 import { MusicPlayer } from '../components/MusicPlayer';
 import type { MusicMetadata } from '../components/MusicPlayer';
+import { ShadowReaderPrompt } from '../components/ShadowReaderPrompt';
 import { CATEGORY_COLORS, formatDateTime } from '../utils/formatters';
 
 // ---------------------------------------------------------------------------
@@ -358,6 +359,19 @@ export default function NoteDetailPage(): React.ReactElement {
           </section>
         )}
       </main>
+
+      {/* Shadow Reader prompt (US-8) — shown when note is enriched and status is pending/asked */}
+      {serverNote &&
+        (serverNote.shadow_reader_status === 'asked' ||
+          serverNote.shadow_reader_status === 'pending') && (
+          <ShadowReaderPrompt
+            noteId={serverNote.id}
+            onComplete={() => {
+              // Refresh note to pick up answered/dismissed status
+              void getNote(serverNote.id).then(setServerNote).catch(() => undefined);
+            }}
+          />
+        )}
     </div>
   );
 }

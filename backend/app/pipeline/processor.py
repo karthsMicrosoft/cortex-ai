@@ -28,6 +28,7 @@ from app.models.note import Note
 from app.models.note_link import NoteLink
 from app.models.tag import Tag, note_tags as note_tags_table
 from app.pipeline.music import process_music_note  # noqa: F401 (patched by tests)
+from app.pipeline.shadow_reader import run_shadow_reader_stage  # noqa: F401 (patched by tests)
 
 logger = logging.getLogger(__name__)
 
@@ -263,16 +264,36 @@ class AIPipeline:
             logger.debug("_link_similar_notes skipped: %s", type(exc).__name__)
 
     # -----------------------------------------------------------------------
-    # Stage 1.5 hook — REFLECT (US-8 fills this in)
+    # Stage 1.5 — REFLECT (US-8)
     # -----------------------------------------------------------------------
 
-    async def _stage_reflect_hook(self, note: Note) -> None:  # noqa: ARG002
-        """No-op call site for Stage 1.5 (Shadow Reader).
+    async def _stage_reflect_hook(self, note: Note) -> None:
+        """Stage 1.5: Shadow Reader — generate follow-up questions.
 
-        US-8 replaces this with run_shadow_reader_stage(note, user).
-        Gate: processing_status=='enriched' AND shadow_reader_status=='pending'.
+        Gate (checked by caller): processing_status=='enriched' AND
+        shadow_reader_status=='pending'.
+
+        Fetches the note's owner to check shadow_reader_enabled /
+        shadow_reader_disabled_categories before delegating to
+        run_shadow_reader_stage.
         """
-        pass
+        from app.models.user import User
+
+        result = await self.db.execute(
+            select(User).where(User.id == note.user_id)
+        )
+        user = result.scalar_one_or_none()
+        if user is None:
+            logger.error(
+                "shadow_reader: user %s not found for note %s",
+                note.user_id,
+                note.id,
+            )
+            note.shadow_reader_status = "skipped"
+            await self.db.commit()
+            return
+
+        await run_shadow_reader_stage(note, user, self.openai, self.db)
 
     # -----------------------------------------------------------------------
     # Helpers

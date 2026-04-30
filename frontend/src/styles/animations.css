@@ -1,0 +1,19 @@
+/**
+ * Cortex animation keyframes — US-8 Shadow Reader slide-up.
+ *
+ * Usage: className='animate-slide-up'
+ * Tailwind config must register this keyframe + utility (see tailwind.config.js).
+ */
+
+@keyframes slide-up {
+  from {
+    transform: translateY(100%);
+  }
+  to {
+    transform: translateY(0);
+  }
+}
+
+.animate-slide-up {
+  animation: slide-up 240ms ease-out both;
+}

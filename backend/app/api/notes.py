@@ -80,6 +80,10 @@ def _note_to_out(note: Note) -> NoteOut:
         sync_status=note.sync_status,
         client_id=note.client_id,
         tags=tag_names,
+        # Phase 2 — Shadow Reader fields
+        shadow_reader_status=note.shadow_reader_status or "pending",
+        shadow_reader_questions=note.shadow_reader_questions,
+        shadow_reader_answer=note.shadow_reader_answer,
         created_at=note.created_at,
         updated_at=note.updated_at,
     )

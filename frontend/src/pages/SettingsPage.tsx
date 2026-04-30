@@ -1,14 +1,14 @@
 /**
  * SettingsPage — top-level settings surface.
  *
- * Hosts the PersonalDictionary section (US-7).
- * US-8 will append ShadowReaderSettings below PersonalDictionary.
+ * Hosts the PersonalDictionary section (US-7) and ShadowReaderSettings (US-8).
  *
  * Accessed via gear icon in the app header (no bottom-nav slot).
  */
 import { useNavigate } from 'react-router-dom';
 import { ArrowLeft, Settings } from 'lucide-react';
 import { PersonalDictionary } from '../components/PersonalDictionary';
+import { ShadowReaderSettings } from '../components/ShadowReaderSettings';
 
 export default function SettingsPage(): React.ReactElement {
   const navigate = useNavigate();
@@ -33,7 +33,8 @@ export default function SettingsPage(): React.ReactElement {
         {/* Personal Dictionary — US-7 */}
         <PersonalDictionary />
 
-        {/* ShadowReaderSettings — US-8 will append here */}
+        {/* Shadow Reader Settings — US-8 */}
+        <ShadowReaderSettings />
       </main>
     </div>
   );

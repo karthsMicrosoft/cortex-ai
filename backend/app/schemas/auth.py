@@ -37,5 +37,8 @@ class UserOut(BaseModel):
     id: uuid.UUID
     email: str
     display_name: Optional[str] = None
+    # Phase 2 — Shadow Reader settings (exposed so the frontend can pre-populate settings UI)
+    shadow_reader_enabled: bool = True
+    shadow_reader_disabled_categories: list[str] = []
 
     model_config = {"from_attributes": True}

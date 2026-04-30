@@ -13,6 +13,7 @@ from pydantic import BaseModel
 _CATEGORY_TYPE = Literal["Music", "Fitness", "Journal", "Ideas", "Spiritual", "Learning"]
 _SOURCE_TYPE = Literal["voice", "text", "image"]
 _PROCESSING_STATUS = Literal["raw", "transcribed", "processed", "enriched", "failed"]
+_SHADOW_READER_STATUS = Literal["pending", "asked", "answered", "dismissed", "skipped"]
 
 
 class NoteCreate(BaseModel):
@@ -57,6 +58,10 @@ class NoteOut(BaseModel):
     sync_status: str
     client_id: Optional[str] = None
     tags: list[str] = []
+    # Phase 2 — Shadow Reader fields
+    shadow_reader_status: Optional[_SHADOW_READER_STATUS] = "pending"
+    shadow_reader_questions: Optional[list[str]] = None
+    shadow_reader_answer: Optional[str] = None
     created_at: datetime
     updated_at: datetime
 

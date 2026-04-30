@@ -43,8 +43,15 @@
 ## Phase Status
 - [x] Phase 1 — Requirements (COMPLEX: 23 stories)
 - [x] Phase 2 — Design + Research (9 user stories; 9 OQs flagged from research)
-- [>] Phase 3 — Critique
-- [ ] Phase 4 — Coding (Phase 1 MVP items 1-21, then Phase 2 items 22-34)
+- [x] Phase 3 — Critique (ALL 17 BLOCKING items RESOLVED Round 2; 6 CONCERN folded; 3 NIT acknowledged)
+- [>] Phase 4 — Coding (TDD)
+  - [>] Coding Phase 0 — us-1-foundation (in progress)
+  - [ ] Coding Phase 1 — us-2-ai-pipeline
+  - [ ] Coding Phase 2 — us-3-frontend-setup
+  - [ ] Coding Phase 3 — us-4-voice-ux-offline
+  - [ ] Coding Phase 4 — us-5-deployment
+  - [ ] Coding Phase 5 — us-6-insights · us-7-personal-dictionary · us-9-realtime-stt (parallel)
+  - [ ] Coding Phase 6 — us-8-shadow-reader
 - [ ] Phase 5 — Review (with spec auditor)
 
 ## Open Questions Surfaced by Researcher (must be resolved before Phase 4)
@@ -57,9 +64,9 @@
 - OQ-3, OQ-6, OQ-8: low-severity version-bump recommendations
 
 ## Current State
-**Active phase:** 3 — Critique
-**Active agents:** critic (teammate), architect (standby for debate)
-**Waiting for:** `Critique complete: features/cortex-second-brain/designs/critique.md — {status}`
+**Active phase:** 4 — Coding (Phase 0: us-1-foundation)
+**Active agents:** coder-us-1-foundation, tester-us-1-foundation (TDD pair)
+**Waiting for:** `Coder done: features/cortex-second-brain/tasks/us-1-foundation.tasks.md` AND `Tester done: features/cortex-second-brain/tasks/us-1-foundation.tasks.md`
 
 ## Review Base Commit
 <!-- Written when Phase 5 begins -->

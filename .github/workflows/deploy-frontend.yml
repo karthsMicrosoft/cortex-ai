@@ -1,0 +1,18 @@
+# Deploy Frontend — placeholder
+# Full workflow defined in US-5.
+# This file must exist to satisfy the monorepo skeleton acceptance criterion (§ 4.1).
+name: deploy-frontend
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'frontend/**'
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: placeholder
+        run: echo "Frontend deploy workflow — to be implemented in US-5"

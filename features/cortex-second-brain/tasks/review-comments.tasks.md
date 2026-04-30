@@ -348,3 +348,22 @@
     - **Started**: TBD
     - **Completed**: TBD
     - **Duration**: TBD
+
+---
+
+## Round 2 Re-Review — 2026-04-30 UTC
+
+> Review base commit (Round 1): 3851ee8bb7af66aeccdc589eabea76577601660e
+> Re-review commit (Round 2): pending — will be HEAD after fix-round commits
+
+## Security Findings Re-Review Round 2
+<!-- security writes here -->
+
+## Performance Findings Re-Review Round 2
+<!-- performance writes here -->
+
+## Quality Findings Re-Review Round 2
+<!-- quality writes here -->
+
+## Spec Auditor Findings Re-Review Round 2
+<!-- spec-auditor writes here -->

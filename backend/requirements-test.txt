@@ -22,5 +22,8 @@ alembic>=1.13,<2
 # JWT library (used in auth tests)
 python-jose[cryptography]>=3.5,<4
 
+# HTTP mocking for OpenAI / Vision / Blob REST adapters (per design B15)
+respx>=0.21,<1
+
 # All production deps also needed (install requirements.txt first)
 # pip install -r requirements.txt

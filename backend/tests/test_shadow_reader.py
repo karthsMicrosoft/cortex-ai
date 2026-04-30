@@ -38,7 +38,9 @@ pytestmark = pytest.mark.asyncio
 FIFTY_WORD_CONTENT = (
     "This is a music note about a D minor melody with a descending bassline "
     "I hummed this morning while thinking about sadness and longing and loss "
-    "and also about beauty of melancholy harmony in minor keys."
+    "and also about beauty of melancholy harmony in minor keys and how the "
+    "intervals fall and rise across the verse and chorus and the way the "
+    "modulation lifts the bridge into a new color."
 )
 # Exactly verify >= 50 words
 assert len(FIFTY_WORD_CONTENT.split()) >= 50, "Test fixture must have >= 50 words"

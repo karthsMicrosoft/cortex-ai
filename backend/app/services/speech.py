@@ -81,7 +81,7 @@ async def transcribe_audio_file(
             return ""
         else:
             # Cancelled — extract error details
-            cancellation = speechsdk.CancellationDetails.from_result(result)
+            cancellation = speechsdk.CancellationDetails(result)
             logger.error(
                 "Speech cancellation: reason=%s error_code=%s error_details=%s",
                 cancellation.reason,

@@ -1,0 +1,37 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentParameters.json#",
+  "contentVersion": "1.0.0.0",
+  "parameters": {
+    "appName": {
+      "value": "cortex"
+    },
+    "location": {
+      "value": "westus2"
+    },
+    "openaiLocation": {
+      "value": "westus"
+    },
+    "containerImageTag": {
+      "value": "latest"
+    },
+    "frontendOrigin": {
+      "value": "https://cortex-app.azurestaticapps.net"
+    },
+    "dbAdminPassword": {
+      "reference": {
+        "keyVault": {
+          "id": "/subscriptions/__SUBSCRIPTION_ID__/resourceGroups/__KV_RESOURCE_GROUP__/providers/Microsoft.KeyVault/vaults/__KEY_VAULT_NAME__"
+        },
+        "secretName": "cortex-db-admin-password"
+      }
+    },
+    "jwtSecretKey": {
+      "reference": {
+        "keyVault": {
+          "id": "/subscriptions/__SUBSCRIPTION_ID__/resourceGroups/__KV_RESOURCE_GROUP__/providers/Microsoft.KeyVault/vaults/__KEY_VAULT_NAME__"
+        },
+        "secretName": "cortex-jwt-secret-key"
+      }
+    }
+  }
+}

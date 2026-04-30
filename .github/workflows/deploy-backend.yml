@@ -1,7 +1,4 @@
-# Deploy Backend — placeholder
-# Full workflow defined in US-5.
-# This file must exist to satisfy the monorepo skeleton acceptance criterion (§ 4.1).
-name: deploy-backend
+name: Deploy Backend
 
 on:
   push:
@@ -9,10 +6,52 @@ on:
     paths:
       - 'backend/**'
 
+permissions:
+  id-token: write   # required for OIDC login
+  contents: read
+
 jobs:
   build-and-deploy:
     runs-on: ubuntu-latest
+
     steps:
       - uses: actions/checkout@v4
-      - name: placeholder
-        run: echo "Backend deploy workflow — to be implemented in US-5"
+
+      - name: Azure login (OIDC)
+        uses: azure/login@v2
+        with:
+          creds: ${{ secrets.AZURE_CREDENTIALS }}
+
+      - name: Build and push image to ACR
+        run: |
+          az acr build \
+            --registry ${{ secrets.ACR_NAME }} \
+            --image cortex-api:${{ github.sha }} \
+            --image cortex-api:latest \
+            ./backend
+
+      - name: Update Container App with new revision
+        run: |
+          az containerapp update \
+            --name ${{ secrets.CONTAINER_APP_NAME }} \
+            --resource-group ${{ secrets.RESOURCE_GROUP }} \
+            --image ${{ secrets.ACR_NAME }}.azurecr.io/cortex-api:${{ github.sha }}
+
+      - name: Verify health endpoint
+        run: |
+          FQDN=$(az containerapp show \
+            --name ${{ secrets.CONTAINER_APP_NAME }} \
+            --resource-group ${{ secrets.RESOURCE_GROUP }} \
+            --query 'properties.configuration.ingress.fqdn' -o tsv)
+          echo "Backend URL: https://${FQDN}"
+          for i in $(seq 1 12); do
+            STATUS=$(curl -s -o /dev/null -w "%{http_code}" "https://${FQDN}/api/health" || echo "000")
+            if [ "$STATUS" = "200" ]; then
+              echo "Health check passed (HTTP $STATUS)"
+              exit 0
+            fi
+            echo "Attempt ${i}/12: HTTP ${STATUS} — retrying in 5s"
+            sleep 5
+          done
+          echo "Health check did not pass within 60s"
+          exit 1

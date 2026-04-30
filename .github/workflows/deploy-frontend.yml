@@ -1,7 +1,4 @@
-# Deploy Frontend — placeholder
-# Full workflow defined in US-5.
-# This file must exist to satisfy the monorepo skeleton acceptance criterion (§ 4.1).
-name: deploy-frontend
+name: Deploy Frontend
 
 on:
   push:
@@ -9,10 +6,39 @@ on:
     paths:
       - 'frontend/**'
 
+permissions:
+  id-token: write   # required for OIDC login
+  contents: read
+
 jobs:
   build-and-deploy:
     runs-on: ubuntu-latest
+
     steps:
       - uses: actions/checkout@v4
-      - name: placeholder
-        run: echo "Frontend deploy workflow — to be implemented in US-5"
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install dependencies
+        working-directory: frontend
+        run: npm ci
+
+      - name: Build PWA
+        working-directory: frontend
+        run: npm run build
+
+      - name: Deploy to Azure Static Web Apps
+        uses: Azure/static-web-apps-deploy@v1
+        with:
+          azure_static_web_apps_api_token: ${{ secrets.AZURE_STATIC_WEB_APPS_API_TOKEN }}
+          repo_token: ${{ secrets.GITHUB_TOKEN }}
+          action: 'upload'
+          app_location: 'frontend'
+          api_location: ''
+          output_location: 'dist'
+          skip_app_build: true   # build was done in the previous step

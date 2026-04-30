@@ -1,16 +1,121 @@
 """
 FastAPI application entry point.
 """
-from fastapi import FastAPI
+import logging
+import re
+from contextlib import asynccontextmanager
+
+from fastapi import FastAPI, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
+from slowapi import Limiter, _rate_limit_exceeded_handler
+from slowapi.errors import RateLimitExceeded
+from slowapi.middleware import SlowAPIMiddleware
+from slowapi.util import get_remote_address
 
 from app.config import settings
+
+# ---------------------------------------------------------------------------
+# Rate limiter (critique mitigation #8 — 100 req/min/user)
+# ---------------------------------------------------------------------------
+
+def _get_user_or_ip(request: Request) -> str:
+    """
+    Key function for slowapi: prefer the authenticated user's identity over
+    raw IP so that the 100 req/min limit is per-user rather than per-IP.
+    Falls back to remote address for unauthenticated requests.
+    """
+    # The auth middleware stores the user id on request.state when the JWT is valid.
+    user_id = getattr(request.state, "user_id", None)
+    if user_id:
+        return str(user_id)
+    return get_remote_address(request)
+
+
+limiter = Limiter(key_func=_get_user_or_ip, default_limits=["100/minute"])
+
+# ---------------------------------------------------------------------------
+# Log-scrubbing filter (B12 — redact ?token= from logged URLs)
+# ---------------------------------------------------------------------------
+
+_TOKEN_RE = re.compile(r"([?&])token=[^&\s]+", re.IGNORECASE)
+
+
+class _ScrubTokenFilter(logging.Filter):
+    """Remove ?token=<jwt> / &token=<jwt> from any log record message or args."""
+
+    def filter(self, record: logging.LogRecord) -> bool:  # noqa: A003
+        record.msg = _TOKEN_RE.sub(r"\1token=REDACTED", str(record.msg))
+        if record.args:
+            if isinstance(record.args, tuple):
+                record.args = tuple(
+                    _TOKEN_RE.sub(r"\1token=REDACTED", str(a)) if isinstance(a, str) else a
+                    for a in record.args
+                )
+            elif isinstance(record.args, dict):
+                record.args = {
+                    k: _TOKEN_RE.sub(r"\1token=REDACTED", str(v)) if isinstance(v, str) else v
+                    for k, v in record.args.items()
+                }
+        return True
+
+
+# Apply scrub filter to the root logger so every handler inherits it.
+_scrub_filter = _ScrubTokenFilter()
+logging.getLogger().addFilter(_scrub_filter)
+# Also attach to uvicorn access logger explicitly.
+logging.getLogger("uvicorn.access").addFilter(_scrub_filter)
+
+
+# ---------------------------------------------------------------------------
+# Application lifespan (APScheduler nightly distill — B14)
+# ---------------------------------------------------------------------------
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """
+    Start APScheduler background scheduler at startup so the nightly distill
+    cron job fires even with minReplicas=1 (no scale-to-zero).
+    """
+    try:
+        from apscheduler.schedulers.background import BackgroundScheduler
+
+        scheduler = BackgroundScheduler()
+
+        # Nightly distill at 23:59 local time (single-user MVP — UTC approximate)
+        try:
+            from app.pipeline.distill import run_daily_distill, run_weekly_distill
+            scheduler.add_job(run_daily_distill, "cron", hour=23, minute=59, id="daily_distill")
+            scheduler.add_job(
+                run_weekly_distill, "cron", day_of_week="sun", hour=23, minute=59, id="weekly_distill"
+            )
+        except ImportError:
+            # distill module not yet implemented — skip gracefully
+            pass
+
+        scheduler.start()
+        app.state.scheduler = scheduler
+        yield
+        scheduler.shutdown(wait=False)
+    except ImportError:
+        # APScheduler not installed — skip gracefully (e.g. during unit-test runs)
+        yield
+
+
+# ---------------------------------------------------------------------------
+# FastAPI app
+# ---------------------------------------------------------------------------
 
 app = FastAPI(
     title="Cortex Second Brain API",
     description="Voice-first personal second brain API",
     version="1.0.0",
+    lifespan=lifespan,
 )
+
+# Attach slowapi limiter to the app state so the middleware can find it.
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+app.add_middleware(SlowAPIMiddleware)
 
 # CORS middleware
 app.add_middleware(

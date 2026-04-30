@@ -16,9 +16,9 @@
 - Image OCR via Azure AI Vision: `POST /api/notes` with image URL extracts text into `notes.content`.
 
 ## Status
-**Status**: Not Started
-**Started**: TBD
-**Completed**: TBD
+**Status**: Implementation Complete
+**Started**: 2026-04-30 00:30 UTC
+**Completed**: 2026-04-30 00:50 UTC
 
 ## Relevant Documentation
 - `/features/cortex-second-brain/designs/design.md` — AI Pipeline (CODE + Reflect), Semantic Search, Music Features

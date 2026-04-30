@@ -2,20 +2,22 @@
 Notes CRUD routes.
 
 Endpoints:
-  POST   /api/notes              → 201 NoteOut
+  POST   /api/notes              → 201 NoteOut; pipeline scheduled
   GET    /api/notes              → 200 NoteListResponse (paginated + filtered)
   GET    /api/notes/{id}         → 200 NoteOut | 404
   PUT    /api/notes/{id}         → 200 NoteOut | 404 | 422
   DELETE /api/notes/{id}         → 204 | 404
+  POST   /api/ai/process/{note_id} → 202 (manual pipeline re-trigger; idempotent)
 
 Ownership: all queries filter by current_user. Cross-user access returns 404 (not 403)
 to avoid leaking the existence of a note (Task 5.5 / B8).
 """
+import logging
 import uuid
 from datetime import datetime, date
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, status
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
@@ -24,9 +26,16 @@ from app.auth.jwt import get_current_user
 from app.database import get_db
 from app.models.note import Note
 from app.models.tag import Tag, note_tags as note_tags_table
+from app.pipeline.ocr import process_image_note  # noqa: F401 (patched by tests)
+from app.pipeline.processor import AIPipeline  # noqa: F401 (patched by tests)
 from app.schemas.note import NoteCreate, NoteListResponse, NoteOut, NoteUpdate
 
+logger = logging.getLogger(__name__)
+
 router = APIRouter()
+
+# AI pipeline + OCR router — registered separately in main.py
+ai_router = APIRouter()
 
 
 # ---------------------------------------------------------------------------
@@ -103,14 +112,22 @@ async def _fetch_note(
 @router.post("", response_model=NoteOut, status_code=status.HTTP_201_CREATED)
 async def create_note(
     payload: NoteCreate,
+    background_tasks: BackgroundTasks,
     current_user_id: uuid.UUID = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> NoteOut:
-    """Create a new note for the authenticated user."""
-    # Determine initial processing_status per task 5.2 spec:
-    # text → 'raw'; voice with audio_url → 'transcribed'; otherwise 'raw'
+    """Create a new note for the authenticated user.
+
+    - text notes: status='raw', pipeline scheduled (Stage 1 + Stage 2).
+    - voice notes with audio_url: status='transcribed', pipeline scheduled.
+    - image notes with image_url: OCR scheduled first (sets status='transcribed'),
+      then pipeline Stage 2 (Stage 1 skipped for images).
+    """
+    # Determine initial processing_status
     if payload.audio_url and payload.source_type == "voice":
         initial_status = "transcribed"
+    elif payload.source_type == "image" and payload.image_url:
+        initial_status = "raw"  # OCR will advance to 'transcribed'
     else:
         initial_status = "raw"
 
@@ -134,6 +151,20 @@ async def create_note(
         await db.flush()
 
     await db.refresh(note)
+    note_id = note.id
+    image_url_for_ocr = note.image_url  # capture before session closes
+
+    # Schedule background tasks:
+    # Image notes: OCR first (sets status='transcribed'), then pipeline
+    if payload.source_type == "image" and payload.image_url:
+        # Schedule OCR and pipeline as two separate background tasks.
+        # process_image_note is called without a DB session; it updates the
+        # in-memory note object only — the pipeline re-fetches from DB.
+        background_tasks.add_task(_run_ocr_and_pipeline, note_id, image_url_for_ocr)
+    else:
+        # text / voice: run pipeline directly
+        background_tasks.add_task(_run_pipeline, note_id)
+
     # Eagerly load tags after refresh
     result = await db.execute(
         select(Note).options(selectinload(Note.tags)).where(Note.id == note.id)
@@ -284,3 +315,88 @@ async def delete_note(
     note = await _fetch_note(db, note_id, current_user_id)
     await db.delete(note)
     await db.flush()
+
+
+# ---------------------------------------------------------------------------
+# POST /api/ai/process/{note_id}  — manual pipeline re-trigger (task 4.6)
+# ---------------------------------------------------------------------------
+
+@ai_router.post("/process/{note_id}", status_code=status.HTTP_202_ACCEPTED)
+async def trigger_pipeline(
+    note_id: uuid.UUID,
+    background_tasks: BackgroundTasks,
+    current_user_id: uuid.UUID = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """Manually re-trigger the AI pipeline for *note_id* (idempotent).
+
+    Resumes from the note's current processing_status:
+    - 'raw' / 'transcribed' → runs Stage 1 + Stage 2.
+    - 'processed'           → runs Stage 2 only.
+    - 'enriched'            → no-op (already complete).
+    - 'failed'              → restarts from last checkpoint.
+    """
+    # Verify ownership
+    result = await db.execute(
+        select(Note).where(Note.id == note_id, Note.user_id == current_user_id)
+    )
+    note = result.scalar_one_or_none()
+    if note is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Note not found")
+
+    if note.processing_status == "enriched":
+        return {"detail": "Pipeline already complete", "note_id": str(note_id)}
+
+    background_tasks.add_task(_run_pipeline, note_id)
+    logger.info("trigger_pipeline: scheduled note_id=%s status=%s", note_id, note.processing_status)
+    return {"detail": "Pipeline scheduled", "note_id": str(note_id)}
+
+
+# ---------------------------------------------------------------------------
+# Background task helpers
+# ---------------------------------------------------------------------------
+
+async def _run_pipeline(note_id: uuid.UUID) -> None:
+    """Run AI pipeline for *note_id* in a fresh DB session."""
+    from app.database import SessionLocal
+    from app.services.openai_client import get_openai_client
+
+    async with SessionLocal() as db:
+        pipeline = AIPipeline(openai_client=get_openai_client(), db=db)
+        await pipeline.process_note(note_id)
+
+
+async def _run_ocr_and_pipeline(note_id: uuid.UUID, image_url: str) -> None:
+    """Run OCR then AI pipeline for an image note.
+
+    Fetches the note from a fresh session, runs OCR (updates content + status),
+    then runs the main AI pipeline (Stage 1 + Stage 2).
+    """
+    from app.database import SessionLocal
+    from app.services.openai_client import get_openai_client
+
+    async with SessionLocal() as db:
+        result = await db.execute(select(Note).where(Note.id == note_id))
+        note = result.scalar_one_or_none()
+        if note is None:
+            # Fallback: create a minimal note-like object for OCR
+            # (handles the case where the note isn't visible in a new session yet)
+            import types
+            note_stub = types.SimpleNamespace(
+                id=note_id,
+                image_url=image_url,
+                content="",
+                processing_status="raw",
+            )
+            await process_image_note(note_stub, None)  # type: ignore[arg-type]
+            # Schedule pipeline run (it will fetch the note again)
+            pipeline = AIPipeline(openai_client=get_openai_client(), db=db)
+            await pipeline.process_note(note_id)
+            return
+
+        # Stage 0.5: OCR — sets status to 'transcribed'
+        await process_image_note(note, db)
+
+        # Stage 1 + 2: main pipeline
+        pipeline = AIPipeline(openai_client=get_openai_client(), db=db)
+        await pipeline.process_note(note_id)

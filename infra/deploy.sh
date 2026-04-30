@@ -12,11 +12,23 @@ echo '=== Step 1: Create Resource Group ==='
 az group create --name "$RESOURCE_GROUP" --location "$LOCATION"
 
 echo '=== Step 2: Deploy Infrastructure (Bicep) ==='
+# Secrets MUST be supplied via env vars when parameters.json does not reference Key Vault.
+# Either:
+#   (a) Set DB_ADMIN_PASSWORD and JWT_SECRET_KEY env vars before running this script (first-time deploy)
+#   (b) Or rename parameters.keyvault-template.json -> parameters.json after bootstrapping KV.
+if [ -z "${DB_ADMIN_PASSWORD:-}" ] || [ -z "${JWT_SECRET_KEY:-}" ]; then
+  echo "ERROR: DB_ADMIN_PASSWORD and JWT_SECRET_KEY must be set in the environment for first-time deploy."
+  echo "       Generate strong random values, export them, and re-run."
+  exit 1
+fi
+
 DEPLOY_OUTPUT=$(az deployment group create \
   --resource-group "$RESOURCE_GROUP" \
   --template-file infra/main.bicep \
   --parameters infra/parameters.json \
   --parameters appName="$APP_NAME" \
+  --parameters dbAdminPassword="$DB_ADMIN_PASSWORD" \
+  --parameters jwtSecretKey="$JWT_SECRET_KEY" \
   --output json)
 
 # Extract outputs from the Bicep deployment

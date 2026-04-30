@@ -41,7 +41,18 @@ Tester writes failing tests in `backend/tests/test_voice_ws.py` (auth via query 
     - **Started**: TBD
     - **Completed**: TBD
     - **Duration**: TBD
-  - [ ] 1.3 Before `start_continuous_recognition()`, call `await load_user_phrase_list(recognizer, user_id, db)` (from US-7) and log `Loaded {count} phrases for user {user_id}`
+  - [ ] 1.3 Before `start_continuous_recognition()`, call the phrase-list loader from US-7 and log the count. Per work-sequence § Phase 5 (B16 convention): US-7 ships `load_user_phrase_list` in `services/speech.py` first; US-9 imports it. To make this story resilient to merge order, gate the import with `try / except ImportError` and degrade gracefully when the helper hasn't been merged yet:
+    ```python
+    try:
+        from app.services.speech import load_user_phrase_list, increment_term_usage
+        phrase_count = await load_user_phrase_list(recognizer, user_id, db)
+        logger.info("Loaded %d phrases for user %s", phrase_count, user_id)
+    except ImportError:
+        # US-7 not merged yet — operate without phrase boost; do not fail the WS handshake.
+        logger.warning("Personal dictionary unavailable (US-7 not merged); STT runs unboosted.")
+        phrase_count = 0
+    ```
+    The Lead/Coder pair MUST merge US-7 before US-9 to avoid the warning path in production; this is the soft-fail safety net.
     - **Started**: TBD
     - **Completed**: TBD
     - **Duration**: TBD
@@ -49,7 +60,7 @@ Tester writes failing tests in `backend/tests/test_voice_ws.py` (auth via query 
     - **Started**: TBD
     - **Completed**: TBD
     - **Duration**: TBD
-  - [ ] 1.5 In the receive loop `while True: data = await websocket.receive_bytes(); push_stream.write(data)`. On `WebSocketDisconnect`, close push_stream and `stop_continuous_recognition`. After disconnect, increment usage counts via `increment_term_usage(final_transcript, user_id, db)` from US-7.
+  - [ ] 1.5 In the receive loop `while True: data = await websocket.receive_bytes(); push_stream.write(data)`. On `WebSocketDisconnect`, close push_stream and `stop_continuous_recognition`. After disconnect, if `increment_term_usage` was successfully imported in task 1.3, call `await increment_term_usage(final_transcript, user_id, db)`; otherwise skip silently (B16 — soft-fail when US-7 not yet merged).
     - **Started**: TBD
     - **Completed**: TBD
     - **Duration**: TBD

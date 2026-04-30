@@ -74,7 +74,7 @@ Tester writes failing tests in `backend/tests/test_dictionary.py` (CRUD, limits,
     - **Started**: TBD
     - **Completed**: TBD
     - **Duration**: TBD
-  - [ ] 3.4 If a WebSocket handler stub exists in `backend/app/api/voice.py`, add the same phrase-list loader call before `start_continuous_recognition()` (full WS support lands in US-9 — leave the call site here so it activates automatically)
+  - [ ] 3.4 **(NO-OP — moved to US-9 per work-sequence merge-order convention, B16):** US-7 does NOT modify the WebSocket handler in `backend/app/api/voice.py`. US-9 owns the new `@router.websocket('/api/voice/stream')` route and is responsible for calling `load_user_phrase_list` from inside that handler. This keeps the two stories on non-overlapping symbols inside `voice.py` (US-7 → file-mode upload only; US-9 → WS handler only), which is the source-exclusivity rule documented in `tasks/work-sequence.md` § Phase 5. Leave this task as a no-op or delete locally.
     - **Started**: TBD
     - **Completed**: TBD
     - **Duration**: TBD

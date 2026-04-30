@@ -42,15 +42,24 @@
 
 ## Phase Status
 - [x] Phase 1 — Requirements (COMPLEX: 23 stories)
-- [>] Phase 2 — Design + Research
-- [ ] Phase 3 — Critique
+- [x] Phase 2 — Design + Research (9 user stories; 9 OQs flagged from research)
+- [>] Phase 3 — Critique
 - [ ] Phase 4 — Coding (Phase 1 MVP items 1-21, then Phase 2 items 22-34)
 - [ ] Phase 5 — Review (with spec auditor)
 
+## Open Questions Surfaced by Researcher (must be resolved before Phase 4)
+- OQ-1 (BLOCKING): Azure OpenAI not in westus2 — needs separate `openaiLocation` Bicep param
+- OQ-2 (HIGH): `python-jose==3.3.*` CVE-2024-33663/33664 — bump to ≥3.5 or switch to `pyjwt`
+- OQ-4 (MEDIUM): `passlib[bcrypt]==1.7.*` breaks on bcrypt ≥4.1
+- OQ-5 (HIGH): missing Postgres firewall rule in Bicep
+- OQ-7 (HIGH): missing `Microsoft.App/containerApps` resource in Bicep
+- OQ-9 (HIGH): pgvector extension is named `vector` not `pgvector` in `CREATE EXTENSION`
+- OQ-3, OQ-6, OQ-8: low-severity version-bump recommendations
+
 ## Current State
-**Active phase:** 2 — Design + Research
-**Active agents:** architect, researcher (teammates)
-**Waiting for:** `Architect complete: /features/cortex-second-brain/designs/design.md and /features/cortex-second-brain/tasks/` AND `researcher complete: features/cortex-second-brain/designs/research.md`
+**Active phase:** 3 — Critique
+**Active agents:** critic (teammate), architect (standby for debate)
+**Waiting for:** `Critique complete: features/cortex-second-brain/designs/critique.md — {status}`
 
 ## Review Base Commit
 <!-- Written when Phase 5 begins -->

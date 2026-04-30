@@ -8,11 +8,11 @@
 ## Acceptance Criteria
 
 - Migration `003_add_shadow_reader.py` adds `shadow_reader_enabled`, `shadow_reader_disabled_categories` to `users` and `shadow_reader_questions`, `shadow_reader_answer`, `shadow_reader_status` (with CHECK) to `notes`.
-- Pipeline Stage 1.5 (Reflect) runs between Capture (Stage 1) and Organize (Stage 2). Trigger conditions: `users.shadow_reader_enabled` AND `note.category not in users.shadow_reader_disabled_categories` AND `len(note.content.split()) >= 50`.
+- Pipeline Stage 1.5 (Reflect) runs **AFTER Stage 2 (Organize)** per design § "Pipeline state machine (B10)" — gated on `processing_status == 'enriched' AND shadow_reader_status == 'pending'`. Trigger conditions: `users.shadow_reader_enabled` AND `note.category not in users.shadow_reader_disabled_categories` AND `len(note.content.split()) >= 50`.
 - When triggered, Stage 1.5 generates ≤ 2 questions ≤ 15 words via GPT-4o-mini using category-specific prompts; persists `shadow_reader_questions`, sets status `asked`. When not triggered, status `skipped`.
 - `GET /api/notes/{id}/shadow-reader`, `POST /api/notes/{id}/shadow-reader/answer`, `POST /api/notes/{id}/shadow-reader/dismiss`, `PUT /api/users/me/shadow-reader/settings` all work.
 - On answer, content gets `\n\n--- Reflection ---\n{answer}` appended; embedding is regenerated asynchronously.
-- Frontend `<ShadowReaderPrompt />` polls 5× at 1s after note creation and renders bottom-sheet on `asked`; dismiss/answer/skip transitions work; component never blocks the UI.
+- Frontend `<ShadowReaderPrompt />` polls per the design § "Shadow Reader / Frontend polling (B17)" window — first 10 polls at 2s intervals, then 5 polls at 5s intervals (total 45s window) — so questions arriving after Stage 1+2 (~5–15s) are still picked up. The 3s NFR is measured from "Stage 2 complete", not "note creation". Renders bottom-sheet on `asked`; dismiss/answer/skip transitions work; component never blocks the UI.
 - Settings page hosts `<ShadowReaderSettings />` (global toggle + per-category opt-out chips).
 - All six categories produce contextually appropriate prompts on a manual review (acceptance from F2.5 + requirements doc Phase 2).
 
@@ -51,11 +51,11 @@ Tester writes failing tests in `backend/tests/test_shadow_reader.py` (trigger co
     - **Started**: TBD
     - **Completed**: TBD
     - **Duration**: TBD
-  - [ ] 2.3 In `merge_answer_into_note`, append `\n\n--- Reflection ---\n{answer}` to `note.content`, set `shadow_reader_answer`, status `answered`, and regenerate embedding via `text-embedding-3-small`. Schedule the embedding regen as a `BackgroundTask` so the HTTP response returns immediately.
+  - [ ] 2.3 In `merge_answer_into_note` (B10 — serializable transaction prevents race with any future re-pipeline): open a SERIALIZABLE transaction, `SELECT ... FOR UPDATE` the note row, append `\n\n--- Reflection ---\n{answer}` to `note.content`, set `shadow_reader_answer`, set `shadow_reader_status='answered'`, regenerate the embedding via `text-embedding-3-small`, DELETE existing `note_links` where `source_note_id = :id`, and re-run `_link_similar_notes(note)` with the new embedding. The HTTP route returns immediately by scheduling this whole block as a `BackgroundTask`; the GET endpoint reflects `status='answered'` once the task commits.
     - **Started**: TBD
     - **Completed**: TBD
     - **Duration**: TBD
-  - [ ] 2.4 Update `backend/app/pipeline/processor.py::AIPipeline.process_note` — between `_stage_capture` and `_stage_organize`, fetch the user, call `run_shadow_reader_stage(note, user, openai_client, db)`. Stage 2 still runs regardless of Reflect outcome.
+  - [ ] 2.4 Update `backend/app/pipeline/processor.py::AIPipeline.process_note` to match design § "Pipeline state machine" (B10): execute Stage 1 (`_stage_capture`) → Stage 2 (`_stage_organize`) → **then** Stage 1.5 (`run_shadow_reader_stage`). The Reflect call site is gated on `processing_status == 'enriched' AND shadow_reader_status == 'pending'`. (This is a deliberate departure from the addendum's "between Stage 1 and Stage 2" wording — see the B10 resolution in design.md.)
     - **Started**: TBD
     - **Completed**: TBD
     - **Duration**: TBD
@@ -87,7 +87,7 @@ Tester writes failing tests in `backend/tests/test_shadow_reader.py` (trigger co
     - **Started**: TBD
     - **Completed**: TBD
     - **Duration**: TBD
-  - [ ] 4.3 Create `frontend/src/components/ShadowReaderPrompt.tsx` per addendum F2.2 — props `{noteId, onComplete?}`. Polls `/api/notes/{id}/shadow-reader` 5× at 1s intervals; sets state `loading | asked | hidden`. On `asked`, renders fixed-bottom bottom-sheet with Sparkles header, dismiss-X, list of question paragraphs, textarea + send button + voice-mic button (voice answer recording reuses `useVoiceRecorder` and submits transcribed text).
+  - [ ] 4.3 Create `frontend/src/components/ShadowReaderPrompt.tsx` per addendum F2.2 + design B17 polling window — props `{noteId, onComplete?}`. Polls `/api/notes/{id}/shadow-reader` with a tiered schedule: 10 polls at 2s intervals (0–20s), then 5 polls at 5s intervals (20–45s); stop immediately on terminal status (`asked|skipped|dismissed|answered`). Sets state `loading | asked | hidden`. On `asked`, renders fixed-bottom bottom-sheet with Sparkles header, dismiss-X, list of question paragraphs, textarea + send button + voice-mic button (voice answer recording reuses `useVoiceRecorder` and submits transcribed text).
     - **Started**: TBD
     - **Completed**: TBD
     - **Duration**: TBD

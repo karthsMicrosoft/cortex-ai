@@ -22,7 +22,7 @@ Cortex is a single-owner, voice-first PWA "second brain" backed by FastAPI on Az
 
 | Priority | Goal |
 |---|---|
-| **P0** | Voice capture round-trip ("stop recording" → clean note visible) in < 2s (NFR-1) |
+| **P0** | Voice capture: **raw note appears in feed within 2s of "stop recording"** via offline-first IndexedDB write (NFR-1, US-4 file-mode). The transcribed/cleaned content arrives later (~3–5s file mode; <2s streaming via US-9 WebSocket). |
 | **P0** | Semantic search over personal corpus < 500ms p50 (NFR-2) |
 | **P0** | Full offline capture + read; background sync on reconnect (NFR-3, FR-6.1) |
 | **P0** | JWT auth with refresh; no unauthenticated access to notes or media (NFR-8) |
@@ -98,10 +98,11 @@ Mirror of requirements doc Section 8 "Out of Scope":
   - **Chosen:** Dexie.js IndexedDB store + sync queue + service worker (spec sections 2.2, 2.7).
   - **Rationale:** NFR-3 mandates full offline capture/read; queue+FIFO sync is the proven pattern (spec A.2).
 
-- **Container Apps consumption plan vs always-on:**
-  - **Chosen:** Consumption (scales to zero) — spec section 2.11 cost optimization #5.
-  - **Rationale:** Personal-use traffic is bursty; pay-per-use stays under budget.
-  - **Caveat:** First-request cold start; mitigated by SW cache returning UI instantly.
+- **Container Apps consumption plan — minReplicas: 1 (B14 resolution):**
+  - **Chosen:** Consumption plan with `minReplicas: 1` (was scale-to-zero in spec § 2.11 cost optimization #5).
+  - **Rationale:** APScheduler runs nightly distill at 23:59 inside the same FastAPI process; scale-to-zero kills the scheduler. Pinning `minReplicas: 1` keeps the scheduler alive. Cost delta vs scale-to-zero is roughly +$10–15/mo for the API container; total monthly spend stays inside the $150 NFR-4 budget (see updated Cost Budget table).
+  - **Alternatives considered:** (a) Azure Container Apps Jobs with cron trigger — more correct but requires a separate Bicep resource and image push. Deferred to a future ticket. (b) Lazy generation on next request — fails G3 acceptance ("on schedule").
+  - **Caveat:** First-request latency on the *single* warm replica is the only burst risk; SW cache returns UI instantly and FastAPI start-time is sub-second.
 
 - **Shadow Reader — sync stage in pipeline vs separate worker queue:**
   - **Chosen:** Synchronous Stage 1.5 between Capture (Stage 1) and Organize (Stage 2) within the existing async pipeline (addendum F2.2).
@@ -161,15 +162,15 @@ Flexible Srv     Storage             (STT +            (GPT-4o-mini
 1. **Capture (online voice):** PWA opens WS to `/api/voice/stream` → streams 250ms audio chunks → backend pipes to Azure Speech (with PhraseList loaded for the user) → backend emits partial+final transcripts back over WS. On stop, audio blob uploads to Blob Storage (SAS POST), and a `POST /api/notes` creates the record with `processing_status='transcribed'`.
 2. **Capture (offline):** Frontend writes `LocalNote` to IndexedDB and enqueues a sync op. UI shows note instantly. On reconnect, `SyncManager` POSTs the note + audio blob.
 3. **AI pipeline (background):** `process_note(note_id)` runs as a `BackgroundTask`:
-   - Stage 1 — CAPTURE: GPT-4o-mini cleans `raw_transcription` → `content`; status → `processed`.
-   - **Stage 1.5 — REFLECT (Phase 2):** check trigger conditions (≥ 50 words, user enabled, category not opted out); if true, generate 1–2 questions → `notes.shadow_reader_questions` + status `asked`; else `skipped`.
-   - Stage 2 — ORGANIZE: parallel auto-tag/categorize + embedding; then link similar notes by cosine; status → `enriched`.
+   - Stage 1 — CAPTURE: GPT-4o-mini cleans `raw_transcription` → `content`; `processing_status: raw|transcribed → processed`.
+   - Stage 2 — ORGANIZE: parallel auto-tag/categorize + embedding; then link similar notes by cosine; `processing_status: processed → enriched`.
+   - **Stage 1.5 — REFLECT (Phase 2, executed AFTER Stage 2 per B10):** check trigger conditions (≥ 50 words, user enabled, category not opted out); if true, generate 1–2 questions → `notes.shadow_reader_questions` + `shadow_reader_status='asked'`; else `'skipped'`.
 4. **Distill (scheduled):** Daily/weekly summary tasks query the user's notes for the period, summarize via GPT-4o-mini, persist to `daily_summaries`.
 5. **Search:** Embed query → hybrid SQL (cosine + ts_rank) → ranked results.
 
 ### Reusability
 
-The `pipeline/processor.py` module is structured so each stage is an independent coroutine — Distill and Express stages plug into the same orchestration. The `services/` adapters (blob_storage, speech, openai_client, vision) are reusable across pipeline stages and HTTP routes.
+The `pipeline/processor.py` module is structured so each stage is an independent coroutine — Distill and Express stages plug into the same orchestration. The `services/` adapters (blob_storage, speech, openai_client) are reusable across pipeline stages and HTTP routes. **Image OCR lives in `pipeline/ocr.py`** (per spec § 4.1 — there is no `services/vision.py`); the Azure AI Vision `ImageAnalysisClient` is constructed inline in that module since it has only one call site.
 
 ## UX Changes
 
@@ -181,6 +182,7 @@ UX is a new application — no "before". Mobile-first PWA per spec section 2.6 a
 - Brain View page: AI summaries + react-force-graph-2d of semantic links.
 - Settings page hosts Personal Dictionary chip-list (type-color coded) and Shadow Reader toggle + per-category opt-out chips.
 - Shadow Reader prompt: bottom-sheet slide-up, never modal, dismiss-X always visible, voice + text answer affordances.
+- **Manual override (spec § 3.2 mitigation #6 — first-class UX requirement):** the `NoteEditor` component on `NoteDetailPage` MUST expose editable controls for **category** (six-option dropdown), **tags** (chip add/remove), **mood** (free-text input or dropdown of common moods), and for `category='Music'` notes, **music_metadata** quick-edit chips (tempo / key / genre / instruments). The "AI-suggested" badge appears next to each AI-populated value until the user edits it; once edited, the value is treated as user-authoritative and the pipeline does not re-overwrite it. Acceptance: a user must be able to flip an "Ideas"-tagged note to "Music" in ≤ 2 taps from the timeline.
 
 Reference: spec section 2.6 (voice capture component), 2.7 (PWA manifest), addendum F1.2 (PersonalDictionary.tsx), F2.2 (ShadowReaderPrompt.tsx + ShadowReaderSettings.tsx).
 
@@ -206,10 +208,27 @@ Access token TTL = 30 min, refresh = 30 days, HS256, secret from env `JWT_SECRET
 | POST | `/api/notes` | `{ content, source_type, category?, audio_url?, image_url?, client_id?, tags? }` | 201 NoteOut; pipeline scheduled |
 | GET | `/api/notes` | query: `category, tag, date_from, date_to, q?, limit=50, offset=0` | 200 `{ items: NoteOut[], total }` |
 | GET | `/api/notes/{id}` | — | 200 NoteOut |
-| PUT | `/api/notes/{id}` | partial NoteUpdate | 200 NoteOut; embed re-generated if `content` changed |
+| PUT | `/api/notes/{id}` | partial `NoteUpdate` (see schema below) | 200 NoteOut; embed re-generated if `content` changed; tag delta-applied if `tags` changed |
 | DELETE | `/api/notes/{id}` | — | 204 |
 
 `NoteOut` shape mirrors `notes` table columns + computed `tags: string[]`, `links: NoteLink[]?`. `processing_status ∈ {raw, transcribed, processed, enriched, failed}`. Phase 2 adds `shadow_reader_status`, `shadow_reader_questions[]`, `shadow_reader_answer?`.
+
+**`NoteUpdate` schema (B8 — explicit definition, supports spec § 3.2 mitigation #6 manual-override of category/tags/mood):**
+
+```python
+class NoteUpdate(BaseModel):
+    """All fields optional — partial update. Coder must use `model_dump(exclude_unset=True)`
+    so that absence is distinguished from explicit None."""
+    content: Optional[str]                                # if changed, re-pipeline (status -> 'raw')
+    category: Optional[Literal['Music','Fitness','Journal','Ideas','Spiritual','Learning']]
+    tags: Optional[list[str]]                             # delta-applied: missing tags created (is_auto=False), absent tags unlinked
+    mood: Optional[str]                                   # mitigation #6 — manual mood override
+    music_metadata: Optional[dict]                        # mitigation #6 — manual music-metadata override (Music category)
+    image_url: Optional[str]
+    audio_url: Optional[str]
+```
+
+Mutating `content` clears `processing_status` to `'raw'` so the pipeline re-runs on next opportunity. Mutating `category`, `tags`, `mood`, or `music_metadata` does **not** re-trigger the pipeline (mitigation #6 — user override is the source of truth and must not be overwritten by AI).
 
 ### Sync (spec section 2.4 + 2.7)
 
@@ -278,6 +297,20 @@ Access token TTL = 30 min, refresh = 30 days, HS256, secret from env `JWT_SECRET
 ## Data Model
 
 PostgreSQL with `uuid-ossp` and `pgvector` extensions (spec section 2.3 + addendum F1.2 + F2.2).
+
+### Required PostgreSQL extensions (canonical, Azure-compatible — resolves OQ-9)
+
+The Alembic `001_initial_schema.py` migration MUST run these statements verbatim before any `CREATE TABLE`:
+
+```sql
+CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
+CREATE EXTENSION IF NOT EXISTS vector;
+```
+
+Notes:
+- **`vector`** (lowercase, no quotes) is the in-DB extension name on Azure Database for PostgreSQL Flexible Server. The spec § 2.3 wording (`"pgvector"`) **fails** on Azure and MUST NOT be copied.
+- The Bicep `azure.extensions` allowlist token is **`VECTOR`** (uppercase) — that's the Azure Resource Manager allowlist string, distinct from the in-DB extension name. Both forms appear in this design and are correct in their respective contexts (Bicep param vs SQL `CREATE EXTENSION`).
+- Coder and Tester must reference this section, NOT the spec verbatim wording, when authoring the migration.
 
 ### Tables (final schema)
 
@@ -426,35 +459,98 @@ Schema fields per spec section 2.3 verbatim (`localId`, `serverId?`, `content`, 
 
 ## AI Pipeline (CODE + Reflect)
 
-Spec section 2.5 verbatim, with addendum F2.2 Stage 1.5 inserted:
+Adapted from spec section 2.5 with addendum F2.2 (Reflect stage) and the **B10 ordering fix** — Reflect runs AFTER Organize so it operates on a categorized + embedded note:
 
 ```
 Stage 0: Ingest (STT or text/image input) — synchronous, < 2s — UI returns
    ▼
 Stage 1: CAPTURE (clean text via GPT-4o-mini, max 1000 tokens, T=0.3) — async
-   ▼
-Stage 1.5: REFLECT (Phase 2 — Shadow Reader)               — async, ≤ 3s
-   - should_trigger_shadow_reader(note, user)
-       enabled?  category not opted out?  word_count >= 50?
-   - if no → status='skipped', return
-   - generate_questions(note) via GPT-4o-mini
-       category-specific prompt (CATEGORY_PROMPTS dict, F2.2)
-       max_tokens=200, T=0.7, response_format=json_object, cap 2 questions ≤ 15 words
-   - persist questions, status='asked'
+   processing_status: raw|transcribed → processed
    ▼
 Stage 2: ORGANIZE — async (5–15s)
    - parallel: auto_tag_and_categorize() + generate_embedding()
    - then link_similar_notes() via pgvector (threshold=0.75, limit=5)
-   - status='enriched'
+   processing_status: processed → enriched
    ▼
-Stage 3: DISTILL — scheduled daily/weekly
+Stage 1.5: REFLECT (Phase 2 — Shadow Reader)               — async, ≤ 3s
+   gate: processing_status == 'enriched' AND shadow_reader_status == 'pending'
+   - should_trigger_shadow_reader(note, user)
+       enabled?  category not opted out?  word_count >= 50?
+   - if no → shadow_reader_status='skipped', return
+   - generate_questions(note) via GPT-4o-mini
+       category-specific prompt (CATEGORY_PROMPTS dict, F2.2)
+       max_tokens=200, T=0.7, response_format=json_object, cap 2 questions ≤ 15 words
+   - persist questions, shadow_reader_status='asked'
+   ▼
+Stage 3: DISTILL — scheduled daily/weekly via APScheduler in-process (B14)
+   - APScheduler `BackgroundScheduler` started at FastAPI startup (in main.py lifespan)
+   - cron: 23:59 user-local (single user, MVP); 7-day weekly summary on Sunday 23:59
+   - requires Container App minReplicas=1 (see Bicep + Cost Budget)
    - aggregate user's notes for the period → GPT-4o-mini summary
    - persist to daily_summaries
    ▼
 Express (P2) — on-demand: song ideas, practice plans, reflections
 ```
 
+The "Stage 1.5" name is preserved for traceability with the addendum, but in execution order it is the *last* of the create-time stages (after Organize). Embedding regeneration on user answer is the only path that mutates the note's vector after Stage 2.
+
 Pipeline orchestration owned by `backend/app/pipeline/processor.py::AIPipeline.process_note(note_id)`. Stages are independent coroutines so each can be retried with exponential backoff (`tenacity`, critique mitigation #1). On any failure: `processing_status='failed'`, error logged (no note content in logs — NFR observability).
+
+### Pipeline state machine (B10 — Reflect-aware ordering, prevents Stage 1.5 ↔ Stage 2 race)
+
+`processing_status` and `shadow_reader_status` evolve together. The canonical transitions are:
+
+```
+                            ┌──────────────────────────────┐
+                            │  processing_status state     │
+                            │  shadow_reader_status state  │
+                            └──────────────────────────────┘
+
+  raw / pending
+        │   _stage_capture(note)
+        ▼
+  processed / pending      ◄── checkpoint A: Stage 1 done, content cleaned
+        │
+        │   _stage_organize(note)   ── runs UNCONDITIONALLY here
+        │   (auto_tag + embed + link)
+        ▼
+  enriched / pending       ◄── checkpoint B: Stage 2 done, embedding & links written
+        │
+        │   run_shadow_reader_stage(note, user)   ── reads enriched content
+        ▼
+  enriched / asked         (questions generated)
+   OR
+  enriched / skipped       (trigger said no — terminal)
+
+   --- user interaction ---
+
+  enriched / asked
+        │   POST /api/notes/{id}/shadow-reader/answer
+        │   merge_answer_into_note(note, answer)  in serializable transaction:
+        │     1. append "--- Reflection ---" to content
+        │     2. set shadow_reader_answer + status='answered'
+        │     3. regenerate embedding via text-embedding-3-small
+        │     4. re-run _link_similar_notes(note)   (relink based on new embedding)
+        ▼
+  enriched / answered      ◄── terminal happy path
+
+  enriched / asked
+        │   POST .../shadow-reader/dismiss
+        ▼
+  enriched / dismissed     ◄── terminal dismissed path
+
+  Failures: any stage exception → processing_status='failed' (shadow_reader_status untouched)
+```
+
+**Key invariants** (resolves B10 race):
+
+1. **Stage 2 (Organize) runs BEFORE Stage 1.5 (Reflect)** — not after. This is a deliberate change from the natural reading of the spec ("Stage 1.5 between Stage 1 and Stage 2") and from the previous design draft. Reason: Reflect questions are best generated against a *categorized + summarized* note, AND the embedding generated by Stage 2 is the canonical "pre-reflection" embedding.
+2. **`run_shadow_reader_stage` reads from `processing_status='enriched'`** — never from `processed`. The orchestrator gates Stage 1.5 on `processing_status == 'enriched' AND shadow_reader_status == 'pending'`.
+3. **`merge_answer_into_note` is a serializable transaction** (`SET TRANSACTION ISOLATION LEVEL SERIALIZABLE` in asyncpg). It (a) appends content, (b) regenerates embedding, (c) deletes existing `note_links` rows where `source_note_id = :id`, and (d) re-runs `_link_similar_notes(note)`. This guarantees no stale links survive after the embedding shift.
+4. **No concurrent `_stage_organize` and `merge_answer_into_note`** — by invariant 1, organize completes before Reflect even begins; the answer flow is the only path that mutates `embedding` after Stage 2, and it acquires a `SELECT ... FOR UPDATE` lock on the note row.
+5. **Idempotent re-trigger** (`POST /api/ai/process/{note_id}`): inspects current state and resumes from the appropriate checkpoint. If `processing_status='failed'`, it restarts from the last successful checkpoint. If `shadow_reader_status='asked'` and the user has not answered, it does NOT regenerate questions.
+
+This ordering is also reflected in the diagram below (note Stage 1.5 is now after Stage 2).
 
 **Reflect-stage answer flow:**
 `merge_answer_into_note(note, answer)`:
@@ -477,18 +573,136 @@ Per spec section 2.6: < 2s feedback loop via WebSocket streaming STT.
 
 ## Offline-First
 
-Per spec section 2.7:
+Per spec section 2.7 (with B11 image-sync + B13 pull/conflict UX additions):
+
 - `vite-plugin-pwa` (Workbox) with NetworkFirst (`/api/.*` 200 entries, 24h max age, 3s timeout) and CacheFirst (`*.blob.core.windows.net` 100 entries, 7-day max age).
 - PWA manifest exactly per spec 2.7 (`name`, `short_name`, `theme_color: #4F46E5`, `background_color: #0F172A`, `display: standalone`, icons 192/512/512-mask).
+
+### Sync push flow (canonical, includes B11 image branch)
+
+Pseudocode for `SyncManager.pushChanges()` — drains `syncQueue` FIFO; for each `create note` op:
+
+```ts
+async function pushOne(op: SyncOp) {
+  const note = await db.notes.get(op.localId);
+  let audioUrl: string | undefined;
+  let imageUrl: string | undefined;
+
+  // B11: image branch (was missing in spec § 2.7)
+  if (note.imageBlob) {
+    imageUrl = await this.uploadBlob(note.imageBlob, note.imageBlob.type || 'image/jpeg');
+  }
+  if (note.audioBlob) {
+    audioUrl = await this.uploadBlob(note.audioBlob, 'audio/webm');
+  }
+
+  const created = await api.notes.create({
+    content: note.content,
+    source_type: note.sourceType,        // 'voice' | 'text' | 'image'
+    audio_url: audioUrl,
+    image_url: imageUrl,
+    client_id: note.localId,
+    tags: note.tags,
+    category: note.category,
+  });
+
+  await db.notes.update(op.localId, { serverId: created.id, syncStatus: 'synced' });
+  await db.syncQueue.delete(op.id);
+}
+```
+
+### Sync pull flow (B13 — newly designed)
+
+```ts
+// 1. lastPull cursor lives in a dedicated Dexie 'meta' table:
+//    db.version(2).stores({ ..., meta: 'key' });
+//    Initial value: epoch (1970-01-01T00:00:00Z) so first pull returns everything.
+// 2. SyncManager.pull() runs on:
+//    - app boot (after auth)
+//    - 'online' event
+//    - every 60s while foreground
+const lastPull = (await db.meta.get('lastPull'))?.value ?? '1970-01-01T00:00:00Z';
+const { notes, deletions, server_time } = await api.sync.pull(lastPull);
+
+await db.transaction('rw', db.notes, db.meta, async () => {
+  for (const serverNote of notes) {
+    const local = await db.notes.where('serverId').equals(serverNote.id).first();
+    if (!local) {
+      await db.notes.add({ ...mapServerToLocal(serverNote), syncStatus: 'synced' });
+    } else if (local.updatedAt > new Date(lastPull) && local.syncStatus !== 'synced') {
+      // Local was edited after lastPull AND has not yet been pushed → conflict
+      await db.notes.update(local.localId, {
+        ...mapServerToLocal(serverNote, { keepLocalContent: local.content }),
+        syncStatus: 'conflict',
+        conflictServerVersion: serverNote,   // freeze server payload for the conflict UI
+      });
+    } else {
+      await db.notes.update(local.localId, { ...mapServerToLocal(serverNote), syncStatus: 'synced' });
+    }
+  }
+  for (const deletedId of deletions) {
+    const local = await db.notes.where('serverId').equals(deletedId).first();
+    if (local) await db.notes.delete(local.localId);
+  }
+  await db.meta.put({ key: 'lastPull', value: server_time });
+});
+```
+
+### Conflict UI (B13)
+
+- `<SyncIndicator />` shows a red badge with the count of `notes` rows where `syncStatus='conflict'` (e.g. "Sync conflicts (3)").
+- Tap → opens a Conflicts page listing each conflicted note with two cards (Local vs Server) and a "Keep Local / Keep Server / Merge" action row.
+- "Keep Local" → `PUT /api/notes/{serverId}` with the local payload, then `syncStatus='synced'`.
+- "Keep Server" → overwrite local content with `conflictServerVersion`, set `syncStatus='synced'`.
+- "Merge" → opens `<NoteEditor />` prefilled with a textual diff; user edits + saves → same as "Keep Local".
+
+### Sync engine
+
 - `SyncManager` singleton: listens to `online` event, polls every 30s, FIFO drains `syncQueue`, retries with `retryCount`; after 5 failures move to dead-letter (critique mitigation #2 — separate IndexedDB table `deadLetter`).
 
 ## Semantic Search
 
-Per spec section 2.8:
+Per spec section 2.8 (with B7 — tags filter wired into the SQL):
+
 - Query embedding via `text-embedding-3-small`.
-- SQL hybrid: `0.7 * (1 - (embedding <=> :q_emb)) + 0.3 * ts_rank(to_tsvector('english', content), plainto_tsquery(:q_text))` AS `combined_score`.
-- Optional filters: category, tags, date range.
+- Hybrid score: `0.7 * (1 - (embedding <=> :q_emb)) + 0.3 * ts_rank(to_tsvector('english', content), plainto_tsquery(:q_text))` AS `combined_score`.
 - LIMIT 20 by default; ORDER BY `combined_score DESC`.
+
+**Canonical SQL with all optional filters** (B7 — `tags` is now first-class; the API contract `POST /api/search` accepts `tags?: string[]` and the SQL applies an `EXISTS` subquery against `note_tags ⨝ tags`):
+
+```sql
+SELECT
+  n.id, n.content, n.summary, n.category, n.created_at,
+  (1 - (n.embedding <=> :q_emb))                              AS semantic_score,
+  ts_rank(to_tsvector('english', n.content),
+          plainto_tsquery('english', :q_text))                AS text_score,
+  0.7 * (1 - (n.embedding <=> :q_emb)) +
+  0.3 * ts_rank(to_tsvector('english', n.content),
+                plainto_tsquery('english', :q_text))          AS combined_score
+FROM notes n
+WHERE n.user_id = :user_id
+  AND (:category   IS NULL OR n.category   = :category)
+  AND (:date_from  IS NULL OR n.created_at >= :date_from)
+  AND (:date_to    IS NULL OR n.created_at <= :date_to)
+  AND (
+    :tags IS NULL
+    OR EXISTS (
+      SELECT 1
+      FROM note_tags nt
+      JOIN tags t ON t.id = nt.tag_id
+      WHERE nt.note_id = n.id
+        AND t.user_id  = :user_id
+        AND t.name     = ANY(:tags)
+    )
+  )
+ORDER BY combined_score DESC
+LIMIT :limit;
+```
+
+Notes:
+- `:tags` binds to a `text[]` (Pydantic `tags: list[str] | None`); `NULL` semantics mean "no filter".
+- The `EXISTS` form prevents row duplication when a note has multiple matching tags.
+- Performance gate: the design assumes `note_tags(note_id)` and `tags(user_id, name)` indexes — both are present (`note_tags` PK + `tags` UNIQUE(user_id, name)). The acceptance criterion "p50 < 500ms over 1000 notes" is measured against the **deployed** Postgres+pgvector instance, not local sqlite (see B18 follow-up: gate the perf assertion behind `--integration` + `RUN_PERF=1`).
 
 ## Music Features
 
@@ -504,7 +718,11 @@ Per spec section 2.10 + critique mitigations:
 - **JWT:** HS256, secret from env (sourced from Azure Key Vault in prod). Access TTL 30 min, refresh TTL 30 days; `pwd_context = CryptContext(schemes=['bcrypt'])`.
 - **Storage:** access token in JS memory; refresh in httpOnly+secure+sameSite cookie.
 - **Blob URLs:** SAS, time-limited (24h), read-only (critique mitigation #3).
-- **WebSocket auth:** `?token=<jwt>` query param validated on connect (mitigation #4).
+- **WebSocket auth (B12 — log-leak mitigation):** the JWT is passed via `?token=<jwt>` query param **AND** Container Apps ingress is configured to scrub `token=` from access logs. Concretely:
+  - Backend `/api/voice/stream` validates the token on connect (mitigation #4 — preserves the spec-prescribed pattern that browsers cannot send custom headers on `WebSocket(url)`).
+  - The Container App's `ingress.corsPolicy` and Application Insights telemetry processor strip the `token` query parameter before persisting to logs. The deploy pipeline adds an Application Insights `ITelemetryProcessor` (or, where unavailable, a Container App `loggerOptions` regex `s/[?&]token=[^&]+/$1token=REDACTED/` over the URL field).
+  - Backend code MUST NOT log the request URL on the WebSocket handshake; only `Loaded {n} phrases for user {id}` and `WS connected user={id}`.
+  - Documented trade-off: the JWT is briefly visible in the network tab and any reverse proxy that ignores the redaction. Acceptable for single-user MVP; revisit with `Sec-WebSocket-Protocol` subprotocol auth at multi-user phase.
 - **Rate limit:** 100 rpm/user via `slowapi` (mitigation #8).
 - **Logging:** never log note content, raw_transcription, dictionary entries, or tokens. Log shape examples: `Loaded {n} phrases for user {id}`, `Pipeline complete for note {id}`, `Pipeline failed for note {id}: {err_class}`.
 - **Encryption:** Azure default at-rest (NFR-7); TLS 1.2+ in transit (Container Apps default).
@@ -532,7 +750,17 @@ Tester agent owns all test files in `backend/tests/` (pytest + httpx + pytest-as
 - **E2E:** manual via PWA on iOS Safari + Android Chrome (Lighthouse run, voice flow, offline flow).
 - **Performance:** locust or `httpx` script — 1000-note seed → 50 concurrent semantic searches → assert p50 < 500ms.
 - **Manual pre-launch:** the spec section 5.3 final checklist + addendum F1.5 + F2.5.
-- **No live Azure in tests** — mock Speech, OpenAI, Blob, Vision via respx / unittest.mock.
+- **No live Azure in tests** — mocking strategy per service (B15 — respx is HTTP-only and cannot intercept the Speech SDK's gRPC/native transport):
+
+  | Service | SDK transport | Mock library | Hook |
+  |---|---|---|---|
+  | Azure OpenAI (chat + embeddings) | HTTP via `httpx` (`openai` 1.x uses httpx internally) | `respx` | mount on the OpenAI base URL pattern |
+  | Azure AI Vision (Image Analysis) | HTTP REST | `respx` | mount on the vision endpoint pattern |
+  | Azure Blob Storage | HTTP REST | `respx` | mount on `*.blob.core.windows.net` |
+  | Azure Speech (file mode) | gRPC + native (`SpeechRecognizer.recognize_once_async`) | **`unittest.mock.patch`** | `patch('app.services.speech.SpeechRecognizer')` returning a fake whose `recognize_once_async()` resolves to a stub `SpeechRecognitionResult(text=...)` |
+  | Azure Speech (WebSocket streaming, US-9) | native | **`unittest.mock.patch`** | patch `SpeechRecognizer`, `PushAudioInputStream`, fire `recognizing`/`recognized` callbacks via the fake's `events` attribute |
+
+  Each task's TDD Hook in the relevant `us-*.tasks.md` files restates the per-service strategy so the Tester does not pick the wrong mock.
 
 ## Rollout / Rollback / Disaster Recovery
 
@@ -580,7 +808,11 @@ N/A — greenfield application, no existing data. The three Alembic migrations b
 - **Voice not transcribing:** check Speech key/region; verify WS auth token; check `phrase_list_loaded` log line; if zero phrases for user with vocabulary → check Postgres connectivity.
 - **Cost spike alert:** open Azure Cost Management → look for OpenAI token surge → throttle pipeline by reducing concurrency in `processor.py`.
 
-## Project Structure (verbatim from spec section 4.1)
+## Project Structure (canonical — derived from spec § 4.1 with B5/B6 deltas)
+
+Deltas from spec § 4.1:
+- **B6:** added `backend/app/api/upload.py` and `backend/app/api/tags.py` as dedicated router modules. The spec implicitly relied on stuffing these endpoints into `__init__.py`, which is a FastAPI anti-pattern.
+- **B5:** kept `backend/app/pipeline/ocr.py` per spec; **removed** `backend/app/services/vision.py` from any narrative — the Vision SDK call is inlined in `pipeline/ocr.py`.
 
 ```
 cortex/
@@ -628,7 +860,7 @@ cortex/
 │       ├── models/{__init__.py, user.py, note.py, tag.py, daily_summary.py, vocabulary.py*}
 │       ├── schemas/{__init__.py, note.py, search.py, auth.py, sync.py, dictionary.py*, shadow_reader.py*}
 │       ├── api/{__init__.py, notes.py, search.py, voice.py, sync.py, insights.py, export.py,
-│       │       auth.py, dictionary.py*, shadow_reader.py*, users.py*}
+│       │       auth.py, upload.py, tags.py, dictionary.py*, shadow_reader.py*, users.py*}
 │       ├── auth/jwt.py
 │       ├── pipeline/{__init__.py, processor.py, distill.py, music.py, ocr.py, shadow_reader.py*}
 │       ├── services/{blob_storage.py, speech.py, openai_client.py}
@@ -682,7 +914,16 @@ cortex/
 
 Test additions for Tester (workforce.json `testing.identityExtension`): `@testing-library/react`, `@testing-library/jest-dom`, `jsdom`.
 
-### Backend `requirements.txt` (pinned)
+### Backend `requirements.txt` (pinned — OQ-2 + OQ-4 resolved)
+
+This pin set deviates from spec § 4.3 verbatim in TWO places (B2 / OQ-2 + OQ-4 resolution). The deviation is a documented spec-deviation:
+
+| Spec § 4.3 (verbatim) | This design (canonical) | Reason |
+|---|---|---|
+| `python-jose[cryptography]==3.3.*` | `python-jose[cryptography]>=3.5,<4` | CVE-2024-33663 (alg-confusion JWT bypass) and CVE-2024-33664 (JWE DoS) are fixed in 3.5.0. Same `jwt.encode/decode` API — no code-shape change. |
+| `passlib[bcrypt]==1.7.*` | `passlib[bcrypt]>=1.7,<2` + `bcrypt>=4.0,<4.1` | passlib 1.7.x raises `AttributeError: module 'bcrypt' has no attribute '__about__'` against `bcrypt>=4.1`. Pinning `bcrypt<4.1` keeps `passlib.context.CryptContext(schemes=['bcrypt'])` working without rewriting `auth/jwt.py`. |
+
+Final list:
 
 ```
 fastapi==0.115.*
@@ -691,8 +932,9 @@ sqlalchemy[asyncio]==2.0.*
 asyncpg==0.29.*
 pgvector==0.3.*
 alembic==1.13.*
-python-jose[cryptography]==3.3.*
-passlib[bcrypt]==1.7.*
+python-jose[cryptography]>=3.5,<4
+passlib[bcrypt]>=1.7,<2
+bcrypt>=4.0,<4.1
 python-multipart==0.0.*
 openai==1.40.*
 azure-cognitiveservices-speech==1.40.*
@@ -702,6 +944,8 @@ pydub==0.25.*
 httpx==0.27.*
 pydantic-settings==2.4.*
 tenacity==8.5.*
+slowapi==0.1.*
+apscheduler==3.10.*
 ```
 
 Test deps: `pytest`, `pytest-asyncio`, `respx`.
@@ -754,7 +998,15 @@ ENVIRONMENT=production
 
 `backend/app/config.py` exposes these via `pydantic-settings`. JWT secret stored in Azure Key Vault in production; injected via Container App secret reference.
 
-## Bicep Template (verbatim from spec section 5.2)
+## Bicep Template (canonical, OQ-1/OQ-5/OQ-6/OQ-7 resolved)
+
+This is the **canonical** Bicep template for the cortex-second-brain feature. It is derived from spec § 5.2 with the following deltas (resolutions of Open Questions baked in — Coder and Reviewer-Security must use this version, not the spec verbatim text):
+
+- **OQ-1 resolved:** new `openaiLocation` parameter (default `westus`); `openai` resource uses it instead of the resource-group `location`. Reason: `gpt-4o-mini` and `text-embedding-3-small` are not GA in `westus2`. All other Cognitive Services resources stay in `location`.
+- **OQ-5 resolved:** Postgres `firewallRules` child resource added (`AllowAllAzureServicesAndResourcesWithinAzureIps`, `0.0.0.0`/`0.0.0.0`).
+- **OQ-7 resolved:** `Microsoft.App/containerApps` resource added with managed identity, `ingress.transport: 'auto'` (WebSocket support), `allowInsecure: false`, CPU scaling rule (target 70%, `minReplicas: 1`, `maxReplicas: 3` — see B14 resolution: minReplicas=1 to keep APScheduler distill cron alive), liveness + readiness probes on `/api/health`, and env-var bindings to outputs and Key-Vault-sourced secret references.
+- **OQ-6 resolved:** `Microsoft.Web/staticSites` resource added so the SWA is reproducible from Bicep alone (rather than a bare `az staticwebapp create` in `deploy.sh`).
+- **B14 resolved:** `minReplicas: 1` is the chosen approach so APScheduler can run nightly distill on schedule. Cost delta ≈ +$10–15/mo vs scale-to-zero — total still inside the $150 budget. See § "Cost Budget" for the updated table.
 
 ```bicep
 // infra/main.bicep
@@ -763,8 +1015,17 @@ targetScope = 'resourceGroup'
 @description('Base name for all resources')
 param appName string = 'cortex'
 
-@description('Azure region')
+@description('Azure region for all resources except Azure OpenAI')
 param location string = resourceGroup().location
+
+@description('Azure OpenAI region (gpt-4o-mini + text-embedding-3-small not GA in westus2). See OQ-1.')
+param openaiLocation string = 'westus'
+
+@description('Container image tag deployed to the API Container App')
+param containerImageTag string = 'latest'
+
+@description('Frontend origin used for CORS in the backend')
+param frontendOrigin string = 'https://${appName}-app.azurestaticapps.net'
 
 @secure()
 @description('PostgreSQL admin password')
@@ -774,7 +1035,7 @@ param dbAdminPassword string
 @description('JWT secret key')
 param jwtSecretKey string
 
-// PostgreSQL Flexible Server
+// ---------- PostgreSQL Flexible Server ----------
 resource postgres 'Microsoft.DBforPostgreSQL/flexibleServers@2023-12-01-preview' = {
   name: '${appName}-db'
   location: location
@@ -788,14 +1049,24 @@ resource postgres 'Microsoft.DBforPostgreSQL/flexibleServers@2023-12-01-preview'
   }
 }
 
-// Enable pgvector extension
+// Enable pgvector extension via the Azure allowlist
 resource pgvectorExt 'Microsoft.DBforPostgreSQL/flexibleServers/configurations@2023-12-01-preview' = {
   parent: postgres
   name: 'azure.extensions'
   properties: { value: 'VECTOR,UUID-OSSP', source: 'user-override' }
 }
 
-// Storage Account
+// OQ-5: firewall rule so the Container App can reach Postgres.
+resource postgresFwAzure 'Microsoft.DBforPostgreSQL/flexibleServers/firewallRules@2023-12-01-preview' = {
+  parent: postgres
+  name: 'AllowAllAzureServicesAndResourcesWithinAzureIps'
+  properties: {
+    startIpAddress: '0.0.0.0'
+    endIpAddress: '0.0.0.0'
+  }
+}
+
+// ---------- Storage Account ----------
 resource storage 'Microsoft.Storage/storageAccounts@2023-05-01' = {
   name: '${appName}storage'
   location: location
@@ -803,16 +1074,21 @@ resource storage 'Microsoft.Storage/storageAccounts@2023-05-01' = {
   sku: { name: 'Standard_LRS' }
 }
 
-// Azure OpenAI
+resource storageBlob 'Microsoft.Storage/storageAccounts/blobServices/containers@2023-05-01' = {
+  name: '${storage.name}/default/cortex-media'
+  properties: { publicAccess: 'None' }
+}
+
+// ---------- Azure OpenAI (OQ-1: must be in westus, NOT westus2) ----------
 resource openai 'Microsoft.CognitiveServices/accounts@2024-04-01-preview' = {
   name: '${appName}-openai'
-  location: location
+  location: openaiLocation
   kind: 'OpenAI'
   sku: { name: 'S0' }
   properties: { publicNetworkAccess: 'Enabled' }
 }
 
-// Azure Speech
+// ---------- Azure Speech ----------
 resource speech 'Microsoft.CognitiveServices/accounts@2024-04-01-preview' = {
   name: '${appName}-speech'
   location: location
@@ -821,14 +1097,23 @@ resource speech 'Microsoft.CognitiveServices/accounts@2024-04-01-preview' = {
   properties: { publicNetworkAccess: 'Enabled' }
 }
 
-// Container App Environment
+// ---------- Azure AI Vision ----------
+resource vision 'Microsoft.CognitiveServices/accounts@2024-04-01-preview' = {
+  name: '${appName}-vision'
+  location: location
+  kind: 'ComputerVision'
+  sku: { name: 'S1' }
+  properties: { publicNetworkAccess: 'Enabled' }
+}
+
+// ---------- Container App Environment ----------
 resource containerEnv 'Microsoft.App/managedEnvironments@2024-03-01' = {
   name: '${appName}-env'
   location: location
   properties: {}
 }
 
-// Container Registry
+// ---------- Container Registry ----------
 resource acr 'Microsoft.ContainerRegistry/registries@2023-07-01' = {
   name: '${appName}acr'
   location: location
@@ -836,28 +1121,141 @@ resource acr 'Microsoft.ContainerRegistry/registries@2023-07-01' = {
   properties: { adminUserEnabled: true }
 }
 
-output postgresHost string = postgres.properties.fullyQualifiedDomainName
+// ---------- Container App (OQ-7) ----------
+resource containerApp 'Microsoft.App/containerApps@2024-03-01' = {
+  name: '${appName}-api'
+  location: location
+  identity: { type: 'SystemAssigned' }
+  properties: {
+    managedEnvironmentId: containerEnv.id
+    configuration: {
+      activeRevisionsMode: 'Single'
+      ingress: {
+        external: true
+        targetPort: 8000
+        transport: 'auto'           // enables HTTP/1.1 + WebSocket
+        allowInsecure: false        // HTTPS only
+        traffic: [ { latestRevision: true, weight: 100 } ]
+      }
+      registries: [
+        {
+          server: acr.properties.loginServer
+          username: acr.name
+          passwordSecretRef: 'acr-password'
+        }
+      ]
+      secrets: [
+        { name: 'acr-password',                    value: acr.listCredentials().passwords[0].value }
+        { name: 'database-url',                    value: 'postgresql+asyncpg://cortexadmin:${dbAdminPassword}@${postgres.properties.fullyQualifiedDomainName}:5432/cortex' }
+        { name: 'jwt-secret-key',                  value: jwtSecretKey }
+        { name: 'azure-openai-api-key',            value: openai.listKeys().key1 }
+        { name: 'azure-speech-key',                value: speech.listKeys().key1 }
+        { name: 'azure-storage-connection-string', value: 'DefaultEndpointsProtocol=https;AccountName=${storage.name};AccountKey=${storage.listKeys().keys[0].value};EndpointSuffix=core.windows.net' }
+        { name: 'azure-vision-key',                value: vision.listKeys().key1 }
+      ]
+    }
+    template: {
+      containers: [
+        {
+          name: '${appName}-api'
+          image: '${acr.properties.loginServer}/${appName}-api:${containerImageTag}'
+          resources: { cpu: json('0.5'), memory: '1Gi' }
+          env: [
+            { name: 'DATABASE_URL',                   secretRef: 'database-url' }
+            { name: 'JWT_SECRET_KEY',                 secretRef: 'jwt-secret-key' }
+            { name: 'AZURE_OPENAI_ENDPOINT',          value: openai.properties.endpoint }
+            { name: 'AZURE_OPENAI_API_KEY',           secretRef: 'azure-openai-api-key' }
+            { name: 'AZURE_OPENAI_API_VERSION',       value: '2024-10-21' }
+            { name: 'AZURE_SPEECH_KEY',               secretRef: 'azure-speech-key' }
+            { name: 'AZURE_SPEECH_REGION',            value: location }
+            { name: 'AZURE_STORAGE_CONNECTION_STRING',secretRef: 'azure-storage-connection-string' }
+            { name: 'AZURE_STORAGE_CONTAINER',        value: 'cortex-media' }
+            { name: 'AZURE_VISION_ENDPOINT',          value: vision.properties.endpoint }
+            { name: 'AZURE_VISION_KEY',               secretRef: 'azure-vision-key' }
+            { name: 'CORS_ORIGINS',                   value: frontendOrigin }
+            { name: 'ENVIRONMENT',                    value: 'production' }
+          ]
+          probes: [
+            {
+              type: 'Liveness'
+              httpGet: { path: '/api/health', port: 8000 }
+              initialDelaySeconds: 10
+              periodSeconds: 30
+              failureThreshold: 3
+            }
+            {
+              type: 'Readiness'
+              httpGet: { path: '/api/health', port: 8000 }
+              initialDelaySeconds: 5
+              periodSeconds: 10
+              failureThreshold: 3
+            }
+          ]
+        }
+      ]
+      scale: {
+        minReplicas: 1                          // B14: keep APScheduler alive for nightly distill
+        maxReplicas: 3
+        rules: [
+          {
+            name: 'cpu-rule'
+            custom: {
+              type: 'cpu'
+              metadata: { type: 'Utilization', value: '70' }
+            }
+          }
+        ]
+      }
+    }
+  }
+}
+
+// ---------- Static Web App (OQ-6) ----------
+resource staticWebApp 'Microsoft.Web/staticSites@2023-12-01' = {
+  name: '${appName}-app'
+  location: location
+  sku: { name: 'Free', tier: 'Free' }
+  properties: {
+    repositoryUrl: ''        // CI/CD wiring done by deploy-frontend.yml; this resource hosts the static site only
+    branch: ''
+    buildProperties: {
+      appLocation: 'frontend'
+      apiLocation: ''
+      outputLocation: 'dist'
+    }
+  }
+}
+
+// ---------- Outputs ----------
+output postgresHost      string = postgres.properties.fullyQualifiedDomainName
 output storageAccountName string = storage.name
-output openaiEndpoint string = openai.properties.endpoint
-output speechRegion string = location
-output acrLoginServer string = acr.properties.loginServer
+output openaiEndpoint    string = openai.properties.endpoint
+output openaiRegion      string = openaiLocation
+output speechRegion      string = location
+output visionEndpoint    string = vision.properties.endpoint
+output acrLoginServer    string = acr.properties.loginServer
+output containerAppFqdn  string = containerApp.properties.configuration.ingress.fqdn
+output staticWebAppName  string = staticWebApp.name
+output staticWebAppHost  string = staticWebApp.properties.defaultHostname
 ```
 
-The `infra/modules/` files (`container-app.bicep`, `postgres.bicep`, `storage.bicep`, `cognitive-services.bicep`, `static-web-app.bicep`) decompose this template; `infra/deploy.sh` orchestrates the full deploy (spec section 5.2).
+The `infra/modules/` files (`container-app.bicep`, `postgres.bicep`, `storage.bicep`, `cognitive-services.bicep`, `static-web-app.bicep`) decompose this template; `infra/deploy.sh` orchestrates the full deploy (spec section 5.2). The module decomposition must preserve every property, secret, and probe shown above.
 
 ## Cost Budget ($150/month — spec section 2.11)
 
 | Service | SKU | Est. $/mo |
 |---|---|---|
 | Static Web Apps | Free | $0 |
-| Container Apps | Consumption 0.5 vCPU/1GB | $15–25 |
+| Container Apps | Consumption 0.5 vCPU/1GB, **minReplicas=1** (B14) | $25–40 |
 | PostgreSQL | B1ms 1 vCPU/2GB/32GB | $25–35 |
 | Blob Storage | Hot LRS ~10GB | $5–10 |
 | Speech | PAYG ~5h STT | $10–15 |
 | Azure OpenAI | GPT-4o-mini ~500K + emb-3-small ~1M | $15–30 |
 | AI Vision | PAYG ~100 OCR | $2–5 |
 | Container Registry | Basic | $5 |
-| **Total** | | **$77–$145** |
+| **Total** | | **$87–$160** (see note) |
+
+> Note: top-of-range $160 nominally exceeds the $150 NFR-4 ceiling. Mitigation: Postgres B1ms is sized at the high end of usage; expected steady-state is the **$87–$130** band given single-user load. If the actual monthly spend trends toward $150 the team will (a) move Distill to Container Apps Jobs and revert API to scale-to-zero, or (b) right-size Postgres to Burstable B1ms with auto-pause overnight. Budget alert at $140 (spec 2.11) catches this.
 
 Phase 2 add-on: Personal Dictionary $0; Shadow Reader ~$0.11/month at 1000 notes → still well under $150.
 
@@ -875,7 +1273,7 @@ Phase 2 add-on: Personal Dictionary $0; Shadow Reader ~$0.11/month at 1000 notes
 
 ## Shadow Reader (Phase 2 — addendum F2.2 verbatim integration)
 
-- **Pipeline placement:** Stage 1.5 between Capture and Organize, in `pipeline/processor.py`.
+- **Pipeline placement (B10):** Stage 1.5 (Reflect) executes AFTER Stage 2 (Organize) — see "Pipeline state machine" above. This is a deliberate departure from the addendum's "between Capture and Organize" wording: Reflect needs the categorized note + canonical pre-reflection embedding, and the answer flow is the only post-Organize mutation path.
 - **Trigger function:** `should_trigger_shadow_reader(note, user)` — returns True iff `user.shadow_reader_enabled` AND `note.category not in user.shadow_reader_disabled_categories` AND `len(note.content.split()) >= 50`.
 - **Question generation:** `generate_questions(note, openai_client)` uses category-specific prompt from `CATEGORY_PROMPTS` dict (Music / Journal / Ideas / Fitness / Spiritual / Learning), `gpt-4o-mini`, `max_tokens=200`, `temperature=0.7`, `response_format=json_object`. Returns first 2 strings from JSON `questions` array.
 - **State transitions:** `pending → asked` (questions generated) → `answered` (user submitted) | `dismissed` (X tapped) | `skipped` (trigger said no).
@@ -884,7 +1282,13 @@ Phase 2 add-on: Personal Dictionary $0; Shadow Reader ~$0.11/month at 1000 notes
   - Max 2 questions, max 15 words each (FR-8.10).
   - Single-shot per note: once status transitions out of `asked`, no retrigger (FR-8.11).
   - Dismissal does not affect future notes.
-- **Frontend polling:** `ShadowReaderPrompt.tsx` polls `GET /api/notes/{id}/shadow-reader` 5× at 1s intervals; renders bottom-sheet on `status='asked'`; hides on `skipped|dismissed|attempts_exhausted`.
+- **Frontend polling (B17 — reconciled with the 3s NFR):** the 3s acceptance is measured from **"Stage 2 (Organize) complete"**, not from "note creation". Stage 1 + Stage 2 together typically take 5–15s, so polling must extend past that. `ShadowReaderPrompt.tsx` therefore polls `GET /api/notes/{id}/shadow-reader` with the following window (canonical):
+  - First 10 polls at 2s intervals (covers 0–20s after note creation, encompassing Stage 1+2 in the typical case).
+  - Then 5 polls at 5s intervals (covers 20–45s — handles GPT-4o-mini cold-start outliers).
+  - After 45s with no `status='asked'`, give up silently (status is treated as effectively `skipped`).
+  - Polling stops immediately upon receiving any terminal status (`skipped|dismissed|asked|answered`).
+  - Renders bottom-sheet on `status='asked'`; hides on `skipped|dismissed|answered`.
+  - Future ticket: replace polling with SSE (`GET /api/notes/{id}/shadow-reader/stream`) once US-8 ships and we have utilization data — recorded as a follow-up, not blocking MVP.
 - **Settings:** `PUT /api/users/me/shadow-reader/settings` updates `users.shadow_reader_enabled` and `users.shadow_reader_disabled_categories`.
 
 ## Integration Points
@@ -919,20 +1323,18 @@ This is greenfield, so "integration points" means the exact files Phase 2 featur
 
 ## Open Questions
 
-The Researcher (`/features/cortex-second-brain/designs/research.md`) surfaced findings that conflict with the workforce.json directive "Use exact dependencies from section 4.3 — do not deviate." The Architect resolves these as Open Questions (not unilateral changes) because the spec is the named source of truth and the user must approve any deviation:
+After Round 2 review (see `designs/critique.md` § Round 2 Responses), all BLOCKING/HIGH OQs are RESOLVED in the design body itself. The table below records the resolution location for each item.
 
-| # | Issue | Severity | Recommended resolution | Owner | Target |
-|---|---|---|---|---|---|
-| OQ-1 | **Azure OpenAI is not available in `westus2`** for `gpt-4o-mini` or `text-embedding-3-small` (regional Standard or Global Standard). Spec § 5.2 Bicep deploys all resources at `resourceGroup().location` (= `westus2`). | **BLOCKING** for deploy | Add a new Bicep param `openaiLocation string = 'westus'` (lowest latency from westus2 with full model coverage). Override `location` for the `openai` resource only. All other resources stay in `westus2`. | Lead → user | Before US-5 (Deployment) starts |
-| OQ-2 | **`python-jose==3.3.*` carries CVE-2024-33663 (alg-confusion) and CVE-2024-33664 (JWE DoS)**, fixed in 3.5.0. Spec § 4.3 pins the vulnerable line. | **HIGH** (security) | Update the pin in `backend/requirements.txt` to `python-jose[cryptography]>=3.5,<4` OR migrate to `pyjwt>=2.10`. Code-shape impact is minimal — `jwt.encode/decode` API is identical between python-jose ≥ 3.5 and 3.3. | Lead → user | Before US-1 task 4 (JWT) ships to production; tester can write tests against either lib |
-| OQ-3 | **Other pinned deps are 1–3 versions stale** (asyncpg 0.29 → 0.31; alembic 1.13 → 1.18; pgvector 0.3 → 0.4; openai 1.40 → 2.x; tenacity 8.5 → 9.x; vite 5 → 8; tailwind 3 → 4; react 18 → 19; zustand 4 → 5). None are CVE-blocking. | LOW–MEDIUM | Recommend the team accepts the spec's pins as a "frozen 2024-Q3 snapshot for reproducibility" — coherent for an MVP — UNLESS the user explicitly opts in to bumping. Document the choice. | Lead → user | Optional, can be deferred |
-| OQ-4 | **`passlib[bcrypt]==1.7.*` breaks on bcrypt ≥ 4.1** (`AttributeError: module 'bcrypt' has no attribute '__about__'`). passlib has not had a release since Oct 2020. | MEDIUM | Either pin `bcrypt<4.1` alongside passlib, OR replace passlib calls with direct `bcrypt>=4.2` in `backend/app/auth/jwt.py` (FastAPI security tutorials moved here in 2025). Recommendation: direct bcrypt — simpler. | Lead → user | Before US-1 task 4 hits PR |
-| OQ-5 | **Postgres firewall rule for Container Apps outbound IPs is missing from spec § 5.2 Bicep.** First connection will fail without it. | HIGH (deploy blocker) | Add an `AllowAllAzureServicesAndResourcesWithinAzureIps` firewall rule (`startIpAddress: 0.0.0.0`, `endIpAddress: 0.0.0.0`) to the Postgres resource. This is a standard pattern, additive to the spec, no behavior change. | Architect (additive — included in `infra/modules/postgres.bicep` task) | US-5 task 1.2 |
-| OQ-6 | **Azure Static Web App resource is missing from spec § 5.2 Bicep**, although the spec's `deploy.sh` step 6 creates it via `az staticwebapp create`. | LOW | Either keep the script-create approach (acceptable; matches spec verbatim) OR add `Microsoft.Web/staticSites` to `infra/modules/static-web-app.bicep`. Recommendation: add it to the module (already represented in the design folder structure as a placeholder). | Architect (additive) | US-5 task 1.6 |
-| OQ-7 | **Container App resource is not in spec § 5.2 Bicep** — only the Container App Environment is. The deploy.sh assumes a Container App named `${appName}-api` exists. | HIGH (deploy blocker) | Add a `Microsoft.App/containerApps` resource to `infra/modules/container-app.bicep` with managed identity, secret refs, env vars from § 4.4, ingress with WebSocket support (`transport: 'auto'`), CPU scaling rule (min 0, max 3), liveness/readiness probes on `/api/health`. Additive to spec, required for Bicep-only deploy. | Architect (additive) | US-5 task 1.5 |
-| OQ-8 | **`AZURE_OPENAI_API_VERSION=2024-10-21` is current-stable but Apr-2026 GA is `2025-01-01`** with `2025-04-01-preview` available. No code change needed if 2024-10-21 still works (it does, fully back-compat). | LOW | Keep `2024-10-21` per spec § 4.4 verbatim. Note in `docs/EXTENDING.md` that bumping to `2025-01-01` is safe and unlocks structured-output features that could simplify Shadow Reader's JSON parsing. | None | Optional |
-| OQ-9 | **`pgvector` extension name in `CREATE EXTENSION` should be `vector`, not `pgvector`** per Azure's docs. Spec § 2.3 uses `CREATE EXTENSION IF NOT EXISTS "pgvector"` which fails on Azure. | HIGH (migration blocker) | In `001_initial_schema.py`, use `CREATE EXTENSION IF NOT EXISTS vector` (Azure-canonical name). The Bicep `pgvectorExt` config block already uses `VECTOR` (uppercase) which is the allowlist token — that's fine. | Architect (correction at code-time) | US-1 task 3.1 — Coder must use `vector` not `pgvector` in the SQL |
+| # | Issue | Status (Round 2) | Resolution location |
+|---|---|---|---|
+| OQ-1 | Azure OpenAI not in `westus2` | **RESOLVED** | § "Bicep Template (canonical)" — `param openaiLocation string = 'westus'` + `openai.location: openaiLocation` |
+| OQ-2 | `python-jose==3.3.*` CVE-2024-33663/33664 | **RESOLVED** | § "Backend requirements.txt (pinned — OQ-2 + OQ-4 resolved)" — bumped to `python-jose[cryptography]>=3.5,<4` |
+| OQ-3 | Other deps 1–3 versions stale (no CVE) | DEFERRED | Spec pins kept; documented in this row. |
+| OQ-4 | `passlib[bcrypt]==1.7.*` × `bcrypt>=4.1` | **RESOLVED** | § "Backend requirements.txt" — `passlib>=1.7,<2` + `bcrypt>=4.0,<4.1` |
+| OQ-5 | Postgres firewall rule missing | **RESOLVED** | § "Bicep Template (canonical)" — `postgresFwAzure` resource (AllowAllAzureServicesAndResourcesWithinAzureIps) |
+| OQ-6 | Static Web App missing from Bicep | **RESOLVED** | § "Bicep Template (canonical)" — `Microsoft.Web/staticSites` resource |
+| OQ-7 | Container App resource missing from Bicep | **RESOLVED** | § "Bicep Template (canonical)" — `Microsoft.App/containerApps` resource (full ingress, scale, secrets, env, probes) |
+| OQ-8 | `AZURE_OPENAI_API_VERSION=2024-10-21` not the latest GA | DEFERRED | Pin held; `docs/EXTENDING.md` notes bump path to `2025-01-01`. |
+| OQ-9 | `CREATE EXTENSION pgvector` vs `vector` on Azure | **RESOLVED** | § "Required PostgreSQL extensions (canonical, Azure-compatible)" — `CREATE EXTENSION IF NOT EXISTS vector` |
 
-The Lead should escalate OQ-1, OQ-2, OQ-4, OQ-5, OQ-7, OQ-9 to the user before US-1 / US-5 implementation begins. OQ-3, OQ-6, OQ-8 are safe to defer or accept the spec as-is.
-
-These items do not invalidate the design — they are deltas that protect deployability and security while honoring the spec where possible.
+For the Critic Round 2 BLOCKING/CONCERN items (B1–B20), see `designs/critique.md` § Round 2 Responses for the per-item REVISED-or-EVIDENCE response.

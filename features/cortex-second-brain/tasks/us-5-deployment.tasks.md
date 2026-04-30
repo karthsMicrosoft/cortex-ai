@@ -7,7 +7,7 @@
 
 ## Acceptance Criteria
 
-- `infra/main.bicep` matches spec § 5.2 verbatim — provisions Postgres B1ms with pgvector extension config, Storage Account StorageV2 LRS, Azure OpenAI S0, Azure Speech S0, Container App Environment, ACR Basic, with the documented outputs.
+- `infra/main.bicep` matches the **canonical Bicep template in design.md** (NOT spec § 5.2 verbatim — design includes B1/B4/B14 deltas: `openaiLocation` param for OQ-1, Postgres firewall rule for OQ-5, full `Microsoft.App/containerApps` for OQ-7, `Microsoft.Web/staticSites` for OQ-6, `minReplicas: 1` for B14). Provisions Postgres B1ms with pgvector extension config, Storage Account StorageV2 LRS, Azure OpenAI S0 (in `westus`), Azure Speech S0, Azure AI Vision S1, Container App Environment + the Container App itself, ACR Basic, Static Web App Free, with all documented outputs.
 - `infra/deploy.sh` runs end-to-end (resource group → Bicep deploy → ACR build → Container App update → Alembic migrate → Static Web App publish) per spec § 5.2.
 - `infra/parameters.json` provides parameter values (with secrets pulled from Azure Key Vault references — no plaintext).
 - `infra/modules/{container-app,postgres,storage,cognitive-services,static-web-app}.bicep` decompose `main.bicep` for clarity.
@@ -32,7 +32,7 @@ Tester writes a smoke-test script at `backend/tests/test_deployed_smoke.py` (gat
 ## Tasks
 
 - [ ] 1 Bicep IaC
-  - [ ] 1.1 Create `infra/main.bicep` per design "Bicep Template" — `targetScope = 'resourceGroup'`, params `appName`, `location`, `@secure() dbAdminPassword`, `@secure() jwtSecretKey`; AND a new param `openaiLocation string = 'westus'` (per design Open Question OQ-1: Azure OpenAI is not available in `westus2`). Override the `openai` resource's `location: openaiLocation` only; all other resources use `location`. Resources: Postgres Flexible Server B1ms, pgvector config, Storage Account, OpenAI account (in `openaiLocation`), Speech account, Container App Environment, ACR. Outputs `postgresHost`, `storageAccountName`, `openaiEndpoint`, `speechRegion`, `acrLoginServer`.
+  - [ ] 1.1 Create `infra/main.bicep` per the canonical Bicep template in design.md § "Bicep Template (canonical, OQ-1/OQ-5/OQ-6/OQ-7 resolved)". Required parameters: `appName`, `location`, `openaiLocation` (default `'westus'`, B1/OQ-1), `containerImageTag`, `frontendOrigin`, `@secure() dbAdminPassword`, `@secure() jwtSecretKey`. Provision: (a) Postgres Flexible Server B1ms with pgvector configuration AND `AllowAllAzureServicesAndResourcesWithinAzureIps` firewall rule (B4/OQ-5), (b) Storage Account StorageV2 LRS + `cortex-media` blob container, (c) OpenAI account in `openaiLocation`, (d) Speech account in `location`, (e) Vision (ComputerVision S1) in `location`, (f) Container App Environment, (g) ACR Basic, (h) the Container App itself with system-assigned identity, ingress `transport: 'auto'` + `allowInsecure: false`, secrets and env-var bindings per the canonical template, CPU scaling rule with `minReplicas: 1` (B14) / `maxReplicas: 3`, liveness + readiness probes on `/api/health` (B4/OQ-7), (i) Static Web App Free SKU (B4/OQ-6). Emit all documented outputs (`postgresHost`, `storageAccountName`, `openaiEndpoint`, `openaiRegion`, `speechRegion`, `visionEndpoint`, `acrLoginServer`, `containerAppFqdn`, `staticWebAppName`, `staticWebAppHost`).
     - **Started**: TBD
     - **Completed**: TBD
     - **Duration**: TBD
@@ -44,11 +44,11 @@ Tester writes a smoke-test script at `backend/tests/test_deployed_smoke.py` (gat
     - **Started**: TBD
     - **Completed**: TBD
     - **Duration**: TBD
-  - [ ] 1.4 Create `infra/modules/cognitive-services.bicep` containing the OpenAI and Speech accounts (S0)
+  - [ ] 1.4 Create `infra/modules/cognitive-services.bicep` containing the OpenAI account (parameterized location, default `westus` — B1/OQ-1), Speech account (S0), and Vision (`ComputerVision` S1) — all three Cognitive Services accounts the canonical template requires
     - **Started**: TBD
     - **Completed**: TBD
     - **Duration**: TBD
-  - [ ] 1.5 Create `infra/modules/container-app.bicep` for the Container App Environment + the Container App itself (consumption plan, 0.5 vCPU / 1GB, image from ACR, env-var bindings to outputs and secret references). Per design Open Question OQ-7 — the `Microsoft.App/containerApps` resource must include: `identity: { type: 'SystemAssigned' }`, `ingress.transport: 'auto'` (WebSocket support), `allowInsecure: false`, CPU scaling rule (target 70%, minReplicas 0, maxReplicas 3), liveness + readiness HTTP probes on `/api/health`, env vars from spec § 4.4 wired to outputs and `@secure()` params via Container App secret references.
+  - [ ] 1.5 Create `infra/modules/container-app.bicep` for the Container App Environment + the Container App itself per the canonical design template. Resource MUST include: `identity: { type: 'SystemAssigned' }`, `ingress.transport: 'auto'` (WebSocket support), `allowInsecure: false`, the full `secrets` array with ACR password, DATABASE_URL, JWT_SECRET_KEY, and all Cognitive Services keys, the full `env` array binding each setting from design § "Environment Variables" to either an output or a `secretRef`, CPU scaling rule (target 70%, **`minReplicas: 1`** (B14 — keeps APScheduler distill alive), `maxReplicas: 3`), liveness + readiness HTTP probes on `/api/health`. **Log-scrubbing for WebSocket token (B12):** configure the Container App so the `?token=` query parameter is redacted before reaching Application Insights / access logs (e.g. an Application Insights TelemetryProcessor injected via env var `APPLICATIONINSIGHTS_LOGGING_FILTERS`, or document a manual Log Analytics workbook redaction step in `docs/DEPLOYMENT.md` if no native Bicep affordance exists).
     - **Started**: TBD
     - **Completed**: TBD
     - **Duration**: TBD

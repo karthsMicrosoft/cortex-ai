@@ -42,10 +42,16 @@ Three Phase 2 features can run in parallel:
 - us-7-personal-dictionary touches NEW backend modules (models/vocabulary.py, schemas/dictionary.py, api/dictionary.py, alembic/versions/002_add_user_vocabulary.py) plus a small additive call site inside services/speech.py and a small additive line inside api/voice.py file-mode upload. Frontend adds NEW components (PersonalDictionary.tsx, SettingsPage.tsx) and a NEW api/dictionary.ts.
 - us-9-realtime-stt extends api/voice.py with a NEW @router.websocket route plus a small auth helper in auth/jwt.py; on the frontend it extends hooks/useVoiceRecorder.ts and components/VoiceCapture.tsx.
 
-Source-exclusivity caveat: us-7 and us-9 BOTH touch backend/app/api/voice.py and us-7 and us-9 BOTH touch services/speech.py (us-7 adds load_user_phrase_list / increment_term_usage; us-9 calls them from the new WebSocket handler). To preserve true source exclusivity, the convention here is:
-  - us-7 ships the phrase-list helpers AND the file-mode upload integration ONLY.
-  - us-9 owns the brand-new @router.websocket('/api/voice/stream') function AND only consumes (does not modify) the helpers shipped by us-7.
-That keeps each story's edits to non-overlapping symbols within voice.py and speech.py. The Lead/Coder pairs MUST coordinate merge order: us-7 merges first, then us-9 (within the same parallel phase, us-9 rebases onto us-7 if conflicts arise).
+Source-exclusivity caveat (B16 — this convention is canonical and is now also reflected in the corresponding us-7 / us-9 task wording):
+  - us-7 ships:
+      * NEW symbols `load_user_phrase_list`, `increment_term_usage` in `backend/app/services/speech.py`.
+      * MODIFIES `POST /api/voice/upload` in `backend/app/api/voice.py` (file-mode integration ONLY).
+      * us-7 does NOT touch any WebSocket handler. Task 3.4 in us-7-personal-dictionary.tasks.md is explicitly a NO-OP.
+  - us-9 ships:
+      * NEW `@router.websocket('/api/voice/stream')` route in `backend/app/api/voice.py` — a new symbol, NOT a modification of an existing function in voice.py.
+      * CONSUMES `load_user_phrase_list` / `increment_term_usage` from us-7 via a `try / except ImportError` guard so us-9 stays mergeable even when us-7 has not landed yet (degrades gracefully — STT runs unboosted with a WARN log).
+  - That keeps each story's edits to non-overlapping symbols within voice.py and speech.py.
+  - Merge-order rule: us-7 SHOULD merge first. If they merge in reverse, us-9's soft-fail import-guard means STT still works — just without phrase boost — until us-7 lands and the next deploy picks up the helpers.
 
 Frontend exclusivity:
   - us-6 NEW pages/components only.

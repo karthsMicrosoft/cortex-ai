@@ -8,12 +8,14 @@
 ## Acceptance Criteria
 
 - 1-tap floating action button on capture surface starts/stops `MediaRecorder` recording.
-- After capture, raw transcript displays within 2 seconds (NFR-1) — for US-4 this uses `POST /api/voice/upload` (file mode); WS streaming arrives in US-9.
-- Notes captured while offline persist in IndexedDB and sync when connection returns; conflicts surface visually.
+- After capture, the **raw note appears in the feed within 2 seconds (NFR-1, B9 resolution)** — this is the offline-first IndexedDB write, not the transcript. The transcribed/cleaned content arrives 3–5s later via `POST /api/voice/upload` (file mode). The < 2s "transcript visible" claim is moved to US-9 (WebSocket streaming).
+- Notes captured while offline persist in IndexedDB and sync when connection returns; conflicts surface visually via `<SyncIndicator />` badge + Conflicts page (B13).
+- **Image notes captured while offline (FR-1.5) sync via the same `imageBlob` upload branch in `syncManager.pushChanges()` (B11)** — design § "Offline-First / Sync push flow" pseudocode is canonical.
 - Library/Capture page renders chronological timeline of notes with category and date filters.
 - Search page accepts natural-language query and renders results from `/api/search`.
 - Bottom navigation has four tabs: Capture, Library, Insights, Create — visible on every authenticated page.
 - Processing-status badge on each note shows current stage (`raw | transcribed | processed | enriched | failed`) per critique mitigation #5.
+- **Manual override UI (B8 — spec § 3.2 mitigation #6):** `<NoteEditor />` exposes editable controls for category (six-option dropdown), tags (chip add/remove), mood (text/dropdown), and music_metadata quick-edit chips when `category='Music'`. Each AI-populated value shows an "AI-suggested" badge until the user edits it.
 
 ## Status
 **Status**: Not Started
@@ -54,7 +56,7 @@ Tester writes failing tests in `frontend/src/__tests__/` (VoiceCapture, syncMana
     - **Started**: TBD
     - **Completed**: TBD
     - **Duration**: TBD
-  - [ ] 2.3 Create `frontend/src/components/NoteEditor.tsx` — inline editor for content + category dropdown (six fixed) + tag chips; `PUT /api/notes/{id}` on save
+  - [ ] 2.3 Create `frontend/src/components/NoteEditor.tsx` — inline editor for (a) `content`, (b) `category` dropdown (six fixed values from the Literal), (c) `tags` chips (add via input + Enter; remove via X), (d) `mood` field (free-text input, optional dropdown of common moods), and (e) when `category === 'Music'`, a `music_metadata` quick-edit row with editable chips for tempo/key/genre/instruments. Each AI-populated field shows an "AI-suggested" pill until edited. On save, send only the changed fields via `PUT /api/notes/{id}` using `NoteUpdate` shape (B8 — backend uses `model_dump(exclude_unset=True)`). Manual edits to category/tags/mood/music_metadata MUST NOT trigger pipeline re-run (mitigation #6).
     - **Started**: TBD
     - **Completed**: TBD
     - **Duration**: TBD
@@ -98,7 +100,7 @@ Tester writes failing tests in `frontend/src/__tests__/` (VoiceCapture, syncMana
     - **Duration**: TBD
 
 - [ ] 4 Offline sync engine
-  - [ ] 4.1 Create `frontend/src/sync/syncManager.ts` per design "Offline-First" / spec § 2.7 — singleton class that listens to `online` event, polls every 30s, drains `syncQueue` FIFO; for `create note` ops, uploads audioBlob via `/api/upload` then `POST /api/notes` with returned `audio_url`. On 2xx, update LocalNote `serverId` + `syncStatus='synced'`, delete queue item.
+  - [ ] 4.1 Create `frontend/src/sync/syncManager.ts` per design § "Offline-First / Sync push flow" — singleton class that listens to `online` event, polls every 30s, drains `syncQueue` FIFO. For `create note` ops, follow the design pseudocode exactly (B11 includes the image branch): if `note.imageBlob` present, upload it via `/api/upload` to get `imageUrl`; if `note.audioBlob` present, upload via `/api/upload` to get `audioUrl`; then `POST /api/notes` with the returned URLs. On 2xx, update LocalNote `serverId` + `syncStatus='synced'`, delete queue item.
     - **Started**: TBD
     - **Completed**: TBD
     - **Duration**: TBD
@@ -110,7 +112,11 @@ Tester writes failing tests in `frontend/src/__tests__/` (VoiceCapture, syncMana
     - **Started**: TBD
     - **Completed**: TBD
     - **Duration**: TBD
-  - [ ] 4.4 Create `frontend/src/hooks/useNotes.ts` — Dexie-backed hook combining IndexedDB local reads with server pulls via `/api/sync/pull?since=<lastPull>`; merges by `serverId`, prefers server version on conflict but flags `syncStatus='conflict'` if local was edited after pull
+  - [ ] 4.4 Create `frontend/src/hooks/useNotes.ts` — Dexie-backed hook combining IndexedDB local reads with the pull flow per design § "Sync pull flow (B13)". Implementation MUST follow the canonical pseudocode: (a) persist `lastPull` cursor in a Dexie `meta` table (`stores: { meta: 'key' }`); (b) trigger pull on app boot, on `online` event, and every 60s while foreground; (c) merge by `serverId`; (d) flag `syncStatus='conflict'` when `local.updatedAt > lastPull AND local.syncStatus !== 'synced'`, freezing the server payload as `conflictServerVersion` for the Conflicts UI.
+    - **Started**: TBD
+    - **Completed**: TBD
+    - **Duration**: TBD
+  - [ ] 4.5 Create `frontend/src/pages/ConflictsPage.tsx` (B13 — conflict resolution UI) — lists notes where `syncStatus='conflict'` with a Local vs Server side-by-side card and three actions: "Keep Local" (PUT /api/notes/{serverId} with local payload), "Keep Server" (overwrite local with `conflictServerVersion`), "Merge" (open `<NoteEditor />` prefilled with diff). After action, set `syncStatus='synced'`. `<SyncIndicator />` shows a red badge with the conflict count and links here.
     - **Started**: TBD
     - **Completed**: TBD
     - **Duration**: TBD

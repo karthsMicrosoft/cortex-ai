@@ -46,7 +46,7 @@ Per workforce protocol: the Tester writes failing tests in `backend/tests/` for 
     - **Duration**: TBD
 
 - [ ] 2 Backend project bootstrap
-  - [ ] 2.1 Create `backend/requirements.txt` verbatim from design "Backend requirements.txt (pinned)" — do not substitute or add packages
+  - [ ] 2.1 Create `backend/requirements.txt` from design "Backend requirements.txt (pinned — OQ-2 + OQ-4 resolved)" section. Per B2 resolution: use `python-jose[cryptography]>=3.5,<4`, `passlib[bcrypt]>=1.7,<2`, `bcrypt>=4.0,<4.1`. Also include `slowapi==0.1.*` (rate limiter — used in US-5 task 5.1) and `apscheduler==3.10.*` (Distill cron — used in US-6).
     - **Started**: TBD
     - **Completed**: TBD
     - **Duration**: TBD
@@ -94,7 +94,7 @@ Per workforce protocol: the Tester writes failing tests in `backend/tests/` for 
     - **Duration**: TBD
 
 - [ ] 4 JWT authentication
-  - [ ] 4.1 Create `backend/app/auth/jwt.py` per design "Security" — `create_access_token(user_id)` (30 min HS256), `create_refresh_token(user_id)` (30 days HS256), `get_current_user()` dependency that decodes Bearer token and returns `UUID`. Use `passlib[bcrypt]` `CryptContext` for password hashing. Per design Open Questions OQ-2 and OQ-4, the Lead must escalate to the user before this task ships: (a) `python-jose==3.3.*` carries CVE-2024-33663/33664 — recommended bump to `>=3.5,<4`; (b) `passlib[bcrypt]==1.7.*` breaks on `bcrypt>=4.1` — pin `bcrypt<4.1` or replace with direct `bcrypt>=4.2`. Coder uses whichever the user approves; if no decision, default to spec pins and add a `# SECURITY: pending OQ-2/OQ-4 review` comment so the Reviewer-Security agent will catch it.
+  - [ ] 4.1 Create `backend/app/auth/jwt.py` per design "Security" — `create_access_token(user_id)` (30 min HS256), `create_refresh_token(user_id)` (30 days HS256), `get_current_user()` dependency that decodes Bearer token and returns `UUID`. Use `passlib[bcrypt]` `CryptContext(schemes=['bcrypt'])` for password hashing. The dependency pins resolve OQ-2 and OQ-4 (per B2): `python-jose[cryptography]>=3.5,<4` (CVE-fixed; same `jwt.encode/decode` API as 3.3) and `passlib>=1.7,<2` + `bcrypt>=4.0,<4.1` (passlib still works with bcrypt < 4.1 — no `__about__` AttributeError). No `# SECURITY: pending` comment needed; this is the resolved version.
     - **Started**: TBD
     - **Completed**: TBD
     - **Duration**: TBD
@@ -112,7 +112,7 @@ Per workforce protocol: the Tester writes failing tests in `backend/tests/` for 
     - **Duration**: TBD
 
 - [ ] 5 Notes CRUD
-  - [ ] 5.1 Create `backend/app/schemas/note.py` Pydantic schemas: `NoteCreate` (content required, optional source_type/category/audio_url/image_url/client_id/tags), `NoteUpdate` (all optional), `NoteOut` (mirrors notes columns + computed tags list, excluding embedding bytes), `NoteListResponse` (`{items, total}`)
+  - [ ] 5.1 Create `backend/app/schemas/note.py` Pydantic schemas: `NoteCreate` (content required, optional source_type/category/audio_url/image_url/client_id/tags), `NoteUpdate` (per B8 — explicit fields, all optional: `content`, `category` (Literal of six), `tags: list[str]`, `mood: str`, `music_metadata: dict`, `image_url`, `audio_url`. Use `model_dump(exclude_unset=True)` in the route so absence is distinguished from `None`. Mutating `content` resets `processing_status='raw'` to re-pipeline; mutating `category|tags|mood|music_metadata` is a manual override and does NOT re-trigger the pipeline — mitigation #6), `NoteOut` (mirrors notes columns + computed tags list, excluding embedding bytes), `NoteListResponse` (`{items, total}`)
     - **Started**: TBD
     - **Completed**: TBD
     - **Duration**: TBD

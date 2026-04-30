@@ -18,7 +18,7 @@ import logging
 from fastapi import HTTPException
 from tenacity import (
     retry,
-    retry_if_exception_type,
+    retry_if_exception,
     stop_after_attempt,
     wait_exponential,
     before_sleep_log,
@@ -33,7 +33,7 @@ def _is_retryable(exc: BaseException) -> bool:
 
 
 azure_retry = retry(
-    retry=retry_if_exception_type(Exception),
+    retry=retry_if_exception(_is_retryable),
     stop=stop_after_attempt(3),
     wait=wait_exponential(multiplier=1, min=1, max=8),
     before_sleep=before_sleep_log(logger, logging.WARNING),

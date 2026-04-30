@@ -128,11 +128,20 @@ function mapServerToLocal(
 // SyncManager — singleton
 // ---------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------
+// SyncingListener — callback type for PERF-07 event emitter pattern
+// ---------------------------------------------------------------------------
+
+type SyncingListener = (syncing: boolean) => void;
+
 export class SyncManager {
   private static instance: SyncManager;
   private isSyncing = false;
   private pushTimer: ReturnType<typeof setInterval> | null = null;
   private pullTimer: ReturnType<typeof setInterval> | null = null;
+
+  /** PERF-07: event listeners notified on every isSyncing state change */
+  private syncingListeners: Set<SyncingListener> = new Set();
 
   private constructor() {}
 
@@ -148,7 +157,16 @@ export class SyncManager {
   // --------------------------------------------------------------------------
 
   /** Call once after auth to wire up event listeners and start polling. */
-  start(): void {
+  async start(): Promise<void> {
+    // QA-09 fix: on first boot (no lastPull entry), initialize to now so the
+    // first pull only marks conflicts on notes modified AFTER app installation.
+    // Without this the epoch default causes every pending local note (no serverId)
+    // to be incorrectly flagged as a conflict on first pull.
+    const existing = await db.meta.get('lastPull');
+    if (!existing) {
+      await db.meta.put({ key: 'lastPull', value: new Date().toISOString() });
+    }
+
     window.addEventListener('online', () => void this.pushChanges());
     window.addEventListener('online', () => void this.pullChanges());
 
@@ -171,9 +189,33 @@ export class SyncManager {
   // Push
   // --------------------------------------------------------------------------
 
+  // --------------------------------------------------------------------------
+  // PERF-07 — event emitter API for syncing state
+  // --------------------------------------------------------------------------
+
+  /**
+   * Subscribe to syncing state changes.  Listener is called immediately with
+   * the current value, then on every subsequent transition.
+   * Returns an unsubscribe function.
+   */
+  onSyncingChange(listener: SyncingListener): () => void {
+    this.syncingListeners.add(listener);
+    listener(this.isSyncing); // fire immediately with current state
+    return () => {
+      this.syncingListeners.delete(listener);
+    };
+  }
+
+  private notifySyncingListeners(syncing: boolean): void {
+    for (const listener of this.syncingListeners) {
+      listener(syncing);
+    }
+  }
+
   async pushChanges(): Promise<void> {
     if (this.isSyncing || !navigator.onLine || !getToken()) return;
     this.isSyncing = true;
+    this.notifySyncingListeners(true);
 
     try {
       // FIFO drain — order by id (auto-increment == insertion order)
@@ -183,6 +225,7 @@ export class SyncManager {
       }
     } finally {
       this.isSyncing = false;
+      this.notifySyncingListeners(false);
     }
   }
 

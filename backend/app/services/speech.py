@@ -29,12 +29,15 @@ logger = logging.getLogger(__name__)
 async def transcribe_audio_file(
     audio_bytes: bytes,
     language: str = "en-US",
+    phrase_list: list[str] | None = None,
 ) -> str:
     """Transcribe *audio_bytes* using Azure Speech file-mode recognition.
 
     Args:
-        audio_bytes: Raw audio content (WAV, MP3, OGG, WEBM, etc.).
-        language:    BCP-47 language tag (default: "en-US").
+        audio_bytes:  Raw audio content (WAV, MP3, OGG, WEBM, etc.).
+        language:     BCP-47 language tag (default: "en-US").
+        phrase_list:  Optional list of phrase strings to boost via PhraseListGrammar
+                      before recognition (QA-08 / US-7 task 3.3 personal dictionary).
 
     Returns:
         Transcribed text string (may be empty if no speech detected).
@@ -60,6 +63,12 @@ async def transcribe_audio_file(
             speech_config=speech_config,
             audio_config=audio_config,
         )
+
+        # Apply personal dictionary phrase list before recognition (QA-08 fix).
+        if phrase_list:
+            grammar = speechsdk.PhraseListGrammar.from_recognizer(recognizer)
+            for phrase in phrase_list:
+                grammar.addPhrase(phrase)
 
         # recognize_once_async() is a one-shot file recognition call.
         result = await _recognize_once(recognizer)
@@ -147,26 +156,30 @@ async def load_user_phrase_list(
 async def increment_term_usage(content: str, user_id, db) -> None:
     """After STT, increment usage_count for each user vocabulary term found in *content*.
 
-    Uses case-insensitive substring scan; commits all increments in one transaction.
+    PERF-02 fix: pushes the substring scan to Postgres with a single UPDATE
+    statement instead of fetching all terms into Python and scanning in a loop.
+    The SQL uses ILIKE for case-insensitive containment check, which lets
+    Postgres avoid the O(N) memory load of the old SELECT * approach.
 
     Args:
         content:  The transcribed text returned by STT.
         user_id:  UUID of the authenticated user.
         db:       Async SQLAlchemy session.
     """
-    from sqlalchemy import select
-    from app.models.vocabulary import UserVocabulary
+    from sqlalchemy import text
 
-    result = await db.execute(
-        select(UserVocabulary).where(UserVocabulary.user_id == user_id)
-    )
-    terms = result.scalars().all()
-    if not terms:
+    if not content:
         return
 
-    content_lower = content.lower()
-    for term in terms:
-        if term.term.lower() in content_lower:
-            term.usage_count += 1
-
+    await db.execute(
+        text(
+            """
+            UPDATE user_vocabulary
+               SET usage_count = usage_count + 1
+             WHERE user_id = :uid
+               AND :content ILIKE '%' || term || '%'
+            """
+        ),
+        {"uid": str(user_id), "content": content},
+    )
     await db.commit()

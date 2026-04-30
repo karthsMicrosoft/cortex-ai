@@ -584,3 +584,190 @@ describe('SyncManager — pullChanges (Task 4.4 — B13)', () => {
     expect(pullCall![0] as string).toContain('since=');
   });
 });
+
+// ---------------------------------------------------------------------------
+// QA-09: First boot must NOT flag local-only notes (no serverId) as conflicts
+// review-comments.tasks.md § 3.9
+// ---------------------------------------------------------------------------
+
+describe('SyncManager — QA-09: first-boot conflict detection does not flag local-only notes', () => {
+  /**
+   * QA-09: On the very first pull (no lastPull in meta), lastPull defaults to
+   * '1970-01-01T00:00:00Z'. Any local note with updatedAt after epoch AND
+   * syncStatus !== 'synced' would be flagged as a conflict — but local-only notes
+   * (no serverId) have never been pushed and cannot possibly conflict with a server version.
+   *
+   * The fix: notes with no serverId must NOT be flagged as conflicts, regardless of
+   * their updatedAt vs lastPull comparison.
+   */
+
+  beforeEach(() => {
+    dbMocks.notesGet.mockResolvedValue(MOCK_LOCAL_NOTE_AUDIO);
+    dbMocks.notesUpdate.mockResolvedValue(undefined);
+    dbMocks.notesAdd.mockResolvedValue('new-local-id');
+    dbMocks.notesDelete.mockResolvedValue(undefined);
+    dbMocks.metaPut.mockResolvedValue(undefined);
+
+    setupDefaultFetch();
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    Object.values(dbMocks).forEach((m) => m.mockClear());
+  });
+
+  it('QA-09: local-only note with no serverId is not flagged as conflict on first pull', async () => {
+    // First boot: no lastPull entry → defaults to epoch
+    dbMocks.metaGet.mockResolvedValue(undefined);
+
+    // A local-only note: never synced, no serverId, updatedAt after epoch
+    const localOnlyNote = {
+      localId: 'local-only-fresh',
+      serverId: undefined, // no server counterpart yet — never pushed
+      content: 'My fresh local note',
+      syncStatus: 'pending',
+      processingStatus: 'raw',
+      updatedAt: new Date('2026-04-29T10:00:00Z'), // after epoch, but no conflict possible
+      createdAt: new Date('2026-04-29T09:00:00Z'),
+    };
+
+    // The server pulls a note with a DIFFERENT id — the local-only note is irrelevant
+    // (no serverId means no where('serverId').equals(...) match).
+    // The .first() mock returns null → server note is added as new.
+    dbMocks.notesWhereFirst.mockResolvedValue(null);
+
+    const sm = await makeFreshSyncManager();
+    await sm.pullChanges();
+
+    // notesUpdate must NOT have been called with syncStatus='conflict' for our local-only note
+    const conflictCalls = dbMocks.notesUpdate.mock.calls.filter(
+      (call: unknown[]) =>
+        call[1] !== undefined &&
+        typeof call[1] === 'object' &&
+        (call[1] as Record<string, unknown>).syncStatus === 'conflict',
+    );
+
+    expect(conflictCalls).toHaveLength(0);
+  });
+
+  it('QA-09: a synced note is not flagged as conflict on first pull even if updatedAt after epoch', async () => {
+    // First boot: no lastPull → epoch
+    dbMocks.metaGet.mockResolvedValue(undefined);
+
+    const syncedNote = {
+      localId: 'local-synced-firstboot',
+      serverId: 'server-pulled-1', // has serverId — matched by server pull
+      content: 'Previously synced content',
+      syncStatus: 'synced',
+      processingStatus: 'enriched',
+      updatedAt: new Date('2026-04-11T06:00:00Z'), // after epoch
+      createdAt: new Date('2026-04-11T00:00:00Z'),
+    };
+
+    // server note with same id
+    dbMocks.notesWhereFirst.mockResolvedValue(syncedNote);
+
+    const sm = await makeFreshSyncManager();
+    await sm.pullChanges();
+
+    // syncStatus='synced' means server wins → update with syncStatus='synced', NOT 'conflict'
+    const updateCall = dbMocks.notesUpdate.mock.calls.find(
+      (call: unknown[]) => call[0] === 'local-synced-firstboot',
+    );
+    if (updateCall) {
+      expect((updateCall[1] as Record<string, unknown>).syncStatus).toBe('synced');
+      expect((updateCall[1] as Record<string, unknown>).syncStatus).not.toBe('conflict');
+    }
+  });
+
+  it('QA-09: pending note with no serverId is never a candidate for conflict', async () => {
+    /**
+     * A note with syncStatus='pending' and no serverId has never reached the server.
+     * It cannot have a conflict because there is no server version to conflict with.
+     * The pullChanges loop only processes server-returned notes; a note with no serverId
+     * will never be matched by where('serverId').equals(serverNote.id).first().
+     * This test ensures the conflict path is only triggered for notes that HAVE a serverId.
+     */
+    dbMocks.metaGet.mockResolvedValue({ key: 'lastPull', value: '1970-01-01T00:00:00Z' });
+
+    // The pull returns a server note; no local note has the same serverId
+    dbMocks.notesWhereFirst.mockResolvedValue(null);
+
+    const sm = await makeFreshSyncManager();
+    await sm.pullChanges();
+
+    // The server note not found locally → it's added as new with syncStatus='synced'
+    const addCall = dbMocks.notesAdd.mock.calls[0];
+    if (addCall) {
+      expect((addCall[0] as Record<string, unknown>).syncStatus).toBe('synced');
+    }
+
+    // No conflict should have been raised for the local pending note (it was never matched)
+    const conflictCalls = dbMocks.notesUpdate.mock.calls.filter(
+      (call: unknown[]) =>
+        call[1] !== undefined &&
+        typeof call[1] === 'object' &&
+        (call[1] as Record<string, unknown>).syncStatus === 'conflict',
+    );
+    expect(conflictCalls).toHaveLength(0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// PERF-07 — useSync must use event subscription, not setInterval polling
+// review-comments.tasks.md § 2.7
+// ---------------------------------------------------------------------------
+
+describe('PERF-07 — useSync must not use setInterval to poll syncManager.syncing', () => {
+  /**
+   * PERF-07: useSync polls syncManager.syncing via setInterval(500ms), causing
+   * React state updates twice/second even when nothing is changing.
+   *
+   * The fix: expose syncManager.syncing as an observable/event so React only
+   * updates on actual transitions. We assert:
+   * 1. useSync source does NOT contain setInterval for syncing state
+   * 2. syncManager exposes a subscribe/addEventListener method
+   */
+
+  it('useSync source must not contain setInterval for isSyncing polling', async () => {
+    const mod = await import('../hooks/useSync');
+    // Inspect module source via toString — reliable for checking the implementation pattern
+    const modSrc = mod.useSync.toString();
+
+    const hasSetInterval = modSrc.includes('setInterval');
+    expect(hasSetInterval).toBe(false);
+    // If this fails: replace the setInterval polling with an event subscription on syncManager
+    // e.g., syncManager.onSyncingChange = (cb) => { ... } or use an EventEmitter
+  });
+
+  it('syncManager exposes a subscribe or addEventListener method for syncing state', async () => {
+    const mod = await import('../sync/syncManager');
+    const sm = (mod as Record<string, unknown>).syncManager as Record<string, unknown>;
+
+    // The fixed syncManager should have some event/subscription mechanism
+    const hasEventHook = (
+      typeof sm.subscribe === 'function'
+      || typeof sm.addEventListener === 'function'
+      || typeof sm.onSyncingChange === 'function'
+      || typeof sm.addListener === 'function'
+    );
+    expect(hasEventHook).toBe(true);
+    // If this fails: add subscribe(cb) or addEventListener('syncing', cb) to SyncManager
+    // so useSync can listen for actual state transitions instead of polling
+  });
+
+  it('useSync source contains a subscription/listener pattern for syncing', async () => {
+    const mod = await import('../hooks/useSync');
+    const modSrc = mod.useSync.toString();
+
+    // The fixed implementation should use some form of subscription
+    const hasSubscription = (
+      modSrc.includes('subscribe')
+      || modSrc.includes('addEventListener')
+      || modSrc.includes('onSyncingChange')
+      || modSrc.includes('addListener')
+    );
+    expect(hasSubscription).toBe(true);
+    // If this fails: replace setInterval polling with syncManager.subscribe(setIsSyncing)
+  });
+});

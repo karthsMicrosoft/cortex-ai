@@ -7,31 +7,19 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
-from slowapi import Limiter, _rate_limit_exceeded_handler
+from slowapi import _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 from slowapi.middleware import SlowAPIMiddleware
-from slowapi.util import get_remote_address
 
 from app.config import settings
 
 # ---------------------------------------------------------------------------
 # Rate limiter (critique mitigation #8 — 100 req/min/user)
+# Imported from app.limiter so API routers can use @limiter.limit() without
+# a circular import through app.main.
 # ---------------------------------------------------------------------------
 
-def _get_user_or_ip(request: Request) -> str:
-    """
-    Key function for slowapi: prefer the authenticated user's identity over
-    raw IP so that the 100 req/min limit is per-user rather than per-IP.
-    Falls back to remote address for unauthenticated requests.
-    """
-    # The auth middleware stores the user id on request.state when the JWT is valid.
-    user_id = getattr(request.state, "user_id", None)
-    if user_id:
-        return str(user_id)
-    return get_remote_address(request)
-
-
-limiter = Limiter(key_func=_get_user_or_ip, default_limits=["100/minute"])
+from app.limiter import limiter  # noqa: E402
 
 # ---------------------------------------------------------------------------
 # Log-scrubbing filter (B12 — redact ?token= from logged URLs)
@@ -90,6 +78,19 @@ async def lifespan(app: FastAPI):
             )
         except ImportError:
             # distill module not yet implemented — skip gracefully
+            pass
+
+        # QA-04 recovery sweep: retry notes stuck in 'answer_pending' for > 1 minute.
+        try:
+            from app.pipeline.shadow_reader import retry_stale_answer_pending
+            scheduler.add_job(
+                retry_stale_answer_pending,
+                "interval",
+                minutes=2,
+                id="answer_pending_sweep",
+            )
+        except (ImportError, AttributeError):
+            # Shadow reader not yet available — skip gracefully
             pass
 
         scheduler.start()

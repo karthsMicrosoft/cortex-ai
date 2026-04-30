@@ -8,7 +8,7 @@ import uuid
 from datetime import datetime
 from typing import Literal, Optional
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 _CATEGORY_TYPE = Literal["Music", "Fitness", "Journal", "Ideas", "Spiritual", "Learning"]
 _SOURCE_TYPE = Literal["voice", "text", "image"]
@@ -17,7 +17,9 @@ _SHADOW_READER_STATUS = Literal["pending", "asked", "answered", "dismissed", "sk
 
 
 class NoteCreate(BaseModel):
-    content: str
+    # SEC-05: cap content to prevent uncapped AI cost exposure and DoS against
+    # Azure OpenAI budget (NFR-4: $150/month cap).
+    content: str = Field(..., max_length=50_000)
     source_type: _SOURCE_TYPE = "text"
     category: _CATEGORY_TYPE = "Ideas"
     audio_url: Optional[str] = None
@@ -32,7 +34,8 @@ class NoteUpdate(BaseModel):
     Use model_dump(exclude_unset=True) in the route to distinguish
     absence from explicit None (B8 / mitigation #6).
     """
-    content: Optional[str] = None
+    # SEC-05: same 50k cap as NoteCreate to prevent AI cost exposure on updates.
+    content: Optional[str] = Field(default=None, max_length=50_000)
     category: Optional[_CATEGORY_TYPE] = None
     tags: Optional[list[str]] = None        # delta-applied
     mood: Optional[str] = None              # manual mood override (mitigation #6)

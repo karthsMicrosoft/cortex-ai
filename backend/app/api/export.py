@@ -8,9 +8,10 @@ Spec § 4.2 item 28.
 """
 from __future__ import annotations
 
+import datetime as _dt
 import logging
+import re
 import uuid
-from datetime import datetime, timedelta
 from typing import AsyncGenerator
 
 from fastapi import APIRouter, Depends
@@ -20,6 +21,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.auth.jwt import get_current_user
+from app.config import settings
 from app.database import get_db
 from app.models.daily_summary import DailySummary
 from app.models.note import Note
@@ -29,18 +31,70 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
+# Regex to detect Azure Blob Storage host pattern.
+_AZURE_BLOB_RE = re.compile(r"https://([^.]+)\.blob\.core\.windows\.net/([^/]+)/(.+?)(?:\?.*)?$")
+
 
 # ---------------------------------------------------------------------------
-# Helper — generate fresh SAS URL for a blob URL (if needed)
+# Helper — generate fresh 1-hour SAS URL at export time (SEC-08)
 # ---------------------------------------------------------------------------
 
 def _refresh_sas_url(url: str | None) -> str | None:
     """
-    If the URL is an Azure Blob SAS URL, return it as-is (already signed).
-    For the export we trust the stored URL; production deployments should
-    re-sign if expiry is < 1h.  For MVP: pass through unchanged.
+    Re-generate a short-lived (1h) SAS URL for the given blob URL.
+
+    SEC-08: Stored SAS URLs were generated at upload time with a 24h TTL.
+    At export time we re-sign them with a fresh 1h expiry so:
+      - Expired URLs for old notes are no longer silently returned.
+      - Even if a note is deleted after export, the SAS expires within 1h.
+
+    Falls back to the original URL if the connection string is not configured
+    (e.g. tests / local dev without blob storage).
     """
-    return url
+    if url is None:
+        return None
+
+    if not settings.AZURE_STORAGE_CONNECTION_STRING:
+        # No storage configured — return stored URL as-is (dev / test mode).
+        return url
+
+    match = _AZURE_BLOB_RE.match(url)
+    if not match:
+        # Not a recognised Azure Blob URL pattern — return unchanged.
+        return url
+
+    _account_from_url, container_name, blob_name = match.groups()
+
+    try:
+        from azure.storage.blob import BlobSasPermissions, generate_blob_sas
+
+        # Parse account credentials from connection string.
+        account_name: str | None = None
+        account_key: str | None = None
+        for part in settings.AZURE_STORAGE_CONNECTION_STRING.split(";"):
+            if part.lower().startswith("accountname="):
+                account_name = part.split("=", 1)[1]
+            elif part.lower().startswith("accountkey="):
+                account_key = part.split("=", 1)[1]
+
+        if not account_name or not account_key:
+            logger.warning("export: cannot re-sign SAS URL — missing account credentials")
+            return url
+
+        expiry = _dt.datetime.utcnow() + _dt.timedelta(hours=1)
+        sas_token = generate_blob_sas(
+            account_name=account_name,
+            container_name=container_name,
+            blob_name=blob_name,
+            account_key=account_key,
+            permission=BlobSasPermissions(read=True),
+            expiry=expiry,
+        )
+        return f"https://{account_name}.blob.core.windows.net/{container_name}/{blob_name}?{sas_token}"
+
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("export: SAS re-sign failed for %s: %s", url, exc)
+        return url
 
 
 # ---------------------------------------------------------------------------
@@ -120,7 +174,7 @@ async def export_data(
     )
     summaries = list(summaries_result.scalars().all())
 
-    exported_at = datetime.utcnow().isoformat() + "Z"
+    exported_at = _dt.datetime.now(_dt.timezone.utc).isoformat().replace("+00:00", "Z")
 
     async def _stream() -> AsyncGenerator[bytes, None]:
         import json as _json

@@ -1,3 +1,4 @@
+import { lazy, Suspense } from 'react';
 import { Routes, Route, Navigate } from 'react-router-dom';
 import { useAuthStore } from './store/authStore';
 import LoginPage from './pages/LoginPage';
@@ -7,7 +8,9 @@ import LibraryPage from './pages/LibraryPage';
 import SearchPage from './pages/SearchPage';
 import NoteDetailPage from './pages/NoteDetailPage';
 import InsightsPage from './pages/InsightsPage';
-import BrainViewPage from './pages/BrainViewPage';
+// PERF-10: lazy-load BrainViewPage so react-force-graph-2d (d3 + canvas) is
+// code-split into its own chunk and does not bloat the initial JS bundle.
+const BrainViewPage = lazy(() => import('./pages/BrainViewPage'));
 import CreatePage from './pages/CreatePage';
 import ConflictsPage from './pages/ConflictsPage';
 import SettingsPage from './pages/SettingsPage';  // US-7
@@ -87,7 +90,14 @@ export default function App(): React.ReactElement {
           path="/brain"
           element={
             <AuthGate>
-              <BrainViewPage />
+              {/* PERF-10: Suspense boundary for lazy BrainViewPage chunk */}
+              <Suspense fallback={
+                <div className="flex min-h-screen items-center justify-center bg-[#0F172A]">
+                  <span className="text-sm text-slate-400">Loading brain view…</span>
+                </div>
+              }>
+                <BrainViewPage />
+              </Suspense>
             </AuthGate>
           }
         />

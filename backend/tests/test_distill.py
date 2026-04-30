@@ -525,3 +525,157 @@ class TestGenerateWeeklySummary:
         assert "week" in result
         assert "summary_text" in result
         assert result["week"] == "2026-W17"
+
+
+# ---------------------------------------------------------------------------
+# PERF-03 — generate_weekly_summary must skip notes query when daily_summaries exist
+# review-comments.tasks.md § 2.3
+# ---------------------------------------------------------------------------
+
+class TestPERF03WeeklySummarySkipsNotesQuery:
+    """
+    PERF-03: generate_weekly_summary must NOT unconditionally query all raw notes
+    for the week. The notes query must only run in the fallback branch (when
+    daily_summaries is empty). When daily_summaries is non-empty, only ONE
+    db.execute call should happen (the daily_summaries query).
+    """
+
+    async def test_skips_notes_query_when_daily_summaries_present(self):
+        """
+        When 7 daily summaries exist, generate_weekly_summary must call
+        db.execute exactly once (for the daily_summaries query), NOT twice.
+        The notes query must be skipped.
+        """
+        from app.pipeline.distill import generate_weekly_summary
+
+        mock_db = AsyncMock(spec=AsyncSession)
+        mock_openai = AsyncMock()
+
+        # 7 daily summaries exist
+        daily_rows = []
+        for i in range(7):
+            row = MagicMock()
+            row.summary_text = f"Day {i+1} summary."
+            row.summary_date = date(2026, 4, 23 + i)
+            row.note_count = 3
+            daily_rows.append(row)
+
+        execute_calls = []
+
+        async def recording_execute(stmt, *args, **kwargs):
+            execute_calls.append(stmt)
+            mock_result = MagicMock()
+            mock_result.scalars.return_value.all.return_value = daily_rows
+            return mock_result
+
+        mock_db.execute = recording_execute
+
+        mock_response = MagicMock()
+        mock_response.choices = [MagicMock()]
+        mock_response.choices[0].message.content = "Weekly recap."
+        mock_openai.chat.completions.create = AsyncMock(return_value=mock_response)
+
+        try:
+            await generate_weekly_summary(
+                user_id=FAKE_USER_ID,
+                iso_week="2026-W17",
+                openai_client=mock_openai,
+                db=mock_db,
+            )
+        except Exception:
+            pass
+
+        assert len(execute_calls) == 1, (
+            f"PERF-03 FAIL: generate_weekly_summary issued {len(execute_calls)} "
+            f"db.execute calls when daily_summaries exist — expected exactly 1. "
+            f"The notes query must be skipped when daily summaries are available."
+        )
+
+    async def test_issues_notes_query_when_no_daily_summaries(self):
+        """
+        When no daily summaries exist, generate_weekly_summary MUST issue a
+        notes fallback query — db.execute is called at least twice.
+        """
+        from app.pipeline.distill import generate_weekly_summary
+
+        mock_db = AsyncMock(spec=AsyncSession)
+        mock_openai = AsyncMock()
+
+        execute_calls = []
+        call_count = 0
+
+        async def recording_execute(stmt, *args, **kwargs):
+            nonlocal call_count
+            execute_calls.append(stmt)
+            call_count += 1
+            mock_result = MagicMock()
+            # First call returns empty daily summaries; subsequent returns empty notes
+            mock_result.scalars.return_value.all.return_value = []
+            return mock_result
+
+        mock_db.execute = recording_execute
+
+        mock_response = MagicMock()
+        mock_response.choices = [MagicMock()]
+        mock_response.choices[0].message.content = ""
+        mock_openai.chat.completions.create = AsyncMock(return_value=mock_response)
+
+        try:
+            await generate_weekly_summary(
+                user_id=FAKE_USER_ID,
+                iso_week="2026-W01",
+                openai_client=mock_openai,
+                db=mock_db,
+            )
+        except Exception:
+            pass
+
+        assert len(execute_calls) >= 2, (
+            f"PERF-03 FAIL: generate_weekly_summary did not issue a fallback notes "
+            f"query when daily_summaries was empty — expected ≥ 2 execute calls, "
+            f"got {len(execute_calls)}."
+        )
+
+    async def test_single_daily_summary_skips_notes_query(self):
+        """
+        Even a single daily summary should cause the notes query to be skipped.
+        """
+        from app.pipeline.distill import generate_weekly_summary
+
+        mock_db = AsyncMock(spec=AsyncSession)
+        mock_openai = AsyncMock()
+
+        row = MagicMock()
+        row.summary_text = "Day 1 summary."
+        row.summary_date = date(2026, 4, 23)
+        row.note_count = 2
+
+        execute_calls = []
+
+        async def recording_execute(stmt, *args, **kwargs):
+            execute_calls.append(stmt)
+            mock_result = MagicMock()
+            mock_result.scalars.return_value.all.return_value = [row]
+            return mock_result
+
+        mock_db.execute = recording_execute
+
+        mock_response = MagicMock()
+        mock_response.choices = [MagicMock()]
+        mock_response.choices[0].message.content = "One day recap."
+        mock_openai.chat.completions.create = AsyncMock(return_value=mock_response)
+
+        try:
+            await generate_weekly_summary(
+                user_id=FAKE_USER_ID,
+                iso_week="2026-W17",
+                openai_client=mock_openai,
+                db=mock_db,
+            )
+        except Exception:
+            pass
+
+        assert len(execute_calls) == 1, (
+            f"PERF-03 FAIL: With 1 daily summary, generate_weekly_summary still "
+            f"issued {len(execute_calls)} execute calls. Notes query must be skipped."
+        )

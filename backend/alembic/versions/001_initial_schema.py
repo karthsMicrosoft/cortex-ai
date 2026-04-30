@@ -125,7 +125,7 @@ def upgrade() -> None:
             name="ck_notes_sync_status",
         ),
         sa.CheckConstraint(
-            "shadow_reader_status IN ('pending','asked','answered','dismissed','skipped')",
+            "shadow_reader_status IN ('pending','asked','answer_pending','answered','dismissed','skipped')",
             name="ck_notes_shadow_reader_status",
         ),
     )

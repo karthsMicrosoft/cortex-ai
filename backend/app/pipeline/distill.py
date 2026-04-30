@@ -207,15 +207,19 @@ async def generate_weekly_summary(
     )
     daily_summaries = list(daily_result.scalars().all())
 
-    # Also fetch raw notes as fallback
-    notes_result = await db.execute(
-        select(Note).where(
-            Note.user_id == user_id,
-            Note.created_at >= str(monday),
-            Note.created_at < str(sunday + timedelta(days=1)),
+    # PERF-03 fix: only fetch raw notes when there are no daily summaries.
+    # Previously this query ran unconditionally, causing a gratuitous full-table
+    # scan even when daily_summaries already provided all needed data.
+    notes: list[Note] = []
+    if not daily_summaries:
+        notes_result = await db.execute(
+            select(Note).where(
+                Note.user_id == user_id,
+                Note.created_at >= str(monday),
+                Note.created_at < str(sunday + timedelta(days=1)),
+            )
         )
-    )
-    notes = list(notes_result.scalars().all())
+        notes = list(notes_result.scalars().all())
 
     prompt = _build_weekly_prompt(daily_summaries, notes)
 

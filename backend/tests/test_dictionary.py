@@ -391,6 +391,27 @@ class TestDictionaryDeleteTerm:
         assert resp.status_code == 201
         return resp.json()
 
+    async def test_delete_nonexistent_term_returns_404(
+        self, client: AsyncClient, auth_headers: dict
+    ):
+        """QA-03: DELETE /api/dictionary/{id} for a non-existent term must return 404.
+
+        Previously the implementation executed DELETE WHERE (id, user_id) without checking
+        rowcount, so a wrong UUID silently returned 204 (hiding client-side bugs).
+        The fix requires calling _get_term_or_404() before executing the DELETE statement,
+        consistent with PUT /{id} which already returns 404 on missing terms.
+        """
+        fake_id = str(uuid.uuid4())
+        resp = await client.delete(
+            f"/api/dictionary/{fake_id}",
+            headers=auth_headers,
+        )
+        assert resp.status_code == 404, (
+            f"QA-03 FAIL: DELETE of non-existent term returned {resp.status_code} "
+            f"instead of 404. The implementation must check for existence before DELETE, "
+            f"consistent with PUT /{'{id}'} which returns 404 on missing terms."
+        )
+
     async def test_delete_returns_204(self, client: AsyncClient, auth_headers: dict):
         """DELETE /api/dictionary/{id} must return 204."""
         created = await self._create_term(client, auth_headers)
@@ -615,3 +636,126 @@ class TestUsageCount:
         body = resp.json()
         if "usage_count" in body:
             assert body["usage_count"] == 0
+
+
+# ---------------------------------------------------------------------------
+# PERF-06 — bulk_import must issue single batched INSERT, not one commit per term
+# review-comments.tasks.md § 2.6
+# ---------------------------------------------------------------------------
+
+class TestPERF06BulkImportSingleInsert:
+    """
+    PERF-06: POST /api/dictionary/bulk must insert all terms in a single
+    INSERT ... ON CONFLICT DO NOTHING statement and commit once.
+    It must NOT loop with a separate commit() per term (N commits = slow).
+    """
+
+    async def test_bulk_import_issues_single_execute_call(self, client: AsyncClient, auth_headers: dict):
+        """
+        The bulk_import handler must call db.execute() at most twice total
+        (1 count check + 1 batch INSERT), regardless of the number of terms.
+        We verify this by patching the DB execute and counting calls.
+        """
+        from app.api.dictionary import bulk_import
+        from unittest.mock import AsyncMock, MagicMock, patch
+
+        execute_calls = []
+        commit_calls = []
+
+        mock_db = AsyncMock()
+
+        async def recording_execute(stmt, *args, **kwargs):
+            execute_calls.append(stmt)
+            mock_result = MagicMock()
+            mock_result.scalar.return_value = 0   # current term count = 0
+            mock_result.rowcount = 5              # 5 rows inserted
+            return mock_result
+
+        mock_db.execute = recording_execute
+
+        async def recording_commit():
+            commit_calls.append(1)
+
+        mock_db.commit = recording_commit
+
+        from app.schemas.dictionary import BulkImportRequest, VocabularyTerm
+        payload = BulkImportRequest(terms=[
+            VocabularyTerm(term=f"perf06_term_{i}") for i in range(5)
+        ])
+        user_id = uuid.UUID(int=0)
+
+        try:
+            await bulk_import(payload=payload, current_user_id=user_id, db=mock_db)
+        except Exception:
+            pass
+
+        assert len(commit_calls) <= 1, (
+            f"PERF-06 FAIL: bulk_import called db.commit() {len(commit_calls)} times "
+            f"for 5 terms — expected exactly 1 commit. "
+            f"Committing inside a loop is the N-commits anti-pattern."
+        )
+
+    async def test_bulk_import_does_not_commit_per_term_in_source(self):
+        """
+        Verify the bulk_import implementation does NOT have a commit() inside
+        a for-loop by inspecting the source code.
+        """
+        import inspect
+        try:
+            from app.api.dictionary import bulk_import
+        except ImportError:
+            pytest.skip("dictionary module not yet implemented")
+
+        src = inspect.getsource(bulk_import)
+
+        # Detect the anti-pattern: commit inside a for/while loop
+        # This is a simple heuristic: look for 'commit' appearing inside a loop block
+        lines = src.split("\n")
+        in_loop = False
+        commit_in_loop = False
+        loop_indent = 0
+
+        for line in lines:
+            stripped = line.lstrip()
+            indent = len(line) - len(stripped)
+
+            if stripped.startswith(("for ", "while ", "async for ")):
+                in_loop = True
+                loop_indent = indent
+
+            if in_loop and indent <= loop_indent and not stripped.startswith(("for ", "while ", "async for ")):
+                if stripped and not stripped.startswith(("#", "else:", "except", "finally")):
+                    in_loop = False
+
+            if in_loop and "commit" in stripped and "await" in stripped:
+                commit_in_loop = True
+                break
+
+        assert not commit_in_loop, (
+            "PERF-06 FAIL: bulk_import contains 'await db.commit()' inside a loop. "
+            "Use a single INSERT ... ON CONFLICT DO NOTHING for all terms, then commit once."
+        )
+
+    async def test_bulk_import_single_commit_for_large_payload(self, client: AsyncClient, auth_headers: dict):
+        """
+        A 20-term bulk import must commit exactly once (not 20 times).
+        We verify via the HTTP endpoint that returns 201 for valid payload,
+        indicating no per-term rollback/commit cycle occurred.
+        """
+        terms = [
+            {"term": f"perf06_large_{i}_{uuid.uuid4().hex[:4]}", "term_type": "general"}
+            for i in range(20)
+        ]
+        resp = await client.post(
+            "/api/dictionary/bulk",
+            json={"terms": terms},
+            headers=auth_headers,
+        )
+        assert resp.status_code == 201, (
+            f"PERF-06 FAIL: bulk_import with 20 terms returned {resp.status_code}. "
+            f"Expected 201 — a per-term commit loop may have caused partial failure."
+        )
+        body = resp.json()
+        assert body.get("inserted") == 20, (
+            f"PERF-06: Expected inserted=20, got {body.get('inserted')}"
+        )

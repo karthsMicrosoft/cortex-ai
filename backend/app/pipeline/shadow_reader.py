@@ -2,19 +2,23 @@
 Shadow Reader — Stage 1.5 REFLECT pipeline.
 
 Implements:
-  - CATEGORY_PROMPTS       — category-specific question prompts (verbatim from F2.2)
-  - MIN_WORDS_FOR_TRIGGER  — word-count gate (50)
+  - CATEGORY_PROMPTS           — category-specific question prompts (verbatim from F2.2)
+  - MIN_WORDS_FOR_TRIGGER      — word-count gate (50)
   - should_trigger_shadow_reader(note, user) -> bool
   - generate_questions(note, openai_client) -> list[str]
   - run_shadow_reader_stage(note, user, openai_client, db) -> None
   - merge_answer_into_note(note, answer, openai_client, db) -> None
+  - retry_stale_answer_pending() -> None   [QA-04 APScheduler sweep]
 
 Design references:
   B10 — stage runs AFTER Stage 2 (enriched), gated on shadow_reader_status='pending'.
   F2.2 — verbatim prompt text, question cap, serializable transaction.
+  QA-04 — 'answer_pending' intermediate state with sweep-based recovery.
 """
+import asyncio
 import json
 import logging
+from datetime import datetime, timedelta, timezone
 from typing import List
 
 from sqlalchemy import delete, select, text
@@ -114,17 +118,16 @@ async def generate_questions(note, openai_client) -> List[str]:
     result = json.loads(response.choices[0].message.content or "{}")
     questions = result.get("questions", [])
 
-    # Defensive: keep only strings ≤ 15 words, cap at 2
+    # Defensive: filter (drop) strings > 15 words — do NOT truncate.
+    # US-8 task 2.2 specifies "filter to strings ≤ 15 words"; a truncated question
+    # may be grammatically incomplete (QA-07 fix).
     filtered: List[str] = []
     for q in questions:
         if not isinstance(q, str):
             continue
         if len(q.split()) <= 15:
             filtered.append(q)
-        else:
-            # Truncate to 15 words with ellipsis rather than drop entirely
-            truncated = " ".join(q.split()[:15])
-            filtered.append(truncated)
+        # else: drop — truncating would produce incomplete questions
         if len(filtered) == 2:
             break
 
@@ -228,6 +231,64 @@ async def merge_answer_into_note(note, answer: str, openai_client, db: AsyncSess
     await db.commit()
 
     logger.info("merge_answer_complete: note_id=%s", note.id)
+
+
+# ---------------------------------------------------------------------------
+# QA-04 — APScheduler sweep: recover notes stuck in 'answer_pending'
+# ---------------------------------------------------------------------------
+
+
+def retry_stale_answer_pending() -> None:
+    """APScheduler job: re-run merge for notes stuck in 'answer_pending' > 1 minute.
+
+    Called every 2 minutes by the BackgroundScheduler in main.py.
+    Runs in a new event loop (BackgroundScheduler thread context).
+    """
+    asyncio.run(_retry_stale_answer_pending_async())
+
+
+async def _retry_stale_answer_pending_async() -> None:
+    """Async inner: fetch stale answer_pending notes and retry the merge."""
+    from app.database import SessionLocal
+    from app.models.note import Note
+    from app.services.openai_client import get_openai_client
+
+    stale_threshold = datetime.now(timezone.utc) - timedelta(minutes=1)
+
+    async with SessionLocal() as db:
+        result = await db.execute(
+            select(Note).where(
+                Note.shadow_reader_status == "answer_pending",
+                Note.updated_at <= stale_threshold,
+                Note.shadow_reader_answer.isnot(None),
+            )
+        )
+        stale_notes = result.scalars().all()
+
+    if not stale_notes:
+        return
+
+    logger.info(
+        "answer_pending_sweep: found %d stale note(s) to retry", len(stale_notes)
+    )
+    openai_client = get_openai_client()
+
+    for note in stale_notes:
+        try:
+            async with SessionLocal() as db:
+                result = await db.execute(select(Note).where(Note.id == note.id))
+                fresh = result.scalar_one_or_none()
+                if fresh is None or fresh.shadow_reader_status != "answer_pending":
+                    continue
+                answer = fresh.shadow_reader_answer or ""
+                await merge_answer_into_note(fresh, answer, openai_client, db)
+            logger.info("answer_pending_sweep: retried note_id=%s OK", note.id)
+        except Exception as exc:  # noqa: BLE001
+            logger.error(
+                "answer_pending_sweep: retry failed note_id=%s error_class=%s",
+                note.id,
+                type(exc).__name__,
+            )
 
 
 async def _relink_similar_notes(

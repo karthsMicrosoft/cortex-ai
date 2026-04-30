@@ -127,19 +127,21 @@ async def search_notes(
 # GET /api/search/similar/{note_id}
 # ---------------------------------------------------------------------------
 
+# PERF-08 fix: pass the already-fetched source embedding as a parameter instead
+# of doing a Cartesian product FROM notes n, notes src.  The cross-join loaded
+# the source note's 1536-float embedding twice from the DB (6 KB of extra I/O)
+# and prevented the query planner from using the HNSW index efficiently.
 _SIMILAR_SQL = text("""
 SELECT
   n.id, n.content, n.summary, n.category, n.created_at,
-  (1 - (n.embedding <=> src.embedding))                         AS semantic_score,
+  (1 - (n.embedding <=> CAST(:source_emb AS vector)))           AS semantic_score,
   0.0                                                            AS text_score,
-  (1 - (n.embedding <=> src.embedding))                         AS combined_score
-FROM notes n, notes src
-WHERE src.id = :source_note_id
-  AND n.id   != :source_note_id
-  AND n.user_id = :user_id
+  (1 - (n.embedding <=> CAST(:source_emb AS vector)))           AS combined_score
+FROM notes n
+WHERE n.id        != :source_note_id
+  AND n.user_id   = :user_id
   AND n.embedding IS NOT NULL
-  AND src.embedding IS NOT NULL
-ORDER BY n.embedding <=> src.embedding
+ORDER BY n.embedding <=> CAST(:source_emb AS vector)
 LIMIT :limit
 """)
 
@@ -166,11 +168,15 @@ async def get_similar_notes(
     if note.embedding is None:
         return []
 
+    # Build embedding string from the already-loaded note object (PERF-08)
+    source_emb_str = "[" + ",".join(str(x) for x in note.embedding) + "]"
+
     try:
         rows_result = await db.execute(
             _SIMILAR_SQL,
             {
                 "source_note_id": str(note_id),
+                "source_emb": source_emb_str,
                 "user_id": str(current_user_id),
                 "limit": limit,
             },

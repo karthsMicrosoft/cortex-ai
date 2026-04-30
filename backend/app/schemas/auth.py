@@ -4,12 +4,14 @@ Pydantic schemas for auth endpoints.
 import uuid
 from typing import Optional
 
-from pydantic import BaseModel, EmailStr
+from pydantic import BaseModel, EmailStr, Field
 
 
 class RegisterRequest(BaseModel):
     email: EmailStr
-    password: str
+    # SEC-04: min 8 chars enforced at schema level so weak passwords are rejected
+    # with a 422 before reaching the hashing layer.
+    password: str = Field(..., min_length=8, max_length=128)
     display_name: Optional[str] = None
 
 
@@ -19,8 +21,13 @@ class LoginRequest(BaseModel):
 
 
 class TokenPair(BaseModel):
+    """Response for /api/auth/login.
+
+    The refresh token is delivered exclusively via an httpOnly cookie and is
+    intentionally omitted from the JSON body to prevent JavaScript access
+    (SEC-02 — XSS token-theft mitigation).
+    """
     access_token: str
-    refresh_token: str
     token_type: str = "bearer"
 
 

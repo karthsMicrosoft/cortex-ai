@@ -12,15 +12,21 @@ Covers:
   - NoteOut schema validation
   - processing_status logic (raw for text, raw/transcribed for audio)
 
+PERF-01 tests (review-comments.tasks.md § 2.1):
+  - _get_or_create_tags must use ≤ 2 DB execute calls for N tags (batch query + batch insert)
+  - No per-tag SELECT loop (N+1 pattern)
+
 Design references:
   - design.md § Notes CRUD (spec section 2.4)
   - us-1-foundation.tasks.md Task 5.1–5.5
 """
 import uuid
 from datetime import date, timedelta
+from unittest.mock import AsyncMock, MagicMock, patch, call
 
 import pytest
 from httpx import AsyncClient
+from sqlalchemy.ext.asyncio import AsyncSession
 
 
 # ---------------------------------------------------------------------------
@@ -643,3 +649,260 @@ class TestOwnershipIsolation:
                 f"{method.upper()} cross-user note must return 404, "
                 f"got {resp.status_code} (must not be 403 — avoids existence leak)"
             )
+
+
+# ---------------------------------------------------------------------------
+# PERF-01 — _get_or_create_tags must use batch query, not N+1 loop
+# review-comments.tasks.md § 2.1
+# ---------------------------------------------------------------------------
+
+class TestPERF01TagBatchQuery:
+    """
+    PERF-01: _get_or_create_tags in notes.py must issue a single batch query
+    to fetch existing tags (WHERE name = ANY(:names)) rather than one SELECT
+    per tag. For N tags the execute call count must be ≤ 2
+    (1 batch-fetch + at most 1 batch-insert for new tags).
+    """
+
+    @pytest.mark.asyncio
+    async def test_get_or_create_tags_execute_calls_le_2_for_5_tags(self):
+        """
+        _get_or_create_tags with 5 new tags must call db.execute at most 2 times
+        (batch SELECT + batch INSERT), never once-per-tag.
+        """
+        from app.api.notes import _get_or_create_tags
+
+        execute_calls = []
+
+        mock_db = AsyncMock(spec=AsyncSession)
+
+        async def recording_execute(stmt, *args, **kwargs):
+            execute_calls.append(stmt)
+            # Simulate all tags missing → return empty result for the SELECT
+            mock_result = MagicMock()
+            mock_result.scalars.return_value.all.return_value = []
+            mock_result.scalar_one_or_none.return_value = None
+            return mock_result
+
+        mock_db.execute = recording_execute
+        mock_db.flush = AsyncMock()
+
+        tag_names = ["alpha", "beta", "gamma", "delta", "epsilon"]
+        user_id = uuid.uuid4()
+
+        try:
+            await _get_or_create_tags(mock_db, user_id, tag_names)
+        except Exception:
+            # May raise if implementation raises on missing tags — that's okay,
+            # we only care about the execute call count.
+            pass
+
+        assert len(execute_calls) <= 2, (
+            f"PERF-01 FAIL: _get_or_create_tags issued {len(execute_calls)} execute "
+            f"calls for 5 tags — expected ≤ 2 (batch SELECT + optional batch INSERT). "
+            f"N+1 pattern detected."
+        )
+
+    @pytest.mark.asyncio
+    async def test_get_or_create_tags_execute_calls_le_2_for_existing_tags(self):
+        """
+        When all tags already exist, _get_or_create_tags must issue ≤ 2 execute calls
+        (ideally just 1 batch-SELECT, no inserts needed).
+        """
+        from app.api.notes import _get_or_create_tags
+
+        execute_calls = []
+        user_id = uuid.uuid4()
+        tag_names = ["jazz", "piano", "improv"]
+
+        mock_db = AsyncMock(spec=AsyncSession)
+
+        async def recording_execute(stmt, *args, **kwargs):
+            execute_calls.append(stmt)
+            # All tags already exist
+            from app.models.tag import Tag
+            existing = [
+                MagicMock(spec=Tag, name=n, user_id=user_id, id=uuid.uuid4())
+                for n in tag_names
+            ]
+            mock_result = MagicMock()
+            mock_result.scalars.return_value.all.return_value = existing
+            mock_result.scalar_one_or_none.return_value = existing[0]
+            return mock_result
+
+        mock_db.execute = recording_execute
+        mock_db.flush = AsyncMock()
+
+        try:
+            await _get_or_create_tags(mock_db, user_id, tag_names)
+        except Exception:
+            pass
+
+        assert len(execute_calls) <= 2, (
+            f"PERF-01 FAIL: _get_or_create_tags issued {len(execute_calls)} execute "
+            f"calls for 3 existing tags — expected ≤ 2."
+        )
+
+    @pytest.mark.asyncio
+    async def test_get_or_create_tags_does_not_scale_linearly_with_tag_count(self):
+        """
+        For N=10 tags the execute call count must be ≤ 2.
+        A linear O(N) loop would produce 10+ calls — that is the N+1 anti-pattern.
+        """
+        from app.api.notes import _get_or_create_tags
+
+        execute_calls = []
+        user_id = uuid.uuid4()
+        tag_names = [f"tag{i}" for i in range(10)]
+
+        mock_db = AsyncMock(spec=AsyncSession)
+
+        async def recording_execute(stmt, *args, **kwargs):
+            execute_calls.append(stmt)
+            mock_result = MagicMock()
+            mock_result.scalars.return_value.all.return_value = []
+            mock_result.scalar_one_or_none.return_value = None
+            return mock_result
+
+        mock_db.execute = recording_execute
+        mock_db.flush = AsyncMock()
+
+        try:
+            await _get_or_create_tags(mock_db, user_id, tag_names)
+        except Exception:
+            pass
+
+        assert len(execute_calls) <= 2, (
+            f"PERF-01 FAIL: _get_or_create_tags scaled to {len(execute_calls)} execute "
+            f"calls for 10 tags — N+1 pattern confirmed. Expected ≤ 2."
+        )
+
+
+# ---------------------------------------------------------------------------
+# SEC-05: Note content size limit (max 50,000 characters)
+# review-comments.tasks.md Task 1, subtask 1.5
+# ---------------------------------------------------------------------------
+
+class TestNoteContentSizeLimit:
+    """
+    SEC-05 (review-comments.tasks.md 1.5)
+
+    NoteCreate.content and NoteUpdate.content must enforce max_length=50_000.
+    Without this, an authenticated user can submit arbitrarily large content
+    that is stored in the DB and sent verbatim to GPT-4o-mini, creating
+    uncapped AI cost exposure.
+
+    Fix: Add content: str = Field(..., max_length=50_000) to both NoteCreate
+    and NoteUpdate schemas.
+    """
+
+    @pytest.mark.asyncio
+    async def test_create_note_content_over_50000_chars_returns_422(
+        self, client: AsyncClient, auth_headers: dict
+    ):
+        """
+        SEC-05: POST /api/notes with content > 50,000 characters must return 422.
+        """
+        oversized_content = "A" * 50_001  # one character over the limit
+        resp = await client.post(
+            "/api/notes",
+            json={
+                "content": oversized_content,
+                "source_type": "text",
+                "category": "Ideas",
+            },
+            headers=auth_headers,
+        )
+        assert resp.status_code == 422, (
+            f"SEC-05 NOT FIXED: Content with 50,001 chars must return 422, "
+            f"got {resp.status_code}. "
+            "Add max_length=50_000 to NoteCreate.content via pydantic Field."
+        )
+
+    @pytest.mark.asyncio
+    async def test_update_note_content_over_50000_chars_returns_422(
+        self, client: AsyncClient, auth_headers: dict
+    ):
+        """
+        SEC-05: PUT /api/notes/{id} with content > 50,000 characters must return 422.
+        """
+        # First create a valid note
+        create_resp = await _create_note(client, auth_headers, content="Initial content.")
+        assert create_resp.status_code == 201, f"Setup failed: {create_resp.text}"
+        note_id = create_resp.json()["id"]
+
+        oversized_content = "B" * 50_001
+        resp = await client.put(
+            f"/api/notes/{note_id}",
+            json={"content": oversized_content},
+            headers=auth_headers,
+        )
+        assert resp.status_code == 422, (
+            f"SEC-05 NOT FIXED: PUT with 50,001-char content must return 422, "
+            f"got {resp.status_code}. "
+            "Add max_length=50_000 to NoteUpdate.content via pydantic Field."
+        )
+
+    @pytest.mark.asyncio
+    async def test_create_note_exactly_50000_chars_succeeds(
+        self, client: AsyncClient, auth_headers: dict
+    ):
+        """
+        SEC-05: Content of exactly 50,000 characters is at the boundary and must succeed (201).
+        """
+        boundary_content = "C" * 50_000  # exactly at the limit
+        resp = await client.post(
+            "/api/notes",
+            json={
+                "content": boundary_content,
+                "source_type": "text",
+                "category": "Ideas",
+            },
+            headers=auth_headers,
+        )
+        assert resp.status_code == 201, (
+            f"SEC-05: Content of exactly 50,000 chars must be accepted (201), "
+            f"got {resp.status_code}: {resp.text[:200]}"
+        )
+
+    def test_note_create_schema_has_content_max_length(self):
+        """
+        SEC-05 static check: NoteCreate.content pydantic field must declare
+        max_length=50_000 via Field(...).
+
+        Inspects the pydantic model's JSON schema for 'maxLength'.
+        """
+        try:
+            from app.schemas.note import NoteCreate
+            schema = NoteCreate.model_json_schema()
+            content_schema = schema.get("properties", {}).get("content", {})
+            assert "maxLength" in content_schema, (
+                "SEC-05 NOT FIXED: NoteCreate.content has no maxLength in JSON schema. "
+                "Add: content: str = Field(..., max_length=50_000)"
+            )
+            assert content_schema["maxLength"] <= 50_000, (
+                f"SEC-05: NoteCreate.content maxLength must be ≤ 50,000, "
+                f"got {content_schema['maxLength']}"
+            )
+        except ImportError as exc:
+            pytest.skip(f"app.schemas.note not importable: {exc}")
+
+    def test_note_update_schema_has_content_max_length(self):
+        """
+        SEC-05 static check: NoteUpdate.content pydantic field must declare
+        max_length=50_000.
+        """
+        try:
+            from app.schemas.note import NoteUpdate
+            schema = NoteUpdate.model_json_schema()
+            content_schema = schema.get("properties", {}).get("content", {})
+            assert "maxLength" in content_schema, (
+                "SEC-05 NOT FIXED: NoteUpdate.content has no maxLength in JSON schema. "
+                "Add: content: Optional[str] = Field(None, max_length=50_000)"
+            )
+            assert content_schema["maxLength"] <= 50_000, (
+                f"SEC-05: NoteUpdate.content maxLength must be ≤ 50,000, "
+                f"got {content_schema['maxLength']}"
+            )
+        except ImportError as exc:
+            pytest.skip(f"app.schemas.note not importable: {exc}")

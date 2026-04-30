@@ -119,6 +119,54 @@ Azure Cost Management budget alerts are configured at **$100** and **$140** per 
 3. Amount: $100 → alert at 100%; create a second budget at $140
 4. Alert recipients: `karths@microsoft.com`
 
+## Known Security Limitations (MVP Threat Model)
+
+### SEC-07 — Refresh Token Revocation Gap (30-day replay window)
+
+**Status:** Accepted risk for single-user MVP. Explicitly documented per review finding 1.8.
+
+The `/api/auth/refresh` endpoint rotates the refresh token on every call (issues a new
+one and sets it as httpOnly cookie), but does **not** invalidate the previous token.
+This means a stolen refresh token can be replayed for up to 30 days after the legitimate
+user has rotated.
+
+**Threat model note:** For the single-owner personal-brain MVP, the threat surface is
+low — there are no multi-user sessions or shared credentials. However, operators should
+be aware of this gap.
+
+**Future remediation:** Before multi-user or team deployment, implement a
+`refresh_token_revocations` table (or Redis deny-set) keyed by JWT `jti` claim.
+On each `/refresh` call, check the incoming token's `jti` against the deny-set and
+add it after issuing the new token. This bounds replay to the network window of the
+rotation call.
+
+---
+
+### SEC-06 — WebSocket Token in URL (Azure platform log exposure)
+
+**Status:** Partially mitigated. Residual risk documented.
+
+The `/api/voice/stream` WebSocket endpoint authenticates via `?token=<jwt>` in the URL
+query string (per spec § 2.9). The application-layer scrubber (B12) redacts the token
+from uvicorn logs, but Azure Container App HTTP access logs capture the raw URL before
+reaching uvicorn.
+
+**Required operator action:** Configure Azure Log Analytics workspace for the Container
+App with a **short log retention window** (≤ 7 days) and treat access logs as sensitive.
+Apply the following KQL transformation in your workbook to read-side redact tokens:
+
+```kusto
+ContainerAppConsoleLogs_CL
+| extend ScrubURL = replace_regex(Log_s, @"[?&]token=[^& ]+", "token=REDACTED")
+| project TimeGenerated, ScrubURL
+```
+
+**Future hardening:** Migrate WebSocket auth to a short-lived opaque voice-ticket token
+(REST endpoint exchanges the JWT for a single-use opaque ticket → WebSocket uses ticket)
+so the long-lived JWT never appears in any URL.
+
+---
+
 ## WebSocket Token Log-Scrubbing (B12)
 
 The `?token=<jwt>` query parameter used by `/api/voice/stream` is redacted from logs at two levels:

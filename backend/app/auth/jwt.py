@@ -20,6 +20,26 @@ from app.config import settings
 from app.database import get_db
 
 # ---------------------------------------------------------------------------
+# SEC-07: Refresh token revocation — in-memory JTI deny set (MVP)
+#
+# On rotation (/api/auth/refresh) the old JTI is added here so it can never
+# be replayed.  The deny set lives for the lifetime of the process; a restart
+# clears it.  For production hardening, replace with a Redis / DB-backed store
+# with TTL equal to REFRESH_TOKEN_EXPIRE_DAYS (30 days).
+# ---------------------------------------------------------------------------
+_revoked_jtis: set[str] = set()
+
+
+def revoke_jti(jti: str) -> None:
+    """Add *jti* to the in-memory revocation set."""
+    _revoked_jtis.add(jti)
+
+
+def is_jti_revoked(jti: str) -> bool:
+    """Return True if *jti* has been revoked."""
+    return jti in _revoked_jtis
+
+# ---------------------------------------------------------------------------
 # Password hashing
 # ---------------------------------------------------------------------------
 
@@ -52,6 +72,7 @@ def _make_token(user_id: uuid.UUID, token_type: str, expires_delta: timedelta) -
     payload: dict[str, Any] = {
         "sub": str(user_id),
         "type": token_type,
+        "jti": str(uuid.uuid4()),  # SEC-07: unique token ID for revocation tracking
         "iat": now,
         "exp": now + expires_delta,
     }

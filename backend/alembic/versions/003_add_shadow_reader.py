@@ -12,7 +12,6 @@ Create Date: 2026-04-29
 """
 from alembic import op
 import sqlalchemy as sa
-from sqlalchemy.dialects import postgresql
 
 # revision identifiers
 revision = "003"
@@ -25,10 +24,9 @@ def upgrade() -> None:
     # ------------------------------------------------------------------
     # users table — add shadow reader settings columns
     # ------------------------------------------------------------------
-    conn = op.get_bind()
 
     # shadow_reader_enabled
-    conn.execute(sa.text(
+    op.execute(sa.text(
         """
         ALTER TABLE users
         ADD COLUMN IF NOT EXISTS shadow_reader_enabled BOOLEAN DEFAULT TRUE
@@ -36,7 +34,7 @@ def upgrade() -> None:
     ))
 
     # shadow_reader_disabled_categories
-    conn.execute(sa.text(
+    op.execute(sa.text(
         """
         ALTER TABLE users
         ADD COLUMN IF NOT EXISTS shadow_reader_disabled_categories
@@ -49,7 +47,7 @@ def upgrade() -> None:
     # ------------------------------------------------------------------
 
     # shadow_reader_questions
-    conn.execute(sa.text(
+    op.execute(sa.text(
         """
         ALTER TABLE notes
         ADD COLUMN IF NOT EXISTS shadow_reader_questions JSONB DEFAULT NULL
@@ -57,7 +55,7 @@ def upgrade() -> None:
     ))
 
     # shadow_reader_answer
-    conn.execute(sa.text(
+    op.execute(sa.text(
         """
         ALTER TABLE notes
         ADD COLUMN IF NOT EXISTS shadow_reader_answer TEXT DEFAULT NULL
@@ -65,7 +63,7 @@ def upgrade() -> None:
     ))
 
     # shadow_reader_status
-    conn.execute(sa.text(
+    op.execute(sa.text(
         """
         ALTER TABLE notes
         ADD COLUMN IF NOT EXISTS shadow_reader_status
@@ -73,20 +71,24 @@ def upgrade() -> None:
         """
     ))
 
-    # CHECK constraint on shadow_reader_status (add only if missing)
-    conn.execute(sa.text(
+    # CHECK constraint on shadow_reader_status (add only if missing).
+    # 'answer_pending' is included as the intermediate state used while the
+    # background merge task runs (QA-04 fix).
+    op.execute(sa.text(
         """
         DO $$
         BEGIN
-            IF NOT EXISTS (
+            -- Drop old constraint if it exists (may not include answer_pending)
+            IF EXISTS (
                 SELECT 1 FROM pg_constraint
                 WHERE conname = 'ck_notes_shadow_reader_status'
                   AND conrelid = 'notes'::regclass
             ) THEN
-                ALTER TABLE notes ADD CONSTRAINT ck_notes_shadow_reader_status
-                    CHECK (shadow_reader_status IN
-                           ('pending','asked','answered','dismissed','skipped'));
+                ALTER TABLE notes DROP CONSTRAINT ck_notes_shadow_reader_status;
             END IF;
+            ALTER TABLE notes ADD CONSTRAINT ck_notes_shadow_reader_status
+                CHECK (shadow_reader_status IN
+                       ('pending','asked','answer_pending','answered','dismissed','skipped'));
         END
         $$
         """
@@ -94,10 +96,8 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    conn = op.get_bind()
-
     # Drop CHECK constraint first
-    conn.execute(sa.text(
+    op.execute(sa.text(
         """
         ALTER TABLE notes
         DROP CONSTRAINT IF EXISTS ck_notes_shadow_reader_status
@@ -105,14 +105,14 @@ def downgrade() -> None:
     ))
 
     # notes columns
-    conn.execute(sa.text("ALTER TABLE notes DROP COLUMN IF EXISTS shadow_reader_status"))
-    conn.execute(sa.text("ALTER TABLE notes DROP COLUMN IF EXISTS shadow_reader_answer"))
-    conn.execute(sa.text("ALTER TABLE notes DROP COLUMN IF EXISTS shadow_reader_questions"))
+    op.execute(sa.text("ALTER TABLE notes DROP COLUMN IF EXISTS shadow_reader_status"))
+    op.execute(sa.text("ALTER TABLE notes DROP COLUMN IF EXISTS shadow_reader_answer"))
+    op.execute(sa.text("ALTER TABLE notes DROP COLUMN IF EXISTS shadow_reader_questions"))
 
     # users columns
-    conn.execute(sa.text(
+    op.execute(sa.text(
         "ALTER TABLE users DROP COLUMN IF EXISTS shadow_reader_disabled_categories"
     ))
-    conn.execute(sa.text(
+    op.execute(sa.text(
         "ALTER TABLE users DROP COLUMN IF EXISTS shadow_reader_enabled"
     ))

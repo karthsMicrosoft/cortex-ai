@@ -27,8 +27,9 @@ from sqlalchemy.orm import selectinload
 from app.models.note import Note
 from app.models.note_link import NoteLink
 from app.models.tag import Tag, note_tags as note_tags_table
-from app.pipeline.music import process_music_note  # noqa: F401 (patched by tests)
-from app.pipeline.shadow_reader import run_shadow_reader_stage  # noqa: F401 (patched by tests)
+from app.pipeline.music import process_music_note
+from app.pipeline.shadow_reader import run_shadow_reader_stage
+from app.utils.db_helpers import get_or_create_tags_batch
 
 logger = logging.getLogger(__name__)
 
@@ -205,10 +206,19 @@ class AIPipeline:
         note.summary = result.get("summary") or None
         note.entities = result.get("entities") or []
 
-        # Persist tags
-        for tag_name in result.get("tags", []):
-            if isinstance(tag_name, str) and tag_name.strip():
-                await self._ensure_tag(note, tag_name.strip().lower(), is_auto=True)
+        # Persist tags — batch upsert (PERF-01: replaces per-tag N+1 loop)
+        tag_names = [
+            tag_name.strip().lower()
+            for tag_name in result.get("tags", [])
+            if isinstance(tag_name, str) and tag_name.strip()
+        ]
+        if tag_names:
+            new_tags = await get_or_create_tags_batch(
+                self.db, note.user_id, tag_names, is_auto=True
+            )
+            for tag in new_tags:
+                if tag not in note.tags:
+                    note.tags.append(tag)
 
     async def _generate_embedding(self, note: Note) -> None:
         """Generate 1536-dim embedding via text-embedding-3-small."""
@@ -309,19 +319,17 @@ class AIPipeline:
         return result.scalar_one_or_none()
 
     async def _ensure_tag(self, note: Note, name: str, is_auto: bool = True) -> None:
-        """Get or create a Tag and associate it with *note*."""
-        result = await self.db.execute(
-            select(Tag).where(Tag.user_id == note.user_id, Tag.name == name)
-        )
-        tag = result.scalar_one_or_none()
-        if tag is None:
-            tag = Tag(user_id=note.user_id, name=name, is_auto=is_auto)
-            self.db.add(tag)
-            await self.db.flush()
+        """Get or create a Tag and associate it with *note*.
 
-        # Associate if not already linked
-        if tag not in note.tags:
-            note.tags.append(tag)
+        Delegates to get_or_create_tags_batch for single-tag use.
+        Kept for backward compatibility; batch callers use get_or_create_tags_batch directly.
+        """
+        tags = await get_or_create_tags_batch(
+            self.db, note.user_id, [name], is_auto=is_auto
+        )
+        for tag in tags:
+            if tag not in note.tags:
+                note.tags.append(tag)
 
     async def _mark_failed(self, note_id: uuid.UUID) -> None:
         """Set processing_status='failed' for *note_id*. Preserves all other fields."""

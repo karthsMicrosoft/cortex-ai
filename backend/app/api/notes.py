@@ -22,13 +22,15 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
+from app.api._note_serializers import _note_to_out
 from app.auth.jwt import get_current_user
 from app.database import get_db
 from app.models.note import Note
 from app.models.tag import Tag, note_tags as note_tags_table
-from app.pipeline.ocr import process_image_note  # noqa: F401 (patched by tests)
-from app.pipeline.processor import AIPipeline  # noqa: F401 (patched by tests)
+from app.pipeline.ocr import process_image_note
+from app.pipeline.processor import AIPipeline
 from app.schemas.note import NoteCreate, NoteListResponse, NoteOut, NoteUpdate
+from app.utils.db_helpers import get_or_create_tags_batch
 
 logger = logging.getLogger(__name__)
 
@@ -45,48 +47,12 @@ ai_router = APIRouter()
 async def _get_or_create_tags(
     db: AsyncSession, user_id: uuid.UUID, tag_names: list[str]
 ) -> list[Tag]:
-    """Return Tag objects for *tag_names*, creating any that don't exist."""
-    tags: list[Tag] = []
-    for name in tag_names:
-        result = await db.execute(
-            select(Tag).where(Tag.user_id == user_id, Tag.name == name)
-        )
-        tag = result.scalar_one_or_none()
-        if tag is None:
-            tag = Tag(user_id=user_id, name=name, is_auto=False)
-            db.add(tag)
-            await db.flush()
-        tags.append(tag)
-    return tags
+    """Return Tag objects for *tag_names*, creating any that don't exist.
 
-
-def _note_to_out(note: Note) -> NoteOut:
-    """Convert Note ORM object to NoteOut schema, building tags list."""
-    tag_names = [t.name for t in note.tags] if note.tags else []
-    return NoteOut(
-        id=note.id,
-        user_id=note.user_id,
-        content=note.content,
-        raw_transcription=note.raw_transcription,
-        summary=note.summary,
-        source_type=note.source_type,
-        category=note.category,
-        audio_url=note.audio_url,
-        image_url=note.image_url,
-        audio_duration_seconds=note.audio_duration_seconds,
-        mood=note.mood,
-        music_metadata=note.music_metadata or {},
-        processing_status=note.processing_status,
-        sync_status=note.sync_status,
-        client_id=note.client_id,
-        tags=tag_names,
-        # Phase 2 — Shadow Reader fields
-        shadow_reader_status=note.shadow_reader_status or "pending",
-        shadow_reader_questions=note.shadow_reader_questions,
-        shadow_reader_answer=note.shadow_reader_answer,
-        created_at=note.created_at,
-        updated_at=note.updated_at,
-    )
+    Delegates to get_or_create_tags_batch (PERF-01 fix): uses one SELECT + one
+    batch INSERT instead of one SELECT+INSERT per tag name.
+    """
+    return await get_or_create_tags_batch(db, user_id, tag_names, is_auto=False)
 
 
 async def _fetch_note(
@@ -158,22 +124,25 @@ async def create_note(
     note_id = note.id
     image_url_for_ocr = note.image_url  # capture before session closes
 
+    # QA-06 fix: commit BEFORE scheduling background tasks so the note row is
+    # fully visible in any fresh DB session the background task opens.
+    # This eliminates the SimpleNamespace race in _run_ocr_and_pipeline.
+    await db.commit()
+
+    # Eagerly load tags for the response (re-fetch after commit)
+    result = await db.execute(
+        select(Note).options(selectinload(Note.tags)).where(Note.id == note_id)
+    )
+    note = result.scalar_one()
+
     # Schedule background tasks:
     # Image notes: OCR first (sets status='transcribed'), then pipeline
     if payload.source_type == "image" and payload.image_url:
-        # Schedule OCR and pipeline as two separate background tasks.
-        # process_image_note is called without a DB session; it updates the
-        # in-memory note object only — the pipeline re-fetches from DB.
         background_tasks.add_task(_run_ocr_and_pipeline, note_id, image_url_for_ocr)
     else:
         # text / voice: run pipeline directly
         background_tasks.add_task(_run_pipeline, note_id)
 
-    # Eagerly load tags after refresh
-    result = await db.execute(
-        select(Note).options(selectinload(Note.tags)).where(Note.id == note.id)
-    )
-    note = result.scalar_one()
     return _note_to_out(note)
 
 
@@ -373,8 +342,10 @@ async def _run_pipeline(note_id: uuid.UUID) -> None:
 async def _run_ocr_and_pipeline(note_id: uuid.UUID, image_url: str) -> None:
     """Run OCR then AI pipeline for an image note.
 
-    Fetches the note from a fresh session, runs OCR (updates content + status),
-    then runs the main AI pipeline (Stage 1 + Stage 2).
+    QA-06 fix: create_note now commits before scheduling this task, so the note
+    is guaranteed to be visible in the fresh session below.  The SimpleNamespace
+    fallback is removed — if the note is not found, we log an error and abort
+    rather than passing a fragile stub to process_image_note.
     """
     from app.database import SessionLocal
     from app.services.openai_client import get_openai_client
@@ -383,19 +354,10 @@ async def _run_ocr_and_pipeline(note_id: uuid.UUID, image_url: str) -> None:
         result = await db.execute(select(Note).where(Note.id == note_id))
         note = result.scalar_one_or_none()
         if note is None:
-            # Fallback: create a minimal note-like object for OCR
-            # (handles the case where the note isn't visible in a new session yet)
-            import types
-            note_stub = types.SimpleNamespace(
-                id=note_id,
-                image_url=image_url,
-                content="",
-                processing_status="raw",
+            logger.error(
+                "_run_ocr_and_pipeline: note_id=%s not found in DB — aborting OCR",
+                note_id,
             )
-            await process_image_note(note_stub, None)  # type: ignore[arg-type]
-            # Schedule pipeline run (it will fetch the note again)
-            pipeline = AIPipeline(openai_client=get_openai_client(), db=db)
-            await pipeline.process_note(note_id)
             return
 
         # Stage 0.5: OCR — sets status to 'transcribed'

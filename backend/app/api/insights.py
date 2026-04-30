@@ -13,7 +13,7 @@ from __future__ import annotations
 import json
 import logging
 import uuid
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
@@ -21,12 +21,15 @@ from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from openai import AsyncAzureOpenAI
+
 from app.auth.jwt import get_current_user
 from app.database import get_db
 from app.models.daily_summary import DailySummary
 from app.models.note import Note
 from app.models.note_link import NoteLink
-from app.services.openai_client import OpenAIDep
+from app.models.user import User
+from app.services.openai_client import get_openai
 
 logger = logging.getLogger(__name__)
 
@@ -154,7 +157,7 @@ async def get_weekly_summary(
     week: Optional[str] = Query(default=None),
     current_user_id: uuid.UUID = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
-    openai: OpenAIDep,
+    openai: AsyncAzureOpenAI = Depends(get_openai),
 ) -> WeeklySummaryOut:
     """
     Return (or generate on-demand) a weekly summary for *week* (YYYY-WNN).
@@ -245,17 +248,43 @@ async def get_graph(
 # GET /api/insights/patterns
 # ---------------------------------------------------------------------------
 
+_PATTERNS_CACHE_TTL_HOURS = 24
+
+
 @insights_router.get("/patterns", response_model=PatternsOut)
 async def get_patterns(
     current_user_id: uuid.UUID = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
-    openai: OpenAIDep,
+    openai: AsyncAzureOpenAI = Depends(get_openai),
+    refresh: bool = False,
 ) -> PatternsOut:
     """
     Use GPT-4o-mini to detect themes/patterns across the last 14 days of notes.
     Returns { patterns: [{theme, evidence_note_ids}] }.
+
+    PERF-04 fix: result is cached in users.patterns_cached_json for 24 h.
+    Pass ?refresh=true to force regeneration regardless of cache age.
     """
-    cutoff = datetime.utcnow() - timedelta(days=14)
+    now = datetime.now(timezone.utc)
+
+    # --- Check cache (skip if ?refresh=true) ---
+    if not refresh:
+        user_result = await db.execute(
+            select(User).where(User.id == current_user_id)
+        )
+        user = user_result.scalar_one_or_none()
+        if user and user.patterns_cached_json and user.patterns_cached_at:
+            cache_age = now - user.patterns_cached_at.replace(tzinfo=timezone.utc)
+            if cache_age.total_seconds() < _PATTERNS_CACHE_TTL_HOURS * 3600:
+                try:
+                    cached_data = json.loads(user.patterns_cached_json)
+                    return PatternsOut(
+                        patterns=[PatternItem(**p) for p in cached_data.get("patterns", [])]
+                    )
+                except (json.JSONDecodeError, TypeError, KeyError):
+                    pass  # stale/corrupt cache — fall through to regenerate
+
+    cutoff = now - timedelta(days=14)
     notes_result = await db.execute(
         select(Note).where(
             Note.user_id == current_user_id,
@@ -315,6 +344,21 @@ async def get_patterns(
         if theme:
             patterns.append(PatternItem(theme=theme, evidence_note_ids=evidence_ids))
 
+    # --- Persist to cache ---
+    try:
+        cache_result = await db.execute(
+            select(User).where(User.id == current_user_id)
+        )
+        cache_user = cache_result.scalar_one_or_none()
+        if cache_user:
+            cache_user.patterns_cached_json = json.dumps(
+                {"patterns": [p.model_dump() for p in patterns]}
+            )
+            cache_user.patterns_cached_at = now
+            await db.commit()
+    except Exception:  # noqa: BLE001
+        logger.warning("get_patterns: failed to persist cache; continuing without")
+
     return PatternsOut(patterns=patterns)
 
 
@@ -349,7 +393,7 @@ async def generate_express(
     payload: GenerateRequest,
     current_user_id: uuid.UUID = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
-    openai: OpenAIDep,
+    openai: AsyncAzureOpenAI = Depends(get_openai),
 ) -> GenerateOut:
     """
     Express generator: produce a song idea, practice plan, or reflection from

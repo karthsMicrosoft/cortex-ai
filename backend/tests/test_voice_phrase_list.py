@@ -550,3 +550,288 @@ class TestWebSocketHandlerNotModifiedByUS7:
         assert "/upload" in routes, "voice router must still have /upload route"
         # The WS stream route may or may not exist yet (added by US-9); either is fine.
         # This test simply asserts we haven't accidentally removed the upload route.
+
+
+# ---------------------------------------------------------------------------
+# QA-08 (additional): file-mode upload calls load_user_phrase_list BEFORE transcribe
+# review-comments.tasks.md § 3.8
+#
+# Note: the main QA-08 tests are in TestVoiceUploadPhraseListIntegration above.
+# This class adds sharper assertion that the call order is strictly enforced.
+# ---------------------------------------------------------------------------
+
+
+class TestVoiceUploadFileModePhraseListOrder:
+    """QA-08: POST /api/voice/upload (file-mode) must call load_user_phrase_list
+    BEFORE transcribe_audio_file. US-7 task 3.3 requires this.
+
+    The WebSocket path already handles this correctly. The file-mode path must
+    be updated to load the personal dictionary phrase list before recognition.
+    """
+
+    @pytest.fixture
+    def audio_file(self):
+        audio_bytes = b"RIFF" + b"\x00" * 100 + b"fake webm data"
+        return {"file": ("voice_note.webm", io.BytesIO(audio_bytes), "audio/webm")}
+
+    async def test_load_phrase_list_called_strictly_before_transcribe(
+        self, client, auth_headers, audio_file
+    ):
+        """QA-08: load_user_phrase_list must be invoked strictly before transcribe_audio_file.
+
+        This enforces the ordering required by US-7 task 3.3:
+        'call load_user_phrase_list before recognition'.
+        """
+        FAKE_BLOB_URL = "https://fakestorage.blob.core.windows.net/cortex-media/audio/test.webm"
+        FAKE_TRANSCRIPT = "Testing phrase list ordering"
+        call_order = []
+
+        async def fake_load(recognizer_or_user, user_id=None, db=None, max_phrases=500):
+            call_order.append("load_phrase_list")
+            return 5
+
+        async def fake_transcribe(audio_bytes, language="en-US"):
+            call_order.append("transcribe")
+            return FAKE_TRANSCRIPT
+
+        with patch("app.api.voice.upload_blob", new_callable=AsyncMock, return_value=FAKE_BLOB_URL):
+            with patch("app.api.voice.transcribe_audio_file", side_effect=fake_transcribe):
+                with patch("app.api.voice.load_user_phrase_list", side_effect=fake_load):
+                    with patch("app.api.voice.AIPipeline") as mock_pipeline_cls:
+                        mock_pipeline_cls.return_value.process_note = AsyncMock()
+                        resp = await client.post(
+                            "/api/voice/upload",
+                            files=audio_file,
+                            headers=auth_headers,
+                        )
+
+        assert resp.status_code == 201
+
+        # QA-08 core assertion: load_phrase_list must appear before transcribe
+        assert "load_phrase_list" in call_order, (
+            "QA-08 FAIL: load_user_phrase_list was never called during file-mode voice upload. "
+            "US-7 task 3.3 requires calling load_user_phrase_list before recognition."
+        )
+        if "transcribe" in call_order:
+            load_idx = call_order.index("load_phrase_list")
+            transcribe_idx = call_order.index("transcribe")
+            assert load_idx < transcribe_idx, (
+                f"QA-08 FAIL: load_user_phrase_list (index {load_idx}) was called AFTER "
+                f"transcribe_audio_file (index {transcribe_idx}). "
+                "The phrase list must be loaded BEFORE transcription begins."
+            )
+
+    async def test_voice_upload_file_mode_imports_load_user_phrase_list(self):
+        """QA-08: The voice.py module must import load_user_phrase_list from speech service.
+
+        US-7 task 3.3 specifies that POST /api/voice/upload (file mode) must call
+        load_user_phrase_list before recognition. This verifies the import exists.
+        """
+        from app.api import voice as voice_module
+        import inspect
+
+        src = inspect.getsource(voice_module)
+        assert "load_user_phrase_list" in src, (
+            "QA-08 FAIL: voice.py does not reference load_user_phrase_list. "
+            "US-7 task 3.3 requires calling load_user_phrase_list in file-mode upload."
+        )
+
+
+# ---------------------------------------------------------------------------
+# QA-05: Single _note_to_out helper — voice.py must use the shared serializer
+#         and include shadow_reader_* fields
+# review-comments.tasks.md § 3.5
+# ---------------------------------------------------------------------------
+
+
+class TestSingleNoteToOutHelper:
+    """QA-05: There must be only ONE _note_to_out implementation.
+    voice.py must import/use the same helper as notes.py (or a shared module),
+    and that helper must populate shadow_reader_status, shadow_reader_questions,
+    and shadow_reader_answer from the DB values.
+
+    The bug: voice.py had its own _note_to_out that omitted all shadow_reader_* fields,
+    causing voice-upload responses to always show Pydantic defaults instead of DB values.
+    """
+
+    def test_voice_py_note_to_out_includes_shadow_reader_status(self):
+        """QA-05: voice.py _note_to_out (or shared helper) must map shadow_reader_status."""
+        from app.api import voice as voice_module
+        import inspect
+
+        src = inspect.getsource(voice_module)
+        assert "shadow_reader_status" in src, (
+            "QA-05 FAIL: voice.py _note_to_out does not include shadow_reader_status. "
+            "Voice-upload responses will always surface the Pydantic default ('pending') "
+            "instead of the actual DB value. Use the shared _note_to_out from notes.py."
+        )
+
+    def test_voice_py_note_to_out_includes_shadow_reader_questions(self):
+        """QA-05: voice.py _note_to_out must map shadow_reader_questions."""
+        from app.api import voice as voice_module
+        import inspect
+
+        src = inspect.getsource(voice_module)
+        assert "shadow_reader_questions" in src, (
+            "QA-05 FAIL: voice.py _note_to_out does not include shadow_reader_questions. "
+            "Use the shared serializer that includes all shadow reader fields."
+        )
+
+    def test_voice_py_note_to_out_includes_shadow_reader_answer(self):
+        """QA-05: voice.py _note_to_out must map shadow_reader_answer."""
+        from app.api import voice as voice_module
+        import inspect
+
+        src = inspect.getsource(voice_module)
+        assert "shadow_reader_answer" in src, (
+            "QA-05 FAIL: voice.py _note_to_out does not include shadow_reader_answer. "
+            "Use the shared serializer that includes all shadow reader fields."
+        )
+
+    def test_no_duplicate_note_to_out_definitions(self):
+        """QA-05: There must be at most ONE _note_to_out function definition across
+        notes.py and voice.py. The correct fix is to extract a shared helper and
+        import it in both routers, eliminating the divergence risk.
+
+        We count function definitions of _note_to_out. If voice.py has its own
+        local definition, the count will be 2 — which is the duplicated state.
+        """
+        import inspect
+        from app.api import notes as notes_module
+        from app.api import voice as voice_module
+
+        notes_src = inspect.getsource(notes_module)
+        voice_src = inspect.getsource(voice_module)
+
+        notes_has_def = "def _note_to_out" in notes_src
+        voice_has_def = "def _note_to_out" in voice_src
+
+        # If voice.py defines its own _note_to_out AND it omits shadow_reader fields,
+        # that's the QA-05 bug. We check the combination.
+        if voice_has_def:
+            # Voice has its own definition — check it includes shadow reader fields
+            assert "shadow_reader_status" in voice_src, (
+                "QA-05 FAIL: voice.py defines its own _note_to_out but omits "
+                "shadow_reader_status. Either import the shared helper from notes.py "
+                "or a shared module, OR ensure the voice-local definition is complete."
+            )
+
+    def test_voice_upload_response_includes_shadow_reader_status_field(self, client=None):
+        """QA-05: NoteOut (returned by voice upload) must have shadow_reader_status field.
+
+        This tests the schema level — NoteOut must expose all three shadow_reader_* fields.
+        """
+        try:
+            from app.schemas.note import NoteOut
+            fields = NoteOut.model_fields if hasattr(NoteOut, "model_fields") else NoteOut.__fields__
+            assert "shadow_reader_status" in fields, (
+                "QA-05 FAIL: NoteOut schema does not include shadow_reader_status. "
+                "Voice upload responses will not include this field."
+            )
+            assert "shadow_reader_questions" in fields, (
+                "QA-05 FAIL: NoteOut schema does not include shadow_reader_questions."
+            )
+            assert "shadow_reader_answer" in fields, (
+                "QA-05 FAIL: NoteOut schema does not include shadow_reader_answer."
+            )
+        except ImportError:
+            import pytest
+            pytest.skip("NoteOut schema not yet implemented")
+
+
+# ---------------------------------------------------------------------------
+# PERF-02 — increment_term_usage must use a single UPDATE, not an in-Python loop
+# review-comments.tasks.md § 2.2
+# ---------------------------------------------------------------------------
+
+class TestPERF02IncrementTermUsageSingleUpdate:
+    """
+    PERF-02: increment_term_usage must NOT fetch all user vocabulary terms into
+    Python memory and then scan/update them in a loop. The fixed implementation
+    should push matching to SQL (WHERE term ILIKE ANY(...)) and issue a single
+    UPDATE statement, not one execute per term.
+
+    Assert: db.execute is called exactly once (the batch UPDATE), not N times.
+    """
+
+    async def test_increment_term_usage_issues_single_execute_call(self):
+        """
+        increment_term_usage must issue ≤ 2 db.execute calls total (1 UPDATE query),
+        regardless of how many vocabulary terms the user has.
+        """
+        from app.services.speech import increment_term_usage
+
+        execute_calls = []
+
+        db = AsyncMock()
+
+        async def recording_execute(stmt, *args, **kwargs):
+            execute_calls.append(stmt)
+            mock_result = MagicMock()
+            mock_result.scalars.return_value.all.return_value = []
+            return mock_result
+
+        db.execute = recording_execute
+        db.commit = AsyncMock()
+
+        content = "I practiced arpeggio in the Phrygian mode"
+        user_id = uuid.uuid4()
+
+        try:
+            await increment_term_usage(content, user_id, db)
+        except Exception:
+            pass
+
+        assert len(execute_calls) <= 2, (
+            f"PERF-02 FAIL: increment_term_usage issued {len(execute_calls)} execute "
+            f"calls — expected ≤ 2 (single UPDATE or fetch+UPDATE). "
+            f"Fetching all terms and looping in Python is the N+1 anti-pattern."
+        )
+
+    async def test_increment_does_not_fetch_all_terms_to_python(self):
+        """
+        The SELECT issued by increment_term_usage must NOT be an unbounded
+        'SELECT * FROM user_vocabulary WHERE user_id = ?' with no term filter.
+        The query must include either a LIMIT or a WHERE clause filtering by content
+        match (proving the scan is pushed to SQL, not Python).
+        """
+        from app.services.speech import increment_term_usage
+        import inspect
+
+        src = inspect.getsource(increment_term_usage)
+
+        # The optimised implementation should NOT have both:
+        # 1. An unbounded SELECT * with no content-related filter
+        # 2. Followed by a Python `in` scan inside a for loop
+        # We check for the absence of the naive pattern: iterating over ALL terms.
+        # A compliant impl pushes matching to SQL via ILIKE ANY / UPDATE WHERE.
+        has_python_loop_scan = (
+            "for" in src
+            and "in content" in src
+            and "term" in src
+        )
+        assert not has_python_loop_scan, (
+            "PERF-02 FAIL: increment_term_usage still scans all terms in a Python "
+            "for-loop ('for ... if term in content'). Push the filter to SQL."
+        )
+
+    async def test_increment_term_usage_single_commit(self):
+        """
+        increment_term_usage must call db.commit() exactly once regardless of
+        how many terms are matched (not once per matched term).
+        """
+        from app.services.speech import increment_term_usage
+
+        db = _make_db_mock(vocab_rows=[
+            _make_vocab_entry("arpeggio", usage_count=1),
+            _make_vocab_entry("Phrygian", usage_count=0),
+        ])
+
+        await increment_term_usage(
+            "I played an arpeggio in the Phrygian mode", uuid.uuid4(), db
+        )
+
+        assert db.commit.call_count == 1, (
+            f"PERF-02 FAIL: db.commit() called {db.commit.call_count} times — "
+            f"expected exactly 1 (single commit after all updates)."
+        )

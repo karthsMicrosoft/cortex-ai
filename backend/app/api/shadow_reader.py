@@ -92,8 +92,10 @@ async def answer_shadow_reader(
     """Submit an answer to shadow reader questions.
 
     Raises 409 if the note is not in 'asked' state.
-    Schedules merge_answer_into_note as a background task so the response
-    returns immediately (embedding regeneration is async).
+    Sets status to 'answer_pending' first, then schedules the background merge.
+    The background task atomically sets status='answered' on success, leaving
+    a recoverable 'answer_pending' state if it fails (the APScheduler sweep
+    retries rows stuck in 'answer_pending' for > 1 minute).
     """
     note = await _get_note_or_404(db, note_id, current_user_id)
 
@@ -103,15 +105,17 @@ async def answer_shadow_reader(
             detail="Shadow reader not in asked state",
         )
 
-    # Set status to answered optimistically so the GET endpoint reflects it
-    # even before the background task completes embedding regen.
+    # Store the answer and move to the intermediate 'answer_pending' state.
+    # The background task will atomically commit the final 'answered' status
+    # together with the appended reflection content.
     note.shadow_reader_answer = payload.answer
-    note.shadow_reader_status = "answered"
+    note.shadow_reader_status = "answer_pending"
     await db.commit()
 
     openai_client = get_openai_client()
 
-    # Schedule the full merge (embedding + re-link) as a background task
+    # Schedule the full merge (content append + embedding + re-link) as a
+    # background task.  It sets status='answered' on success.
     background_tasks.add_task(
         _merge_in_background,
         note_id=note_id,
@@ -119,11 +123,16 @@ async def answer_shadow_reader(
         openai_client=openai_client,
     )
 
-    return {"status": "answered"}
+    return {"status": "answer_pending"}
 
 
 async def _merge_in_background(note_id: uuid.UUID, answer: str, openai_client) -> None:
-    """Background task: full merge with SERIALIZABLE transaction."""
+    """Background task: full merge with SERIALIZABLE transaction.
+
+    On success sets shadow_reader_status='answered'.
+    On failure the note remains in 'answer_pending', which the APScheduler
+    sweep job will pick up and retry after 1 minute.
+    """
     from app.database import SessionLocal
     from sqlalchemy import select
 
@@ -137,7 +146,8 @@ async def _merge_in_background(note_id: uuid.UUID, answer: str, openai_client) -
             await merge_answer_into_note(note, answer, openai_client, bg_db)
         except Exception as exc:  # noqa: BLE001
             logger.error(
-                "merge_background_failed: note_id=%s error_class=%s",
+                "merge_background_failed: note_id=%s error_class=%s — "
+                "note remains in answer_pending for sweep retry",
                 note_id,
                 type(exc).__name__,
             )

@@ -25,6 +25,10 @@ export interface UseSyncReturn {
  * SyncIndicator and Settings.
  *
  * Live-queries Dexie so the count updates automatically when the queue drains.
+ *
+ * PERF-07 fix: replaced 500ms setInterval polling of syncManager.syncing with
+ * an event subscription via syncManager.onSyncingChange().  React state is
+ * updated only on actual transitions, eliminating the 2×/s re-render churn.
  */
 export function useSync(): UseSyncReturn {
   const [isSyncing, setIsSyncing] = useState(false);
@@ -35,21 +39,15 @@ export function useSync(): UseSyncReturn {
     0,
   );
 
-  // Keep isSyncing in sync with the singleton's state via polling
+  // Subscribe to syncing state changes via event emitter (PERF-07)
   useEffect(() => {
-    const interval = setInterval(() => {
-      setIsSyncing(syncManager.syncing);
-    }, 500);
-    return () => clearInterval(interval);
+    const unsubscribe = syncManager.onSyncingChange(setIsSyncing);
+    return unsubscribe;
   }, []);
 
   const pushNow = useCallback(async () => {
-    setIsSyncing(true);
-    try {
-      await syncManager.pushChanges();
-    } finally {
-      setIsSyncing(false);
-    }
+    // pushChanges() fires onSyncingChange internally; no manual setIsSyncing needed
+    await syncManager.pushChanges();
   }, []);
 
   return {

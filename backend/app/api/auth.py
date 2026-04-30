@@ -20,6 +20,8 @@ from app.auth.jwt import (
     decode_token,
     get_current_user,
     hash_password,
+    is_jti_revoked,
+    revoke_jti,
     verify_password,
 )
 from app.database import get_db
@@ -33,6 +35,8 @@ from app.schemas.auth import (
     UserOut,
 )
 
+from app.limiter import limiter  # SEC-03 — per-route rate limiting on auth endpoints
+
 router = APIRouter()
 
 _REFRESH_COOKIE_NAME = "refresh_token"
@@ -43,7 +47,8 @@ _REFRESH_COOKIE_NAME = "refresh_token"
 # ---------------------------------------------------------------------------
 
 @router.post("/register", response_model=UserOut, status_code=status.HTTP_201_CREATED)
-async def register(payload: RegisterRequest, db: AsyncSession = Depends(get_db)) -> UserOut:
+@limiter.limit("10/minute")  # SEC-03 — brute-force / account-enumeration protection
+async def register(request: Request, payload: RegisterRequest, db: AsyncSession = Depends(get_db)) -> UserOut:
     """Register a new user. Returns UserOut (no tokens). Raises 409 on duplicate email."""
     # Check for existing user
     result = await db.execute(select(User).where(User.email == payload.email))
@@ -70,7 +75,9 @@ async def register(payload: RegisterRequest, db: AsyncSession = Depends(get_db))
 # ---------------------------------------------------------------------------
 
 @router.post("/login", response_model=TokenPair)
+@limiter.limit("5/minute")  # SEC-03 — credential brute-force protection
 async def login(
+    request: Request,
     payload: LoginRequest,
     response: Response,
     db: AsyncSession = Depends(get_db),
@@ -101,9 +108,9 @@ async def login(
         path="/api/auth",
     )
 
+    # SEC-02: refresh token is delivered via httpOnly cookie only — not in the JSON body.
     return TokenPair(
         access_token=access_token,
-        refresh_token=refresh_token,
         token_type="bearer",
     )
 
@@ -113,7 +120,9 @@ async def login(
 # ---------------------------------------------------------------------------
 
 @router.post("/refresh", response_model=AccessTokenResponse)
+@limiter.limit("5/minute")  # SEC-03 — token-replay / brute-force protection
 async def refresh_token(
+    request: Request,
     response: Response,
     refresh_body: Optional[RefreshRequest] = None,
     refresh_cookie: Optional[str] = Cookie(default=None, alias=_REFRESH_COOKIE_NAME),
@@ -144,6 +153,14 @@ async def refresh_token(
             detail="Invalid token type — expected refresh token",
         )
 
+    # SEC-07: Reject revoked tokens (previous rotation or explicit logout).
+    incoming_jti: Optional[str] = payload.get("jti")
+    if incoming_jti and is_jti_revoked(incoming_jti):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Refresh token has been revoked",
+        )
+
     user_id_str = payload.get("sub")
     try:
         user_id = uuid.UUID(user_id_str)
@@ -161,6 +178,10 @@ async def refresh_token(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="User not found",
         )
+
+    # SEC-07: Revoke the old JTI before issuing the new token (rotation).
+    if incoming_jti:
+        revoke_jti(incoming_jti)
 
     new_access = create_access_token(user_id)
     new_refresh = create_refresh_token(user_id)

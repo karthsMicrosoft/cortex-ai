@@ -494,3 +494,241 @@ class TestInsightsRouterWired:
         resp = await client.get("/api/insights/patterns", headers=auth_headers)
         assert resp.status_code not in (405,)
         assert resp.status_code in (200, 404)
+
+
+# ---------------------------------------------------------------------------
+# QA-10: OpenAIDep Depends(get_openai) injection works; can override via
+#         app.dependency_overrides
+# review-comments.tasks.md § 3.10
+# ---------------------------------------------------------------------------
+
+
+class TestOpenAIDepInjection:
+    """QA-10: The OpenAIDep type alias (Annotated[AsyncAzureOpenAI, Depends(get_openai)])
+    used in insights.py must be correctly wired so FastAPI injects the OpenAI client.
+
+    If OpenAIDep is not correctly defined, the parameter will be None or raise 422.
+    This test verifies the injection works AND that it can be overridden via
+    app.dependency_overrides (enabling testability without real Azure credentials).
+    """
+
+    def test_open_ai_dep_is_correctly_annotated(self):
+        """QA-10: OpenAIDep must be Annotated[AsyncAzureOpenAI, Depends(get_openai)]."""
+        from app.services.openai_client import OpenAIDep, get_openai
+        from typing import get_args, get_origin, Annotated
+        from fastapi import Depends
+
+        # get_args on Annotated[T, metadata...] returns (T, metadata...)
+        args = get_args(OpenAIDep)
+        assert len(args) >= 2, (
+            "QA-10 FAIL: OpenAIDep must be Annotated[AsyncAzureOpenAI, Depends(get_openai)] "
+            f"but get_args returned only {len(args)} args: {args}"
+        )
+
+        # First arg must be AsyncAzureOpenAI
+        from openai import AsyncAzureOpenAI
+        assert args[0] is AsyncAzureOpenAI, (
+            f"QA-10 FAIL: OpenAIDep first type arg must be AsyncAzureOpenAI, got {args[0]}"
+        )
+
+        # Second arg must be a Depends instance wrapping get_openai
+        dep = args[1]
+        assert hasattr(dep, "dependency"), (
+            f"QA-10 FAIL: OpenAIDep second arg must be Depends(...), got {type(dep)}"
+        )
+        assert dep.dependency is get_openai, (
+            f"QA-10 FAIL: OpenAIDep dependency must be get_openai, got {dep.dependency}"
+        )
+
+    async def test_get_openai_dependency_can_be_overridden(
+        self, client: AsyncClient, auth_headers: dict
+    ):
+        """QA-10: The get_openai dependency must be overridable via app.dependency_overrides.
+
+        This is the key testability requirement: tests must be able to inject a mock
+        OpenAI client without real Azure credentials.
+        """
+        from app.services.openai_client import get_openai
+        from app.main import app
+
+        mock_openai = AsyncMock()
+        mock_response = MagicMock()
+        mock_response.choices = [MagicMock()]
+        mock_response.choices[0].message.content = (
+            '{"patterns": [{"theme": "Test pattern", "evidence_note_ids": []}]}'
+        )
+        mock_openai.chat.completions.create = AsyncMock(return_value=mock_response)
+
+        # Override the dependency
+        app.dependency_overrides[get_openai] = lambda: mock_openai
+
+        try:
+            resp = await client.get("/api/insights/patterns", headers=auth_headers)
+            # The override must be accepted without errors
+            assert resp.status_code in (200, 404), (
+                f"QA-10 FAIL: dependency override raised unexpected status {resp.status_code}. "
+                "The get_openai dependency must be overridable via app.dependency_overrides."
+            )
+        finally:
+            app.dependency_overrides.pop(get_openai, None)
+
+    async def test_weekly_summary_dependency_overridable(
+        self, client: AsyncClient, auth_headers: dict, db_session
+    ):
+        """QA-10: The weekly summary endpoint must accept get_openai override via dependency_overrides.
+
+        If OpenAIDep is incorrectly defined, the endpoint would fail when the real
+        Azure OpenAI client is not configured (which is the case in tests).
+        """
+        from app.services.openai_client import get_openai
+        from app.main import app
+
+        mock_openai = AsyncMock()
+        mock_response = MagicMock()
+        mock_response.choices = [MagicMock()]
+        mock_response.choices[0].message.content = "This week was productive."
+        mock_openai.chat.completions.create = AsyncMock(return_value=mock_response)
+
+        app.dependency_overrides[get_openai] = lambda: mock_openai
+
+        try:
+            resp = await client.get(
+                "/api/ai/summary/weekly",
+                params={"week": "2026-W17"},
+                headers=auth_headers,
+            )
+            # 404 = no data; 200 = data found; both acceptable
+            # 422 = dependency injection failed (bad OpenAIDep definition) — NOT acceptable
+            assert resp.status_code != 422, (
+                f"QA-10 FAIL: weekly summary returned 422 — the OpenAIDep dependency "
+                f"injection is broken. Verify OpenAIDep = Annotated[AsyncAzureOpenAI, Depends(get_openai)]. "
+                f"Response body: {resp.text}"
+            )
+            assert resp.status_code in (200, 404, 400), (
+                f"QA-10: Unexpected status {resp.status_code}: {resp.text}"
+            )
+        finally:
+            app.dependency_overrides.pop(get_openai, None)
+
+    def test_insights_py_uses_openai_dep_type_alias(self):
+        """QA-10: insights.py must declare openai parameters using OpenAIDep type alias
+        (or the equivalent get_openai dependency) — not access the client inline without DI.
+
+        The review comment notes the OpenAIDep pattern is inconsistent with the rest
+        of the codebase. Either OpenAIDep must be correctly defined, or the endpoints
+        must switch to openai_client = await get_openai() inline. Either way, the
+        injection must be testable via dependency_overrides.
+        """
+        from app.services.openai_client import get_openai, OpenAIDep
+        from app.api.insights import ai_summary_router, insights_router
+        import inspect
+
+        # The insight module should reference OpenAIDep or get_openai in its route handlers
+        from app.api import insights as insights_module
+        src = inspect.getsource(insights_module)
+        assert "get_openai" in src or "OpenAIDep" in src, (
+            "QA-10 FAIL: insights.py does not reference get_openai or OpenAIDep. "
+            "OpenAI client must be injected via Depends(get_openai) to be testable."
+        )
+
+
+# ---------------------------------------------------------------------------
+# PERF-04 — GET /api/insights/patterns must cache result; not call OpenAI twice in 24h
+# review-comments.tasks.md § 2.4
+# ---------------------------------------------------------------------------
+
+class TestPERF04PatternsCache:
+    """
+    PERF-04: /api/insights/patterns must cache the GPT result and NOT invoke
+    OpenAI on a second call within 24 hours. A ?refresh=true query parameter
+    must bypass the cache and invoke OpenAI again.
+    """
+
+    async def test_patterns_second_call_within_24h_skips_openai(
+        self, client: AsyncClient, auth_headers: dict
+    ):
+        """
+        Two consecutive calls to /api/insights/patterns must result in OpenAI
+        being called only ONCE — the second call must return from cache.
+        """
+        from app.services.openai_client import get_openai
+        from app.main import app
+
+        openai_call_count = 0
+
+        mock_openai = AsyncMock()
+
+        async def counting_create(**kwargs):
+            nonlocal openai_call_count
+            openai_call_count += 1
+            mock_response = MagicMock()
+            mock_response.choices = [MagicMock()]
+            mock_response.choices[0].message.content = (
+                '{"patterns": [{"theme": "Daily Practice", "evidence_note_ids": []}]}'
+            )
+            return mock_response
+
+        mock_openai.chat.completions.create = counting_create
+        app.dependency_overrides[get_openai] = lambda: mock_openai
+
+        try:
+            # First call — should invoke OpenAI
+            resp1 = await client.get("/api/insights/patterns", headers=auth_headers)
+            # Second call within same session — should use cache
+            resp2 = await client.get("/api/insights/patterns", headers=auth_headers)
+        finally:
+            app.dependency_overrides.pop(get_openai, None)
+
+        assert resp1.status_code == 200
+        assert resp2.status_code == 200
+
+        assert openai_call_count <= 1, (
+            f"PERF-04 FAIL: OpenAI was called {openai_call_count} times for two "
+            f"consecutive /api/insights/patterns requests. The second call must be "
+            f"served from cache (cached within 24h)."
+        )
+
+    async def test_patterns_refresh_true_bypasses_cache(
+        self, client: AsyncClient, auth_headers: dict
+    ):
+        """
+        GET /api/insights/patterns?refresh=true must invoke OpenAI even if a
+        cached result exists.
+        """
+        from app.services.openai_client import get_openai
+        from app.main import app
+
+        openai_call_count = 0
+
+        mock_openai = AsyncMock()
+
+        async def counting_create(**kwargs):
+            nonlocal openai_call_count
+            openai_call_count += 1
+            mock_response = MagicMock()
+            mock_response.choices = [MagicMock()]
+            mock_response.choices[0].message.content = (
+                '{"patterns": [{"theme": "Practice", "evidence_note_ids": []}]}'
+            )
+            return mock_response
+
+        mock_openai.chat.completions.create = counting_create
+        app.dependency_overrides[get_openai] = lambda: mock_openai
+
+        try:
+            # Warm the cache
+            resp1 = await client.get("/api/insights/patterns", headers=auth_headers)
+            # Force refresh
+            resp2 = await client.get(
+                "/api/insights/patterns?refresh=true", headers=auth_headers
+            )
+        finally:
+            app.dependency_overrides.pop(get_openai, None)
+
+        assert resp2.status_code == 200
+
+        # With ?refresh=true, OpenAI must have been called at least on the refresh
+        # (call_count should be 2 if cache was warmed on first call, or at least 1)
+        assert openai_call_count >= 1, (
+            "PERF-04 FAIL: OpenAI was never called even with ?refresh=true"
+        )

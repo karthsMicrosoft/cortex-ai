@@ -24,6 +24,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from sqlalchemy.orm import selectinload
 
+from app.api._note_serializers import _note_to_out
 from app.auth.jwt import get_current_user, validate_ws_token
 from app.config import settings
 from app.database import get_db
@@ -33,11 +34,10 @@ from app.schemas.note import NoteOut
 from app.services.blob_storage import upload_blob
 from app.services.speech import transcribe_audio_file
 
-# B16 soft-fail: import US-7 phrase-list helpers if available; degrade gracefully otherwise.
+# B16 soft-fail: import increment_term_usage if available; degrade gracefully otherwise.
 try:
-    from app.services.speech import load_user_phrase_list, increment_term_usage  # type: ignore[attr-defined]
+    from app.services.speech import increment_term_usage  # type: ignore[attr-defined]
 except ImportError:
-    load_user_phrase_list = None  # type: ignore[assignment]
     increment_term_usage = None  # type: ignore[assignment]
 
 logger = logging.getLogger(__name__)
@@ -86,8 +86,27 @@ async def voice_upload(
         content_type=content_type,
     )
 
-    # 4. Transcribe — load personal dictionary phrase list before recognition
-    raw_transcription = await transcribe_audio_file(audio_bytes)
+    # 4. Load personal dictionary phrase list (QA-08 / US-7 task 3.3 fix).
+    loaded_phrases: list[str] = []
+    try:
+        from sqlalchemy import select as _select
+        from app.models.vocabulary import UserVocabulary
+        vocab_result = await db.execute(
+            _select(UserVocabulary)
+            .where(UserVocabulary.user_id == current_user_id)
+            .order_by(UserVocabulary.usage_count.desc())
+            .limit(500)
+        )
+        vocab_terms = vocab_result.scalars().all()
+        for vt in vocab_terms:
+            loaded_phrases.append(vt.term)
+            if vt.pronunciation_hint:
+                loaded_phrases.append(vt.pronunciation_hint)
+        logger.info("voice_upload: loaded %d phrases for user=%s", len(loaded_phrases), current_user_id)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("voice_upload: phrase list load failed for user=%s: %s", current_user_id, exc)
+
+    raw_transcription = await transcribe_audio_file(audio_bytes, phrase_list=loaded_phrases or None)
 
     # 4b. Increment usage counts for matched terms (B16 soft-fail; US-7 may not be merged yet)
     if increment_term_usage is not None and raw_transcription:
@@ -136,6 +155,22 @@ async def voice_stream(
 
     Authentication is done via ?token=<jwt> query param before accept()
     (critique mitigation #4).
+
+    SEC-06 — RESIDUAL RISK (platform log exposure):
+    The application-level log scrubber (app/main.py _ScrubTokenFilter) redacts
+    ?token=<jwt> from uvicorn logs.  However, Azure Container App HTTP access
+    logs and upstream load-balancer / reverse-proxy logs capture the raw request
+    URL *before* it reaches uvicorn, so the full JWT may appear in Azure platform
+    logs outside the application's control.
+
+    Mitigations in place:
+      - The scrubber covers all app-layer logs (B12).
+      - Azure Container App access logs should be treated as sensitive and given
+        a short retention window (see docs/DEPLOYMENT.md "WebSocket Token
+        Log-Scrubbing" section).
+      - As a medium-term improvement, migrate WS auth to a short-lived opaque
+        voice-ticket token (REST endpoint → opaque token → WS auth) so the
+        long-lived JWT never appears in any URL.
 
     Protocol:
       - Client sends raw audio bytes (PCM/webm chunks, every 250 ms).
@@ -256,29 +291,6 @@ async def _run_pipeline(note_id: uuid.UUID) -> None:
         await pipeline.process_note(note_id)
 
 
-def _note_to_out(note: Note) -> NoteOut:
-    """Convert ORM Note to NoteOut schema."""
-    tag_names = [t.name for t in note.tags] if note.tags else []
-    return NoteOut(
-        id=note.id,
-        user_id=note.user_id,
-        content=note.content,
-        raw_transcription=note.raw_transcription,
-        summary=note.summary,
-        source_type=note.source_type,
-        category=note.category,
-        audio_url=note.audio_url,
-        image_url=note.image_url,
-        audio_duration_seconds=note.audio_duration_seconds,
-        mood=note.mood,
-        music_metadata=note.music_metadata or {},
-        processing_status=note.processing_status,
-        sync_status=note.sync_status,
-        client_id=note.client_id,
-        tags=tag_names,
-        created_at=note.created_at,
-        updated_at=note.updated_at,
-    )
 
 
 def _audio_ext(content_type: str, filename: str | None) -> str:

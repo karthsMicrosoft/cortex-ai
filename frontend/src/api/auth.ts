@@ -7,8 +7,9 @@ import type { User } from '../store/authStore';
 
 export interface LoginResponse {
   access_token: string;
-  refresh_token?: string;
   token_type: 'bearer';
+  // SEC-02: refresh_token is delivered exclusively via httpOnly cookie — it is
+  // NOT present in the JSON body and must not be read from the response object.
 }
 
 export interface RegisterResponse {

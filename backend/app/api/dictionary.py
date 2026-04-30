@@ -16,7 +16,7 @@ import logging
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, status
-from sqlalchemy import func, select, delete
+from sqlalchemy import func, select, delete, text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -170,7 +170,8 @@ async def delete_term(
     current_user_id: uuid.UUID = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> None:
-    """Delete a vocabulary term.  Silently succeeds even if not found."""
+    """Delete a vocabulary term.  Returns 404 if not found (consistent with PUT)."""
+    await _get_term_or_404(term_id, current_user_id, db)
     await db.execute(
         delete(UserVocabulary).where(
             UserVocabulary.id == term_id,
@@ -191,28 +192,66 @@ async def bulk_import(
     db: AsyncSession = Depends(get_db),
 ) -> BulkImportResponse:
     """Bulk import up to 500 terms.  Returns 400 if list exceeds 500 entries.
-    Duplicate terms are skipped (not treated as errors)."""
+    Duplicate terms are skipped (not treated as errors).
+
+    PERF-06 fix: replaced per-row commit loop with a single batch INSERT …
+    ON CONFLICT (user_id, term) DO NOTHING, then one commit at the end.
+    For 500 terms this reduces 500 sequential commits to 1.
+    """
     if len(terms) > MAX_BULK_TERMS:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=f"Bulk import limited to {MAX_BULK_TERMS} terms per request",
         )
 
-    inserted = 0
-    for t in terms:
-        vocab = UserVocabulary(
-            user_id=current_user_id,
-            term=t.term,
-            term_type=t.term_type,
-            pronunciation_hint=t.pronunciation_hint,
-            boost_weight=t.boost_weight,
-        )
-        db.add(vocab)
-        try:
-            await db.commit()
-            inserted += 1
-        except IntegrityError:
-            await db.rollback()
+    if not terms:
+        return BulkImportResponse(inserted=0, total=0)
+
+    # Build rows list for batch insert
+    rows = [
+        {
+            "user_id": str(current_user_id),
+            "term": t.term,
+            "term_type": t.term_type or "general",
+            "pronunciation_hint": t.pronunciation_hint,
+            "boost_weight": t.boost_weight if t.boost_weight is not None else 1.0,
+        }
+        for t in terms
+    ]
+
+    # Single INSERT … ON CONFLICT (user_id, term) DO NOTHING — one round-trip
+    result = await db.execute(
+        text(
+            """
+            INSERT INTO user_vocabulary (user_id, term, term_type, pronunciation_hint, boost_weight)
+            SELECT
+                CAST(:user_id AS uuid),
+                t.term,
+                t.term_type,
+                t.pronunciation_hint,
+                t.boost_weight::float
+            FROM jsonb_to_recordset(:rows::jsonb)
+                AS t(term text, term_type text, pronunciation_hint text, boost_weight text)
+            ON CONFLICT (user_id, term) DO NOTHING
+            """
+        ),
+        {
+            "user_id": str(current_user_id),
+            "rows": __import__("json").dumps(
+                [
+                    {
+                        "term": r["term"],
+                        "term_type": r["term_type"],
+                        "pronunciation_hint": r["pronunciation_hint"],
+                        "boost_weight": str(r["boost_weight"]),
+                    }
+                    for r in rows
+                ]
+            ),
+        },
+    )
+    await db.commit()
+    inserted = result.rowcount if result.rowcount >= 0 else 0
 
     logger.info(
         "dictionary bulk_import: user=%s inserted=%d total=%d",

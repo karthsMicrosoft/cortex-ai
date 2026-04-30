@@ -8,6 +8,7 @@ The Alembic migration uses PostgreSQL-specific types for production.
 """
 import uuid
 from datetime import datetime
+from typing import Optional
 
 from sqlalchemy import Boolean, DateTime, JSON, String, Text, Uuid, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
@@ -31,6 +32,12 @@ class User(Base):
     shadow_reader_enabled: Mapped[bool] = mapped_column(Boolean, default=True)
     shadow_reader_disabled_categories: Mapped[list] = mapped_column(
         JSON, default=list
+    )
+
+    # PERF-04 — Patterns cache (avoids on-demand GPT call on every page visit)
+    patterns_cached_json: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    patterns_cached_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True
     )
 
     created_at: Mapped[datetime] = mapped_column(

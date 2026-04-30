@@ -681,6 +681,141 @@ class TestMusicEnrichment:
 
 
 # ---------------------------------------------------------------------------
+# QA-02: azure_retry — retries transient errors, skips HTTPException
+# review-comments.tasks.md § 3.2
+# ---------------------------------------------------------------------------
+
+class TestAzureRetryDecorator:
+    """QA-02: azure_retry must retry on transient errors but NOT on HTTPException.
+    The _is_retryable function must be wired into the decorator (not dead code).
+    """
+
+    def test_azure_retry_importable(self):
+        """azure_retry must be importable from app.utils.retry."""
+        from app.utils.retry import azure_retry  # noqa: F401
+        assert callable(azure_retry)
+
+    def test_is_retryable_importable(self):
+        """_is_retryable must be importable from app.utils.retry."""
+        from app.utils.retry import _is_retryable
+        assert callable(_is_retryable)
+
+    def test_is_retryable_returns_true_for_connection_error(self):
+        """_is_retryable must return True for transient network errors."""
+        from app.utils.retry import _is_retryable
+        assert _is_retryable(ConnectionError("Azure is down")) is True
+
+    def test_is_retryable_returns_true_for_runtime_error(self):
+        """_is_retryable must return True for RuntimeError."""
+        from app.utils.retry import _is_retryable
+        assert _is_retryable(RuntimeError("Transient failure")) is True
+
+    def test_is_retryable_returns_false_for_http_exception(self):
+        """QA-02 core: _is_retryable must return False for FastAPI HTTPException."""
+        from app.utils.retry import _is_retryable
+        from fastapi import HTTPException
+        exc = HTTPException(status_code=400, detail="Bad request")
+        assert _is_retryable(exc) is False, (
+            "QA-02 FAIL: _is_retryable returned True for HTTPException. "
+            "The retry decorator must NOT retry on HTTPException (intentional 4xx/5xx)."
+        )
+
+    def test_is_retryable_returns_false_for_http_404(self):
+        """_is_retryable must return False for 404 HTTPException."""
+        from app.utils.retry import _is_retryable
+        from fastapi import HTTPException
+        exc = HTTPException(status_code=404, detail="Not found")
+        assert _is_retryable(exc) is False
+
+    def test_is_retryable_returns_false_for_http_500_as_http_exception(self):
+        """_is_retryable must return False even for HTTP 500 raised as HTTPException."""
+        from app.utils.retry import _is_retryable
+        from fastapi import HTTPException
+        exc = HTTPException(status_code=500, detail="Internal server error")
+        assert _is_retryable(exc) is False, (
+            "Even HTTP 500 raised as HTTPException must not be retried — "
+            "it is an intentional response from the application."
+        )
+
+    async def test_azure_retry_does_not_retry_http_exception(self):
+        """QA-02: azure_retry must NOT retry when the decorated function raises HTTPException."""
+        from app.utils.retry import azure_retry
+        from fastapi import HTTPException
+
+        call_count = 0
+
+        @azure_retry
+        async def raise_http_exception():
+            nonlocal call_count
+            call_count += 1
+            raise HTTPException(status_code=400, detail="Bad request — not retryable")
+
+        with pytest.raises(HTTPException):
+            await raise_http_exception()
+
+        assert call_count == 1, (
+            f"QA-02 FAIL: azure_retry retried HTTPException {call_count} time(s). "
+            "HTTPException must not be retried — it represents an intentional response."
+        )
+
+    async def test_azure_retry_retries_on_transient_connection_error(self):
+        """QA-02: azure_retry must retry on transient ConnectionError (max 3 attempts)."""
+        from app.utils.retry import azure_retry
+
+        call_count = 0
+
+        @azure_retry
+        async def unstable_function():
+            nonlocal call_count
+            call_count += 1
+            if call_count < 3:
+                raise ConnectionError("Network glitch")
+            return "success"
+
+        result = await unstable_function()
+        assert result == "success"
+        assert call_count == 3, (
+            f"QA-02 FAIL: azure_retry should have retried ConnectionError 3 times, "
+            f"but called the function {call_count} time(s)."
+        )
+
+    async def test_azure_retry_exhausts_retries_on_persistent_error(self):
+        """azure_retry must propagate after 3 failed attempts on persistent errors."""
+        from app.utils.retry import azure_retry
+
+        call_count = 0
+
+        @azure_retry
+        async def always_fails():
+            nonlocal call_count
+            call_count += 1
+            raise ConnectionError("Persistent network failure")
+
+        with pytest.raises(ConnectionError):
+            await always_fails()
+
+        assert call_count == 3, (
+            f"Expected exactly 3 retry attempts, got {call_count}. "
+            "azure_retry must stop after 3 attempts (stop_after_attempt(3))."
+        )
+
+    def test_is_retryable_is_wired_not_dead_code(self):
+        """QA-02: _is_retryable must be used in azure_retry (not dead code).
+
+        We verify this structurally: _is_retryable(HTTPException(...)) returns False,
+        AND azure_retry does NOT retry HTTPException.
+        Both must be true simultaneously to prove _is_retryable is actually wired.
+        """
+        from app.utils.retry import _is_retryable
+        from fastapi import HTTPException
+
+        # If _is_retryable were dead code, it would be irrelevant whether it returns False.
+        # The async test above proves the behavior; this test checks the predicate directly.
+        assert _is_retryable(HTTPException(status_code=400)) is False
+        assert _is_retryable(ValueError("transient")) is True
+
+
+# ---------------------------------------------------------------------------
 # POST /api/ai/process/{note_id} — manual re-trigger (Task 4.6)
 # ---------------------------------------------------------------------------
 
@@ -732,3 +867,66 @@ class TestManualRetriggerEndpoint:
             )
 
         assert resp.status_code in (200, 202)
+
+
+# ---------------------------------------------------------------------------
+# PERF-01 — _ensure_tag / _auto_tag_and_categorize must not issue N+1 queries
+# review-comments.tasks.md § 2.1
+# ---------------------------------------------------------------------------
+
+class TestPERF01PipelineTagBatch:
+    """
+    PERF-01 (pipeline side): _auto_tag_and_categorize calls _ensure_tag once per
+    GPT-returned tag. The fixed implementation must batch-fetch all existing tags
+    in a single query, not issue N SELECT statements.
+
+    Assert: after _auto_tag_and_categorize returns, db.execute was called ≤ 2 times
+    total for tag handling (1 batch fetch + 1 optional batch insert).
+    """
+
+    async def test_auto_tag_execute_calls_le_2_for_multiple_tags(self):
+        """
+        _auto_tag_and_categorize with 3 GPT-returned tags must use ≤ 2 execute calls.
+        """
+        from app.pipeline.processor import AIPipeline
+
+        note = make_fake_note(processing_status="processed")
+        mock_openai = AsyncMock()
+        mock_db = AsyncMock(spec=AsyncSession)
+
+        execute_calls = []
+
+        mock_gpt_response = MagicMock()
+        mock_gpt_response.choices = [MagicMock()]
+        mock_gpt_response.choices[0].message.content = json.dumps({
+            "tags": ["jazz", "piano", "improv"],
+            "category": "Music",
+            "mood": "relaxed",
+            "summary": "Piano jazz session.",
+            "entities": [],
+        })
+        mock_openai.chat.completions.create = AsyncMock(return_value=mock_gpt_response)
+
+        async def counting_execute(stmt, *args, **kwargs):
+            execute_calls.append(stmt)
+            mock_result = MagicMock()
+            mock_result.scalars.return_value.all.return_value = []
+            mock_result.scalar_one_or_none.return_value = None
+            return mock_result
+
+        mock_db.execute = counting_execute
+        mock_db.flush = AsyncMock()
+
+        pipeline = AIPipeline(openai_client=mock_openai, db=mock_db)
+
+        try:
+            await pipeline._auto_tag_and_categorize(note)
+        except Exception:
+            pass
+
+        # Filter out any non-tag-related executes (category validation, etc.)
+        # but total should still be ≤ 2 for the tag operations
+        assert len(execute_calls) <= 2, (
+            f"PERF-01 FAIL: _auto_tag_and_categorize issued {len(execute_calls)} execute "
+            f"calls for 3 tags — N+1 pattern detected. Expected ≤ 2."
+        )

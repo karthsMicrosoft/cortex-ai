@@ -2,9 +2,17 @@ import { Routes, Route, Navigate } from 'react-router-dom';
 import { useAuthStore } from './store/authStore';
 import LoginPage from './pages/LoginPage';
 import RegisterPage from './pages/RegisterPage';
+import CapturePage from './pages/CapturePage';
+import LibraryPage from './pages/LibraryPage';
+import SearchPage from './pages/SearchPage';
+import NoteDetailPage from './pages/NoteDetailPage';
+import InsightsPage from './pages/InsightsPage';
+import CreatePage from './pages/CreatePage';
+import ConflictsPage from './pages/ConflictsPage';
+import { BottomNav } from './components/BottomNav';
 
 // ---------------------------------------------------------------------------
-// AuthGate — redirects unauthenticated users to /login
+// Protected layout — AuthGate + BottomNav
 // ---------------------------------------------------------------------------
 
 function AuthGate({ children }: { children: React.ReactNode }): React.ReactElement {
@@ -12,27 +20,12 @@ function AuthGate({ children }: { children: React.ReactNode }): React.ReactEleme
   if (!accessToken) {
     return <Navigate to="/login" replace />;
   }
-  return <>{children}</>;
-}
-
-// ---------------------------------------------------------------------------
-// Placeholder pages for protected routes (to be implemented in later stories)
-// ---------------------------------------------------------------------------
-
-function CapturePage(): React.ReactElement {
-  return <div className="p-4 text-slate-100">Capture</div>;
-}
-
-function LibraryPage(): React.ReactElement {
-  return <div className="p-4 text-slate-100">Library</div>;
-}
-
-function InsightsPage(): React.ReactElement {
-  return <div className="p-4 text-slate-100">Insights</div>;
-}
-
-function CreatePage(): React.ReactElement {
-  return <div className="p-4 text-slate-100">Create</div>;
+  return (
+    <>
+      {children}
+      <BottomNav />
+    </>
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -65,6 +58,22 @@ export default function App(): React.ReactElement {
           }
         />
         <Route
+          path="/search"
+          element={
+            <AuthGate>
+              <SearchPage />
+            </AuthGate>
+          }
+        />
+        <Route
+          path="/note/:id"
+          element={
+            <AuthGate>
+              <NoteDetailPage />
+            </AuthGate>
+          }
+        />
+        <Route
           path="/insights"
           element={
             <AuthGate>
@@ -77,6 +86,14 @@ export default function App(): React.ReactElement {
           element={
             <AuthGate>
               <CreatePage />
+            </AuthGate>
+          }
+        />
+        <Route
+          path="/conflicts"
+          element={
+            <AuthGate>
+              <ConflictsPage />
             </AuthGate>
           }
         />

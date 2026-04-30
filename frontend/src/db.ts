@@ -44,6 +44,24 @@ export interface SyncQueue {
   retryCount: number;
 }
 
+/** Dead-letter queue — items that failed > 5 times (critique mitigation #2) */
+export interface DeadLetter {
+  id?: number;
+  operation: SyncOperation;
+  entityType: string;
+  entityId: string;
+  payload: Record<string, unknown>;
+  timestamp: Date;
+  retryCount: number;
+  failedAt: Date;
+}
+
+/** Meta key-value store — persists lastPull cursor etc. */
+export interface MetaEntry {
+  key: string;
+  value: string;
+}
+
 // ---------------------------------------------------------------------------
 // CortexDB — Dexie database class
 // ---------------------------------------------------------------------------
@@ -51,6 +69,8 @@ export interface SyncQueue {
 export class CortexDB extends Dexie {
   notes!: Table<LocalNote, string>;
   syncQueue!: Table<SyncQueue, number>;
+  deadLetter!: Table<DeadLetter, number>;
+  meta!: Table<MetaEntry, string>;
 
   constructor() {
     super('cortex-db');
@@ -60,6 +80,14 @@ export class CortexDB extends Dexie {
       notes: 'localId, serverId, sourceType, category, syncStatus, createdAt',
       // Auto-increment primary key (++id); indexes: operation, entityType, timestamp
       syncQueue: '++id, operation, entityType, timestamp',
+    });
+
+    // v2 adds deadLetter and meta tables (B13 pull flow + critique mitigation #2)
+    this.version(2).stores({
+      notes: 'localId, serverId, sourceType, category, syncStatus, createdAt',
+      syncQueue: '++id, operation, entityType, timestamp',
+      deadLetter: '++id, operation, entityType, timestamp',
+      meta: 'key',
     });
   }
 }

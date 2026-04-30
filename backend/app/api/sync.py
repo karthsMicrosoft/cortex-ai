@@ -23,6 +23,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
+from app.api._note_serializers import _note_to_out
 from app.auth.jwt import get_current_user
 from app.database import get_db
 from app.models.note import Note
@@ -198,26 +199,3 @@ async def _run_pipeline(note_id: uuid.UUID) -> None:
         await pipeline.process_note(note_id)
 
 
-def _note_to_out(note: Note) -> NoteOut:
-    """Convert ORM Note to NoteOut schema."""
-    tag_names = [t.name for t in note.tags] if note.tags else []
-    return NoteOut(
-        id=note.id,
-        user_id=note.user_id,
-        content=note.content,
-        raw_transcription=note.raw_transcription,
-        summary=note.summary,
-        source_type=note.source_type,
-        category=note.category,
-        audio_url=note.audio_url,
-        image_url=note.image_url,
-        audio_duration_seconds=note.audio_duration_seconds,
-        mood=note.mood,
-        music_metadata=note.music_metadata or {},
-        processing_status=note.processing_status,
-        sync_status=note.sync_status,
-        client_id=note.client_id,
-        tags=tag_names,
-        created_at=note.created_at,
-        updated_at=note.updated_at,
-    )

@@ -357,13 +357,190 @@
 > Re-review commit (Round 2): pending — will be HEAD after fix-round commits
 
 ## Security Findings Re-Review Round 2
-<!-- security writes here -->
+
+PASSED
+
+### Resolved
+- SEC-01, SEC-02, SEC-03, SEC-04, SEC-05, SEC-06, SEC-07, SEC-08
+
+#### SEC-01 — JWT_SECRET_KEY default and validators (`backend/app/config.py`)
+Resolved. `_DEV_JWT_PLACEHOLDER` constant used as the named default. `@field_validator("JWT_SECRET_KEY")` enforces `len(v) >= 32` for any non-placeholder value. `check_production_secrets()` raises `RuntimeError` at module load when `ENVIRONMENT=production` and the key equals the placeholder — fail-fast, no silent weak-key deployment possible.
+
+#### SEC-02 — Refresh token in JSON body (`backend/app/api/auth.py`, `frontend/src/api/auth.ts`)
+Resolved. `TokenPair` schema contains only `access_token` and `token_type` — no `refresh_token` field. The `/login` endpoint sets the refresh token exclusively via `httponly=True, secure=True, samesite="lax"` cookie. The frontend `LoginResponse` interface has an explicit comment confirming `refresh_token` is not present in the JSON body and must not be read from the response object.
+
+#### SEC-03 — Rate limiting on auth endpoints (`backend/app/api/auth.py`)
+Resolved. `@limiter.limit("10/minute")` applied to `register`, `@limiter.limit("5/minute")` applied to both `login` and `refresh`. All three decorators are present with `request: Request` as the first parameter, satisfying slowapi's key-function requirement. The shared `limiter` instance in `backend/app/limiter.py` uses `_get_user_or_ip` key function with a global default of `"100/minute"`.
+
+#### SEC-04 — Password min_length=8 (`backend/app/schemas/auth.py`)
+Resolved. `RegisterRequest.password` declared as `str = Field(..., min_length=8, max_length=128)`. Weak passwords are rejected with HTTP 422 before reaching the bcrypt hashing layer.
+
+#### SEC-05 — Note content max_length=50000 (`backend/app/schemas/note.py`)
+Resolved. `NoteCreate.content` uses `Field(..., max_length=50_000)` and `NoteUpdate.content` uses `Field(default=None, max_length=50_000)`. Both include a comment referencing SEC-05 and the AI cost exposure rationale.
+
+#### SEC-06 — WS query-param residual risk documented (`docs/DEPLOYMENT.md`)
+Resolved. `DEPLOYMENT.md` contains two relevant sections: "SEC-06 — WebSocket Token in URL" (with explicit status, threat description, required operator action for log retention, KQL redaction query, and future hardening path to opaque voice-ticket tokens) and "WebSocket Token Log-Scrubbing (B12)" (describing both the backend `_ScrubTokenFilter` and the Azure Log Analytics KQL workaround). Residual risk is clearly acknowledged.
+
+#### SEC-07 — JTI revocation (`backend/app/auth/jwt.py`, `backend/app/api/auth.py`)
+Resolved. `_revoked_jtis: set[str]` deny-set with `revoke_jti()` / `is_jti_revoked()` helpers implemented in `jwt.py`. All tokens carry a `jti` claim via `_make_token()`. The `/refresh` endpoint checks the incoming JTI against the deny-set (raises HTTP 401 if revoked) and revokes the old JTI before issuing the replacement token. The in-memory limitation (restart clears the set) is explicitly documented in `docs/DEPLOYMENT.md` under "SEC-07 — Refresh Token Revocation Gap" with a Redis/DB remediation path called out for pre-multi-user hardening.
+
+#### SEC-08 — `_refresh_sas_url` no longer stub (`backend/app/api/export.py`)
+Resolved. `_refresh_sas_url()` is a full implementation: parses the stored blob URL with `_AZURE_BLOB_RE`, extracts account/container/blob, calls `azure.storage.blob.generate_blob_sas` with `BlobSasPermissions(read=True)` and a 1-hour expiry, and returns the freshly signed URL. Degrades gracefully (returns the original URL) when `AZURE_STORAGE_CONNECTION_STRING` is not configured, suitable for tests and local dev.
 
 ## Performance Findings Re-Review Round 2
-<!-- performance writes here -->
+
+PASSED
+
+### Resolved
+- PERF-01, PERF-02, PERF-03, PERF-04, PERF-05, PERF-06, PERF-07, PERF-08, PERF-09, PERF-10, PERF-11
+
+#### PERF-01 — N+1 tag queries (`notes.py:_get_or_create_tags`, `processor.py:_auto_tag_and_categorize` + `_ensure_tag`)
+Resolved. `backend/app/utils/db_helpers.py` implements `get_or_create_tags_batch()`: one `SELECT … WHERE name IN (…)` then one batch flush for missing tags — two round-trips maximum regardless of tag count. `_get_or_create_tags` in `notes.py` delegates to it directly. `_auto_tag_and_categorize` in `processor.py` calls `get_or_create_tags_batch` directly; `_ensure_tag` also wraps it for single-tag callers. The per-tag SELECT+INSERT loop is gone from both callers.
+
+#### PERF-02 — `increment_term_usage` O(N) Python scan (`services/speech.py`)
+Resolved. The entire `SELECT * FROM user_vocabulary … for term in terms: if term in content` pattern is replaced by a single `UPDATE user_vocabulary SET usage_count = usage_count + 1 WHERE user_id = :uid AND :content ILIKE '%' || term || '%'`. No vocabulary rows are fetched into Python; Postgres performs the scan server-side.
+
+#### PERF-03 — Unconditional notes query in `generate_weekly_summary` (`pipeline/distill.py`)
+Resolved. The notes `SELECT` is now inside `if not daily_summaries:` (lines 214–222). When daily summaries exist the notes table is not queried. The old unconditional query above the conditional is absent.
+
+#### PERF-04 — Unguarded on-demand GPT call in `get_patterns` (`api/insights.py`)
+Resolved. Migration `004_add_patterns_cache.py` adds `patterns_cached_json TEXT` and `patterns_cached_at TIMESTAMPTZ` columns to `users`. `get_patterns` reads the cache first; if `cache_age < 24 h` it returns the stored JSON without a GPT call. After generation it writes back to cache via `db.commit()`. `?refresh=true` bypasses the cache. `datetime.now(timezone.utc)` used throughout (QA-11 co-fix).
+
+#### PERF-05 — No GIN FTS index on `notes.content` (`alembic/versions/005_add_fts_index.py`)
+Resolved. Migration 005 issues `CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_notes_content_fts ON notes USING gin(to_tsvector('english', content))`. The index expression matches the `to_tsvector('english', n.content)` call in `_HYBRID_SQL` exactly, so Postgres will use the index for `ts_rank` lookups.
+
+#### PERF-06 — Per-row commit in `bulk_import` (`api/dictionary.py`)
+Resolved. The loop with 500 sequential `await db.commit()` calls is replaced by a single `INSERT … SELECT FROM jsonb_to_recordset(:rows::jsonb) ON CONFLICT (user_id, term) DO NOTHING` followed by one `await db.commit()`. Inserted count is read from `result.rowcount`.
+
+#### PERF-07 — `useSync` 500ms `setInterval` polling (`hooks/useSync.ts`, `sync/syncManager.ts`)
+Resolved. `useSync` contains no `setInterval`. It subscribes via `useEffect(() => syncManager.onSyncingChange(setIsSyncing), [])` and returns an unsubscribe cleanup. `SyncManager` holds a `syncingListeners: Set<SyncingListener>` and exposes `onSyncingChange(listener)` (fires immediately with current state, returns unsubscribe function). `pushChanges()` calls `notifySyncingListeners(true/false)` on enter and exit. React state updates only on actual transitions.
+
+#### PERF-08 — `_SIMILAR_SQL` cross-join (`api/search.py`)
+Resolved. `_SIMILAR_SQL` is a single-table query (`FROM notes n WHERE n.id != :source_note_id AND n.user_id = :user_id`). The `FROM notes n, notes src` Cartesian product is gone. The handler passes the already-loaded `note.embedding` as `:source_emb`, eliminating the redundant 6 KB embedding fetch from the DB.
+
+#### PERF-09 — JavaScript date filtering after full Dexie fetch (`hooks/useNotes.ts`)
+Resolved. When `dateFrom` or `dateTo` is present, `useNotes` uses `db.notes.where('createdAt').between(lower, upper, true, true)` to leverage the `createdAt` IndexedDB index. Secondary filters (category, syncStatus) are applied in memory on the already-reduced set. The original indexed collection queries are used only when no date filter is specified.
+
+#### PERF-10 — Static `BrainViewPage` import bloating initial bundle (`App.tsx`)
+Resolved. `BrainViewPage` is declared as `const BrainViewPage = lazy(() => import('./pages/BrainViewPage'))` with a comment explaining the PERF-10 rationale. The `/brain` route wraps `<BrainViewPage />` in `<Suspense fallback={…}>`. `react-force-graph-2d` is now code-split into a separate chunk and excluded from the initial JS bundle.
+
+#### PERF-11 — `wavesurfer.js` static import in `MusicPlayer.tsx`
+Resolved. No static top-level `import 'wavesurfer.js'` present. The `createWaveSurfer()` async helper uses `await import('wavesurfer.js')` inside a `useEffect`, ensuring the library is only downloaded and parsed when the music player component actually mounts.
+
+**Signal to Lead:** performance re-review 2 complete — PASSED
 
 ## Quality Findings Re-Review Round 2
-<!-- quality writes here -->
+
+PASSED
+
+### Resolved
+- QA-01, QA-02, QA-03, QA-04, QA-05, QA-06, QA-07, QA-08, QA-09, QA-10
+
+#### QA-01 — Alembic migration 003 `op.get_bind()` removal (`backend/alembic/versions/003_add_shadow_reader.py`)
+Resolved. `op.get_bind()` is completely absent from the file. All DDL in both `upgrade()` and `downgrade()` uses `op.execute(sa.text(...))` exclusively, matching the pattern in migrations 001 and 002. The CHECK constraint for `answer_pending` (QA-04 prerequisite) is also correctly included.
+
+#### QA-02 — `_is_retryable` wired via `retry_if_exception` (`backend/app/utils/retry.py`)
+Resolved. `_is_retryable` is wired into the decorator: `retry=retry_if_exception(_is_retryable)`. The import list includes `retry_if_exception` (not `retry_if_exception_type`). The predicate correctly returns `False` for `HTTPException` instances, preventing incorrect retries on 4xx/5xx responses. The docstring matches the implementation.
+
+#### QA-03 — `DELETE /api/dictionary/{id}` returns 404 on missing term (`backend/app/api/dictionary.py`)
+Resolved. `delete_term` calls `await _get_term_or_404(term_id, current_user_id, db)` before executing the `DELETE` statement. A missing term raises HTTP 404 consistently with `PUT`. The docstring confirms: "Returns 404 if not found (consistent with PUT)."
+
+#### QA-04 — 2-phase shadow reader status (`answer_pending` → `answered`); APScheduler retry (`backend/app/api/shadow_reader.py`, `backend/app/pipeline/shadow_reader.py`)
+Resolved. Two-phase flow confirmed: `answer_shadow_reader` sets `shadow_reader_status = "answer_pending"` and commits, returning `{"status": "answer_pending"}`. Background task `_merge_in_background` calls `merge_answer_into_note`, which atomically sets `status = "answered"` together with the content append on commit. `retry_stale_answer_pending()` is implemented as an APScheduler-callable sync wrapper that fetches notes stuck in `answer_pending` for > 1 minute and retries the full merge. The `answer_pending` value is included in the CHECK constraint in migration 003.
+
+#### QA-05 — Shared `_note_to_out` in `_note_serializers.py`; `voice.py` imports from it; shadow_reader_* fields included (`backend/app/api/_note_serializers.py`, `backend/app/api/voice.py`, `backend/app/api/notes.py`)
+Resolved. `backend/app/api/_note_serializers.py` provides a single canonical `_note_to_out(note: Note) -> NoteOut` that maps all three shadow_reader fields: `shadow_reader_status`, `shadow_reader_questions`, `shadow_reader_answer`. Both `voice.py` and `notes.py` import from this shared module. No duplicate implementations remain.
+
+#### QA-06 — No `SimpleNamespace` in `notes.py`; background task re-fetches note by id (`backend/app/api/notes.py`)
+Resolved. `SimpleNamespace` is no longer used as a fallback. `create_note` calls `await db.commit()` before scheduling background tasks, ensuring the note row is visible in any fresh session. `_run_ocr_and_pipeline` opens a fresh session, fetches the note by `note_id`, and aborts with `logger.error` if not found — no stub fallback. The comment explicitly documents the QA-06 fix rationale.
+
+#### QA-07 — `generate_questions` drops (not truncates) questions > 15 words (`backend/app/pipeline/shadow_reader.py`)
+Resolved. The loop appends items to `filtered` only when `len(q.split()) <= 15`; items exceeding the limit are skipped. The comment is explicit: `# else: drop — truncating would produce incomplete questions`. No `[:15]` word-count truncation exists anywhere in the function. The US-8 spec requirement "filter to strings ≤ 15 words" is met.
+
+#### QA-08 — `voice_upload` (file-mode) loads phrase list before transcription (`backend/app/api/voice.py`)
+Resolved. `voice_upload` now queries `UserVocabulary` for up to 500 terms (ordered by `usage_count DESC`) before calling `transcribe_audio_file`. It builds `loaded_phrases` including pronunciation hints, then calls `await transcribe_audio_file(audio_bytes, phrase_list=loaded_phrases or None)`. Phrase list load failure is caught and logged as a warning (soft-fail). US-7 task 3.3 is fulfilled.
+
+#### QA-09 — `lastPull` defaults to "now" on first boot (`frontend/src/sync/syncManager.ts`)
+Resolved. `start()` checks `await db.meta.get('lastPull')` and, if no entry exists, writes `new Date().toISOString()` before any `pullChanges()` is called. The epoch fallback `'1970-01-01T00:00:00Z'` in `pullChanges` is now unreachable on first boot. Subsequent pulls use the `server_time` cursor. First-run conflict misclassification is eliminated.
+
+#### QA-10 — `insights.py` uses `Depends(get_openai)` consistently (`backend/app/api/insights.py`)
+Resolved. All three OpenAI-consuming endpoints use `openai: AsyncAzureOpenAI = Depends(get_openai)`: `get_weekly_summary` (line 160), `get_patterns` (line 258), and `generate_express` (line 396). `get_openai` is imported from `app.services.openai_client`. The pattern is consistent across all endpoints.
+
+**Signal to Lead:** quality re-review 2 complete — PASSED
 
 ## Spec Auditor Findings Re-Review Round 2
-<!-- spec-auditor writes here -->
+
+> Re-review auditor: Spec Conformance Auditor
+> Re-review date: 2026-04-29
+> Base commit reviewed: 3851ee8bb7af66aeccdc589eabea76577601660e (HEAD)
+
+---
+
+### Round 1 Items — Status Update
+
+**SA-H1** (python-jose version pin) — **ACCEPTED**
+Design-justified per design.md "Backend requirements.txt (pinned — OQ-2 + OQ-4 resolved)". No spec deviation.
+
+**SA-H2** (passlib[bcrypt] version pin) — **ACCEPTED**
+Design-justified per design.md same section. No spec deviation.
+
+**SA-H3** (extra bcrypt>=4.0,<4.1 pin) — **ACCEPTED**
+Design-justified per design.md same section. No spec deviation.
+
+**SA-M1** (Migration 001 TEXT placeholder + drop + re-add embedding) — **STILL OPEN (lower priority)**
+Verified: `backend/alembic/versions/001_initial_schema.py` lines 94-135 still contain the two-step pattern — line 94 creates `sa.Column("embedding", sa.Text(), nullable=True)` as a placeholder, lines 134-135 execute `ALTER TABLE notes DROP COLUMN embedding` then `ALTER TABLE notes ADD COLUMN embedding vector(1536)`. Functionally correct for a green-field build; no correctness impact. No fix was applied in the Round 1 fix loop. Remains open as a low-priority NIT.
+
+**SA-N1** (slide-up keyframe in animations.css) — **VERIFIED / CLOSED**
+Confirmed: `frontend/src/styles/animations.css` contains `@keyframes slide-up { from { transform: translateY(100%) } to { transform: translateY(0) } }` and `.animate-slide-up { animation: slide-up 240ms ease-out both; }`. File is imported via `@import './animations.css'` in `globals.css`. Requirement met. NIT closed.
+
+**SA-L1, SA-L2, SA-L3** — **ACCEPTED** (design-justified, unchanged).
+
+---
+
+### New Files Structural Audit
+
+**`backend/app/api/_note_serializers.py`** — PASSED
+Single `_note_to_out(note: Note) -> NoteOut` helper. Correctly includes all three `shadow_reader_*` fields. Both `notes.py` (line 25) and `voice.py` (line 27) import from it. Scoped to QA-05 design-justified intent. No new spec deviation.
+
+**`backend/app/limiter.py`** — PASSED
+Extracts `Limiter` instance with `_get_user_or_ip` key function and `default_limits=["100/minute"]`. `main.py` and `auth.py` import from it correctly; `app.state.limiter` wired in `main.py:117`. Circular-import fix is scoped to SEC-03 intent. No new spec deviation.
+
+**`backend/app/utils/db_helpers.py`** — PASSED
+`get_or_create_tags_batch()` implements single SELECT-in + batch flush pattern. Used by `notes.py` and `processor.py`. No new spec deviation beyond PERF-01/PERF-N3 intent.
+
+**`backend/alembic/versions/004_add_patterns_cache.py`** — PASSED
+Adds `patterns_cached_json TEXT` and `patterns_cached_at TIMESTAMPTZ` to `users` table with `IF NOT EXISTS` guards. `down_revision = "003"` chain correct. Uses `op.execute(sa.text(...))` consistent with migration style in 001/002. No new spec deviation.
+
+**`backend/alembic/versions/005_add_fts_index.py`** — PASSED
+Adds `CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_notes_content_fts ON notes USING gin(to_tsvector('english', content))`. `down_revision = "004"` chain correct. `CONCURRENTLY` + `op.execute` is correct Alembic practice for this index type. No new spec deviation.
+
+**`backend/tests/test_security_config.py`** — PASSED
+Covers SEC-01 (JWT_SECRET_KEY validator: min-length, placeholder-in-production, allowed-in-dev) and SEC-06 (DEPLOYMENT.md documentation assertion). Well-structured with `monkeypatch` + `importlib.reload` for env-var isolation. No new spec deviation.
+
+**`frontend/src/__tests__/useNotes.test.ts`** — PASSED
+Tests PERF-09 via source-code inspection (`.toString()`) and Dexie mock. Checks for `.between()` call and absence of post-fetch JS date filter. Source-inspection approach is a minor test robustness NIT if hook is minified, but not a spec deviation.
+
+---
+
+### New Finding — SA-R2-M1 (MEDIUM)
+
+**`backend/app/api/sync.py` — Local `_note_to_out` not consolidated with QA-05 shared helper**
+
+- **Location**: `backend/app/api/sync.py:201-223`
+- **Finding**: The QA-05 fix extracted a shared `_note_to_out` into `backend/app/api/_note_serializers.py` and updated `notes.py` and `voice.py` to import it. However `sync.py` was not updated: it retains a local `_note_to_out` (lines 201-223) that omits all three `shadow_reader_*` fields (`shadow_reader_status`, `shadow_reader_questions`, `shadow_reader_answer`). The `GET /api/sync/pull` endpoint therefore serialises synced notes without shadow reader data — the same class of defect that QA-05/QA-13 was explicitly fixing.
+- **Impact**: Clients that pull synced notes via `GET /api/sync/pull` receive `shadow_reader_status = "pending"` (Pydantic default), `shadow_reader_questions = null`, and `shadow_reader_answer = null` regardless of DB values. This breaks the offline-first sync contract for US-8 Shadow Reader: synced notes will appear un-asked and unanswered after a pull even when the server state says otherwise.
+- **Recommendation**: In `sync.py`, remove the local `_note_to_out` definition (lines 201-223) and add `from app.api._note_serializers import _note_to_out`.
+- **Priority**: Medium — functional correctness gap on the sync pull path for US-8.
+
+---
+
+### Overall Verdict
+
+**ISSUES REMAIN**
+
+One new medium-priority finding identified during fresh structural audit:
+- **SA-R2-M1**: `backend/app/api/sync.py` retains a local `_note_to_out` that omits shadow_reader fields, missed by the QA-05 fix loop.
+
+All Round 1 SA items resolved: SA-H1/H2/H3/L1/L2/L3 are ACCEPTED (design-justified); SA-N1 is VERIFIED CLOSED (keyframe confirmed in animations.css); SA-M1 remains a low-priority NIT with no correctness impact.
+
+**Signal Lead:** `spec-auditor re-review 2 complete — ISSUES REMAIN: SA-R2-M1 (sync.py local _note_to_out omits shadow_reader fields, missed by QA-05 fix)`

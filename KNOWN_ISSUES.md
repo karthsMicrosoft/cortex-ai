@@ -6,6 +6,18 @@
 
 ---
 
+## ✅ Round 1 closed (2026-05-01) — see PROGRESS.md "Round 1"
+
+Four production bugs fixed and verified live:
+- `/api/notes` 500 (embedding column type mismatch) → fixed
+- `/api/voice/upload` 422 (form field name) → fixed
+- `/api/auth/refresh` 429 (rate limit too aggressive) → bumped 5→60/min
+- AI pipeline NotFoundError (Azure OpenAI deployments missing) → created `gpt-4o-mini` + `text-embedding-3-small` deployments
+
+Result: text note submission now reaches `Enriched` status end-to-end. Hard refresh preserves session.
+
+Round-2 issues filed by the UX-tester agent live in `e2e/ISSUES.md` (next pickup).
+
 ## P0 — Smoke test the deployed app end-to-end
 
 **Status:** Auth flow validated (register + auto-login working). Pipeline + offline + Phase 2 features not yet validated in a real browser.

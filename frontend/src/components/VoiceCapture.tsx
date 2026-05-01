@@ -37,7 +37,9 @@ async function uploadVoice(
   token: string,
 ): Promise<{ id: string; content: string; processing_status: string }> {
   const formData = new FormData();
-  formData.append('audio', audioBlob, `voice-${Date.now()}.webm`);
+  // Backend voice_upload expects field name 'file' (matches generic /api/upload).
+  // Sending 'audio' triggers a 422 "Field required: body.file" — fixed 2026-05-01.
+  formData.append('file', audioBlob, `voice-${Date.now()}.webm`);
 
   const res = await fetch(apiUrl('/api/voice/upload'), {
     method: 'POST',

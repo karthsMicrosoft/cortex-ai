@@ -122,7 +122,12 @@ async def login(
 # ---------------------------------------------------------------------------
 
 @router.post("/refresh", response_model=AccessTokenResponse)
-@limiter.limit("5/minute")  # SEC-03 — token-replay / brute-force protection
+# SEC-03: rate limit, but high enough to allow normal usage. Bumped 5→60/min
+# on 2026-05-01 because the original 5/min broke legitimate flows: SessionGate
+# calls /refresh on every page reload, opening 2–3 tabs hits the limit, and
+# Playwright + browser tests collide. JTI rotation already stops replay attacks
+# even at higher rates, and a 256-bit JTI cannot be brute-forced at 60/min.
+@limiter.limit("60/minute")
 async def refresh_token(
     request: Request,
     response: Response,

@@ -26,13 +26,37 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.database import Base
 
-# pgvector integration — falls back to Text in SQLite test environments.
+# pgvector integration — uses Vector(1536) on Postgres production, falls back
+# to Text for SQLite test environments. Selected by inspecting the dialect at
+# import time via env var (set by alembic env.py / app.config) — but the
+# simplest reliable trigger is presence of pgvector AND a non-SQLite
+# DATABASE_URL.
 try:
-    from pgvector.sqlalchemy import Vector
-    _VECTOR_COLUMN = lambda: mapped_column(Vector(1536), nullable=True)  # noqa: E731
+    from pgvector.sqlalchemy import Vector  # type: ignore[import-not-found]
     _HAS_PGVECTOR = True
 except ImportError:
+    Vector = None  # type: ignore[assignment, misc]
     _HAS_PGVECTOR = False
+
+
+def _embedding_column_type():  # noqa: ANN202
+    """Pick the right SQLAlchemy column type for `embedding`.
+
+    On Postgres (production) the column was created as `vector(1536)` by the
+    alembic migration. The ORM model MUST declare it as the same type or
+    INSERT statements bind the value as varchar and Postgres rejects with
+    `column "embedding" is of type vector but expression is of type
+    character varying`.
+
+    On SQLite (test fixture) the column doesn't exist as `vector` — fall
+    back to Text so unit tests using an in-memory SQLite DB still load.
+    """
+    import os
+    db_url = os.getenv("DATABASE_URL", "")
+    is_postgres = "postgres" in db_url or "asyncpg" in db_url
+    if _HAS_PGVECTOR and is_postgres:
+        return Vector(1536)
+    return Text()
 
 
 class Note(Base):
@@ -78,8 +102,11 @@ class Note(Base):
     mood: Mapped[str | None] = mapped_column(String(30), nullable=True)
     music_metadata: Mapped[dict] = mapped_column(JSON, default=dict)
     processing_status: Mapped[str] = mapped_column(String(20), default="raw")
-    # embedding: pgvector Vector(1536) in production, Text stub for SQLite tests
-    embedding: Mapped[object | None] = mapped_column(Text, nullable=True)  # type: ignore[type-arg]
+    # embedding: pgvector Vector(1536) in production, Text stub for SQLite tests.
+    # MUST match the actual column type chosen by alembic migration 001 — using
+    # Text on Postgres breaks INSERT with `column "embedding" is of type vector
+    # but expression is of type character varying` (DatatypeMismatchError).
+    embedding: Mapped[object | None] = mapped_column(_embedding_column_type(), nullable=True)  # type: ignore[type-arg]
     sync_status: Mapped[str] = mapped_column(String(20), default="synced")
     client_id: Mapped[str | None] = mapped_column(String(100), nullable=True)
 

@@ -204,6 +204,55 @@ Nothing critical. Optional cleanups:
 
 ---
 
+## Round 1 — Live UX bug-bash (2026-05-01)
+
+User filed HAR + console log after deploy showing:
+1. POST `/api/notes` and `/api/upload` returning **500 + no CORS header**
+2. POST `/api/voice/upload` returning **422 Field required: body.file**
+3. POST `/api/auth/refresh` returning **401** (then **429** when hammered)
+4. Notes stuck in "Pending sync" forever; status never advances past "Raw"
+
+### Root causes + fixes (all deployed live)
+
+| # | Bug | Root cause | Fix |
+|---|---|---|---|
+| 1 | `/api/notes` 500 (DatatypeMismatchError: column "embedding" is of type vector but expression is of type character varying) | `app/models/note.py` declared `embedding: mapped_column(Text, nullable=True)`. Postgres column is `vector(1536)` per migration 001. SQLAlchemy was binding values as varchar; INSERT rejected. | Replaced static `Text` declaration with `_embedding_column_type()` that returns `Vector(1536)` when `DATABASE_URL` contains `postgres`/`asyncpg`, else `Text` for SQLite test fixture. |
+| 2 | `/api/voice/upload` 422 "Field required: body.file" | Frontend sent `formData.append('audio', ...)` but backend expects field `file`. | Renamed to `formData.append('file', ...)` in `VoiceCapture.tsx`. |
+| 3 | `/api/auth/refresh` 429 on normal use | Rate limit was 5/min — page reloads, multi-tab, and Playwright tests trip it instantly. Brute-force defense was a non-issue (256-bit JTI cannot be cracked at this rate). | Bumped to 60/min in `auth.py:refresh_token`. |
+| 4 | AI pipeline silent NotFoundError → status="Failed" | Azure OpenAI account `cortexks-openai` had **zero deployments**. The Bicep provisions the account but does not deploy models. | Created two GlobalStandard SKU deployments via `az cognitiveservices account deployment create`: `gpt-4o-mini` (50 cap) + `text-embedding-3-small` (50 cap). |
+
+### Live verification (post-deploy)
+
+- POST `/api/auth/login` → 200 ✓
+- POST `/api/notes` (text) → 201 ✓ (was 500)
+- POST `/api/auth/refresh` → 200 ✓ (was 429)
+- Hard reload while signed in → stays signed in ✓
+- Type text note in UI → flips Pending → Raw → Enriched ✓ (verified at `screenshots/round-1-after/06-library-pipeline-enriched.png`)
+- Auto-categorized "Ideas" + auto-tagged inferred from content ✓
+
+### Screenshots (round 1)
+
+- `screenshots/round-1-before/01-login-page.png` — landing
+- `screenshots/round-1-before/02-capture-page.png` — capture form
+- `screenshots/round-1-before/03-library-page.png` — empty library after sign-in
+- `screenshots/round-1-before/04-profile-page.png` — profile view
+- `screenshots/round-1-after/03-library-page-with-synced-note.png` — first note synced (status=Raw before pipeline)
+- `screenshots/round-1-after/05-after-hard-refresh-still-logged-in.png` — refresh preserves session
+- `screenshots/round-1-after/06-library-pipeline-enriched.png` — pipeline runs end-to-end (status=Enriched)
+
+### Test infrastructure added (this round)
+
+- `e2e/playwright.config.ts` — Chromium project with shared auth-setup dependency
+- `e2e/tests/helpers.ts` — `useSharedUser()`, `registerAndLogin()`, `startNetworkRecorder()`
+- `e2e/tests/auth.setup.ts` — registers a single shared user, persists `storageState` (avoids hitting `/register` 10/min rate limit across the suite)
+- `e2e/tests/01-auth-and-session.spec.ts` — register → auto-login, hard-reload preserves session, profile renders, logout returns to /login
+- `e2e/tests/02-text-note-sync.spec.ts` — text note → 201 → not stuck pending
+- `e2e/tests/03-note-detail.spec.ts` — note detail no 404 on `/api/notes/{id}` or `/api/search/similar/{id}`
+- `e2e/tests/04-voice-capture.spec.ts` — fake media stream → mic FAB → no 422
+- `e2e/tests/05-navigation-no-500s.spec.ts` — every protected route loads without 5xx + no console CORS errors
+
+---
+
 ## 7 — Pickup points (for resuming work)
 
 **If continuing here in this session:** Smoke test the live deployment in a browser (see `PLAN.md` § 5). Then triage the 30 backend test failures (see `KNOWN_ISSUES.md`).

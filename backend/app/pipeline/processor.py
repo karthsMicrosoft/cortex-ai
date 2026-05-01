@@ -123,8 +123,13 @@ class AIPipeline:
         Prompt from spec § 2.5 verbatim.
         Skipped for source_type='text' (content already clean).
         """
-        if note.source_type == "text":
-            # Text notes are already clean — skip LLM cleanup, advance status.
+        if note.source_type in ("text", "image"):
+            # Text notes are already clean; image notes have OCR-extracted text
+            # written directly to note.content during the OCR step. Either way,
+            # there is no raw_transcription to clean — skip LLM cleanup and
+            # advance status straight to PROCESSED. (Bug 14 fix 2026-05-01:
+            # previously image notes hit the empty-raw_transcription guard
+            # below and were wrongly marked 'failed' with "(no speech detected)".)
             note.processing_status = ProcessingStage.PROCESSED
             await self.db.commit()
             logger.info("pipeline_stage_complete: capture(skip) note_id=%s", note.id)

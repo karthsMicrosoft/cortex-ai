@@ -14,6 +14,7 @@ Environment:
 - AZURE_SPEECH_REGION  (default: westus2)
 """
 import logging
+import subprocess
 import tempfile
 import os
 
@@ -51,11 +52,20 @@ async def transcribe_audio_file(
     )
     speech_config.speech_recognition_language = language
 
-    # Write audio bytes to a temporary file — Azure Speech SDK requires a path
-    # for file-mode recognition (PushAudioInputStream is for streaming).
-    with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp_file:
-        tmp_path = tmp_file.name
-        tmp_file.write(audio_bytes)
+    # Bug 13 fix (2026-05-01): MediaRecorder's audio/webm output is OPUS-in-WebM.
+    # Azure Speech SDK file-mode expects WAV/PCM by default — feeding it WebM
+    # bytes inside a .wav-suffixed temp file caused NoMatch on every audible
+    # recording. Convert WebM (or any input) to 16 kHz mono PCM WAV via ffmpeg
+    # (already in our Docker image) before handing the path to Speech.
+    src_path = _write_temp(audio_bytes, suffix=".webm")
+    try:
+        wav_path = _ffmpeg_to_wav(src_path)
+    except Exception as exc:  # noqa: BLE001
+        os.unlink(src_path)
+        logger.error("Speech transcribe: ffmpeg failed err=%s", exc)
+        raise RuntimeError(f"Audio conversion failed: {exc}") from exc
+    os.unlink(src_path)
+    tmp_path = wav_path
 
     try:
         audio_config = speechsdk.AudioConfig(filename=tmp_path)
@@ -104,6 +114,53 @@ async def _recognize_once(recognizer: speechsdk.SpeechRecognizer):
     # The SDK returns a concurrent.futures-style Future; run it in executor.
     result = await loop.run_in_executor(None, future.get)
     return result
+
+
+def _write_temp(data: bytes, suffix: str) -> str:
+    """Write *data* to a NamedTemporaryFile with *suffix* and return its path.
+
+    Caller is responsible for unlinking the returned path.
+    """
+    fd, path = tempfile.mkstemp(suffix=suffix)
+    try:
+        with os.fdopen(fd, "wb") as f:
+            f.write(data)
+    except Exception:
+        os.unlink(path)
+        raise
+    return path
+
+
+def _ffmpeg_to_wav(src_path: str) -> str:
+    """Convert *src_path* (any container/codec ffmpeg supports) to 16 kHz mono PCM WAV.
+
+    Returns the path to the new .wav file. Caller must unlink it.
+    Raises RuntimeError if ffmpeg fails or is not installed.
+    """
+    out_path = src_path + ".wav"
+    try:
+        result = subprocess.run(
+            [
+                "ffmpeg",
+                "-y",
+                "-i", src_path,
+                "-ar", "16000",
+                "-ac", "1",
+                "-f", "wav",
+                out_path,
+            ],
+            capture_output=True,
+            timeout=60,
+        )
+    except FileNotFoundError as exc:
+        raise RuntimeError("ffmpeg binary not found in PATH") from exc
+    except subprocess.TimeoutExpired as exc:
+        raise RuntimeError("ffmpeg conversion timed out after 60s") from exc
+
+    if result.returncode != 0:
+        stderr = result.stderr.decode("utf-8", errors="replace")[-500:]
+        raise RuntimeError(f"ffmpeg exited {result.returncode}: {stderr}")
+    return out_path
 
 
 # ---------------------------------------------------------------------------

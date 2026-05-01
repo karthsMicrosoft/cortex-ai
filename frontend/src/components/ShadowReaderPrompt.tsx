@@ -1,19 +1,20 @@
 /**
- * ShadowReaderPrompt — opt-in modal for the Shadow Reader feature (US-8).
+ * ShadowReaderPrompt — auto-rendering bottom-sheet for the Shadow Reader feature (US-8).
  *
- * Behaviour (revised 2026-05-01 to address bugs 8 + 10):
- *  - Renders a small "Want to go deeper?" launcher button in the page chrome.
- *    The user clicks it to open the modal — NO auto-pop, NO bottom-sheet
- *    that randomly appears mid-scroll.
- *  - On open, fetches /api/notes/{noteId}/shadow-reader.
- *      • status === 'asked' + questions → show questions + textarea
- *      • status === 'pending'            → "Questions are still generating…"
- *      • everything else                 → "No active prompt for this note"
- *  - Send → POST /api/notes/{id}/shadow-reader/answer; modal closes.
- *  - Voice mic was REMOVED: it called a non-existent /api/upload/audio
- *    endpoint and on failure left the page rendering
- *    "(recording pending transcription…)". Text-only answers for now;
- *    voice answer is P3 follow-up.
+ * Behaviour (Round-4 revert 2026-05-01 — bug 16):
+ *  - Polls /api/notes/{id}/shadow-reader on the B17 tiered schedule:
+ *      • 10 × 2 s   (first 20 s)
+ *      • 5  × 5 s   (next 25 s)
+ *      • stops after status reaches a terminal state (asked / answered /
+ *        dismissed / skipped) OR after the 45 s window expires.
+ *  - When status === 'asked' the component auto-renders a bottom-sheet docked
+ *    above the BottomNav (h-16 on mobile, gone on ≥ sm). This is NOT a
+ *    role='dialog' modal — it does not block page interaction.
+ *  - When status is anything else, the component returns null (renders nothing).
+ *  - Voice mic was REMOVED in the previous revision — it called a non-existent
+ *    /api/upload/audio endpoint and on failure left the page rendering
+ *    "(recording pending transcription…)". Text-only answers stay; voice
+ *    answer is a P3 follow-up.
  */
 
 import { useCallback, useEffect, useState } from 'react';
@@ -26,54 +27,92 @@ interface Props {
   onComplete?: () => void;
 }
 
-type ModalState =
-  | { kind: 'closed' }
-  | { kind: 'loading' }
-  | { kind: 'asked'; questions: string[] }
-  | { kind: 'pending' }
-  | { kind: 'unavailable'; status: ShadowReaderStatus };
+const TERMINAL_STATUSES: ReadonlySet<ShadowReaderStatus> = new Set([
+  'asked',
+  'answered',
+  'dismissed',
+  'skipped',
+]);
+
+const FAST_TIER_INTERVAL_MS = 2000;
+const FAST_TIER_POLLS = 10;
+const SLOW_TIER_INTERVAL_MS = 5000;
+const SLOW_TIER_POLLS = 5;
 
 export function ShadowReaderPrompt({ noteId, onComplete }: Props): React.ReactElement | null {
-  const [modal, setModal] = useState<ModalState>({ kind: 'closed' });
+  const [status, setStatus] = useState<ShadowReaderStatus>('pending');
+  const [questions, setQuestions] = useState<string[]>([]);
   const [answerText, setAnswerText] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [hidden, setHidden] = useState(false); // user dismissed/answered locally
 
-  const open = useCallback(async () => {
-    setModal({ kind: 'loading' });
-    setError(null);
-    try {
-      const data = await getQuestions(noteId);
-      if (data.status === 'asked' && data.questions.length > 0) {
-        setModal({ kind: 'asked', questions: data.questions });
+  // -------------------------------------------------------------------------
+  // Polling — B17 tiered schedule (10×2s, then 5×5s, total 45s window)
+  // -------------------------------------------------------------------------
+  useEffect(() => {
+    let cancelled = false;
+    let timerId: ReturnType<typeof setTimeout> | null = null;
+    let pollCount = 0;
+
+    const scheduleNext = () => {
+      if (cancelled) return;
+      if (pollCount >= FAST_TIER_POLLS + SLOW_TIER_POLLS) return;
+      const delay =
+        pollCount < FAST_TIER_POLLS ? FAST_TIER_INTERVAL_MS : SLOW_TIER_INTERVAL_MS;
+      timerId = setTimeout(() => {
+        // void wrap — fire-and-forget so the timer fires synchronously and the
+        // promise chain settles via microtasks.
+        void runPoll();
+      }, delay);
+    };
+
+    const runPoll = async () => {
+      if (cancelled) return;
+      pollCount += 1;
+      let data;
+      try {
+        data = await getQuestions(noteId);
+      } catch {
+        // Best-effort polling — swallow transient errors and try again.
+        scheduleNext();
         return;
       }
-      if (data.status === 'pending') {
-        setModal({ kind: 'pending' });
+      if (cancelled) return;
+      setStatus(data.status);
+      if (data.status === 'asked') {
+        setQuestions(data.questions);
+      }
+      if (TERMINAL_STATUSES.has(data.status)) {
+        // Reached a terminal state — stop polling.
         return;
       }
-      setModal({ kind: 'unavailable', status: data.status });
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Could not load follow-up questions');
-      setModal({ kind: 'closed' });
-    }
+      scheduleNext();
+    };
+
+    scheduleNext();
+
+    return () => {
+      cancelled = true;
+      if (timerId) {
+        clearTimeout(timerId);
+        timerId = null;
+      }
+    };
   }, [noteId]);
 
-  const close = useCallback(() => {
-    setModal({ kind: 'closed' });
-    setAnswerText('');
-    setError(null);
-  }, []);
-
+  // -------------------------------------------------------------------------
+  // Actions
+  // -------------------------------------------------------------------------
   const handleDismiss = useCallback(async () => {
     try {
       await dismiss(noteId);
     } catch {
-      // Best-effort — close the modal regardless
+      // best-effort
     }
-    close();
+    setHidden(true);
     onComplete?.();
-  }, [noteId, close, onComplete]);
+  }, [noteId, onComplete]);
 
   const handleSubmit = useCallback(async () => {
     const trimmed = answerText.trim();
@@ -82,142 +121,98 @@ export function ShadowReaderPrompt({ noteId, onComplete }: Props): React.ReactEl
     setError(null);
     try {
       await answer(noteId, trimmed);
-      close();
+      setHidden(true);
       onComplete?.();
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to submit reflection');
     } finally {
       setIsSubmitting(false);
     }
-  }, [answerText, isSubmitting, noteId, close, onComplete]);
+  }, [answerText, isSubmitting, noteId, onComplete]);
 
-  // Trigger an open() on demand from outside (e.g. a header button on the
-  // detail page). For now, the button is rendered inline below.
-  useEffect(() => {
-    // No-op — modal stays closed until the user clicks the launcher.
-  }, []);
-
-  const isOpen = modal.kind !== 'closed';
+  // -------------------------------------------------------------------------
+  // Render — auto-show only when status === 'asked' and not locally hidden
+  // -------------------------------------------------------------------------
+  if (hidden) return null;
+  if (status !== 'asked' || questions.length === 0) return null;
 
   return (
-    <>
-      {/* Launcher — always visible (Bug 8 fix: persistent button instead of
-         random bottom-sheet popups) */}
-      <button
-        type="button"
-        onClick={() => void open()}
-        className="inline-flex items-center gap-2 rounded-full border border-indigo-500/40 bg-indigo-900/30 px-3 py-1.5 text-xs font-medium text-indigo-200 hover:bg-indigo-900/60 focus:outline-none focus:ring-2 focus:ring-indigo-400"
-        aria-label="Open Shadow Reader follow-up prompt"
-        data-testid="shadow-reader-launcher"
-      >
-        <Sparkles className="h-3.5 w-3.5" aria-hidden="true" />
-        Want to go deeper?
-      </button>
-
-      {/* Modal overlay */}
-      {isOpen && (
-        <div
-          className="fixed inset-0 z-50 flex items-end justify-center bg-black/60 sm:items-center"
-          role="dialog"
-          aria-modal="true"
-          aria-label="Shadow Reader"
-          onClick={close}
-        >
-          <div
-            className="w-full max-w-md rounded-t-3xl border-t border-indigo-500/30 bg-slate-900 p-5 shadow-2xl sm:rounded-3xl sm:border"
-            onClick={(e) => e.stopPropagation()}
-          >
-            {/* Header */}
-            <div className="mb-3 flex items-start justify-between">
-              <div className="flex items-center gap-2">
-                <Sparkles className="h-4 w-4 text-indigo-400" aria-hidden="true" />
-                <span className="text-sm font-medium text-slate-200">Want to go deeper?</span>
-              </div>
-              <button
-                type="button"
-                onClick={close}
-                className="rounded p-1 text-slate-500 hover:text-slate-300 focus:outline-none focus:ring-2 focus:ring-indigo-400"
-                aria-label="Close"
-              >
-                <X className="h-4 w-4" aria-hidden="true" />
-              </button>
-            </div>
-
-            {/* Body */}
-            {modal.kind === 'loading' && (
-              <p className="text-sm text-slate-400">Loading…</p>
-            )}
-
-            {modal.kind === 'pending' && (
-              <p className="text-sm text-slate-400">
-                Follow-up questions are still being generated. Please try again in a few seconds.
-              </p>
-            )}
-
-            {modal.kind === 'unavailable' && (
-              <p className="text-sm text-slate-400">
-                {modal.status === 'answered'
-                  ? 'You already answered the prompt for this note.'
-                  : modal.status === 'dismissed'
-                  ? 'You dismissed the prompt for this note.'
-                  : modal.status === 'skipped'
-                  ? 'No prompt was generated for this note.'
-                  : 'No active prompt for this note.'}
-              </p>
-            )}
-
-            {modal.kind === 'asked' && (
-              <>
-                <ul className="mb-4 space-y-2">
-                  {modal.questions.map((q, idx) => (
-                    <li key={idx} className="text-base leading-relaxed text-slate-100">
-                      {q}
-                    </li>
-                  ))}
-                </ul>
-
-                <textarea
-                  value={answerText}
-                  onChange={(e) => setAnswerText(e.target.value)}
-                  placeholder="Reflect briefly…"
-                  rows={3}
-                  className="mb-3 w-full resize-none rounded-xl border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-100 placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-indigo-500"
-                  aria-label="Reflection answer"
-                  onKeyDown={(e) => {
-                    if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
-                      void handleSubmit();
-                    }
-                  }}
-                />
-
-                {error && (
-                  <p className="mb-3 text-xs text-red-400" role="alert">{error}</p>
-                )}
-
-                <div className="flex justify-end gap-2">
-                  <button
-                    type="button"
-                    onClick={() => void handleDismiss()}
-                    className="rounded-lg px-3 py-2 text-sm text-slate-300 hover:bg-slate-800 focus:outline-none focus:ring-2 focus:ring-indigo-400"
-                  >
-                    Skip
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => void handleSubmit()}
-                    disabled={isSubmitting || !answerText.trim()}
-                    className="inline-flex items-center gap-1.5 rounded-lg bg-indigo-600 px-3 py-2 text-sm font-semibold text-white hover:bg-indigo-500 disabled:opacity-50 focus:outline-none focus:ring-2 focus:ring-indigo-400"
-                    aria-label="Submit reflection"
-                  >
-                    <Send className="h-4 w-4" aria-hidden="true" />
-                    {isSubmitting ? 'Saving…' : 'Send'}
-                  </button>
-                </div>
-              </>
-            )}
+    <div
+      // Bottom-sheet positioned ABOVE the BottomNav (h-16 = 64px). On ≥ sm the
+      // BottomNav is hidden, so the sheet sits closer to the bottom edge.
+      // NOT a role='dialog' — does not block page interaction (the UI
+      // non-blocking guarantee in ShadowReaderPrompt.test.tsx).
+      className="fixed inset-x-0 bottom-20 z-30 mx-auto w-full max-w-md px-4 sm:bottom-6"
+      aria-label="Shadow Reader"
+      data-testid="shadow-reader-sheet"
+    >
+      <div className="rounded-3xl border border-indigo-500/30 bg-slate-900/95 p-5 shadow-2xl backdrop-blur">
+        {/* Header */}
+        <div className="mb-3 flex items-start justify-between">
+          <div className="flex items-center gap-2">
+            <Sparkles className="h-4 w-4 text-indigo-400" aria-hidden="true" />
+            <span className="text-sm font-medium text-slate-200">Want to go deeper?</span>
           </div>
+          <button
+            type="button"
+            onClick={() => void handleDismiss()}
+            className="rounded p-1 text-slate-500 hover:text-slate-300 focus:outline-none focus:ring-2 focus:ring-indigo-400"
+            aria-label="Dismiss Shadow Reader prompt"
+          >
+            <X className="h-4 w-4" aria-hidden="true" />
+          </button>
         </div>
-      )}
-    </>
+
+        {/* Questions */}
+        <ul className="mb-4 space-y-2">
+          {questions.map((q, idx) => (
+            <li key={idx} className="text-base leading-relaxed text-slate-100">
+              {q}
+            </li>
+          ))}
+        </ul>
+
+        {/* Answer textarea */}
+        <textarea
+          value={answerText}
+          onChange={(e) => setAnswerText(e.target.value)}
+          placeholder="Reflect briefly…"
+          rows={3}
+          className="mb-3 w-full resize-none rounded-xl border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-100 placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+          aria-label="Reflection answer"
+          onKeyDown={(e) => {
+            if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
+              void handleSubmit();
+            }
+          }}
+        />
+
+        {error && (
+          <p className="mb-3 text-xs text-red-400" role="alert">
+            {error}
+          </p>
+        )}
+
+        <div className="flex justify-end gap-2">
+          <button
+            type="button"
+            onClick={() => void handleDismiss()}
+            className="rounded-lg px-3 py-2 text-sm text-slate-300 hover:bg-slate-800 focus:outline-none focus:ring-2 focus:ring-indigo-400"
+          >
+            Skip
+          </button>
+          <button
+            type="button"
+            onClick={() => void handleSubmit()}
+            disabled={isSubmitting || !answerText.trim()}
+            className="inline-flex items-center gap-1.5 rounded-lg bg-indigo-600 px-3 py-2 text-sm font-semibold text-white hover:bg-indigo-500 disabled:opacity-50 focus:outline-none focus:ring-2 focus:ring-indigo-400"
+            aria-label="Submit reflection"
+          >
+            <Send className="h-4 w-4" aria-hidden="true" />
+            {isSubmitting ? 'Saving…' : 'Send'}
+          </button>
+        </div>
+      </div>
+    </div>
   );
 }

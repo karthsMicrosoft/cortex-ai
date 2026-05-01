@@ -438,19 +438,17 @@ export default function NoteDetailPage(): React.ReactElement {
             </div>
           </section>
         )}
-        {/* Shadow Reader prompt (US-8) — Bug 8 fix: persistent launcher button
-            rendered for ALL synced notes; modal opens only on user click,
-            regardless of status. */}
+        {/* Shadow Reader prompt (US-8) — Bug 16 (2026-05-01): auto-renders a
+            bottom-sheet when status='asked'; component returns null otherwise.
+            The sheet is positioned above the BottomNav so it never overlaps. */}
         {serverNote && (
-          <section aria-label="Shadow Reader">
-            <ShadowReaderPrompt
-              noteId={serverNote.id}
-              onComplete={() => {
-                // Refresh note to pick up answered/dismissed status
-                void getNote(serverNote.id).then(setServerNote).catch(() => undefined);
-              }}
-            />
-          </section>
+          <ShadowReaderPrompt
+            noteId={serverNote.id}
+            onComplete={() => {
+              // Refresh note to pick up answered/dismissed status
+              void getNote(serverNote.id).then(setServerNote).catch(() => undefined);
+            }}
+          />
         )}
       </main>
     </div>

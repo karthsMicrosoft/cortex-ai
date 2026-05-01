@@ -25,6 +25,7 @@ from sqlalchemy.orm import selectinload
 
 from app.api._note_serializers import _note_to_out
 from app.auth.jwt import get_current_user
+from app.config import settings
 from app.database import get_db
 from app.models.note import Note
 from app.models.tag import Tag, note_tags as note_tags_table
@@ -116,10 +117,19 @@ async def create_note(
     await db.flush()
 
     # Handle tags
+    # Bug 15 fix (2026-05-01): image notes always get an 'image' tag so users
+    # can find/filter them at a glance. Merge with any caller-supplied tags;
+    # de-dup by case-insensitive name.
+    initial_tags = list(payload.tags or [])
+    if payload.source_type == "image" and not any(
+        (t or "").strip().lower() == "image" for t in initial_tags
+    ):
+        initial_tags.append("image")
+
     # Insert directly into the note_tags association table instead of using the
     # ORM relationship assignment which would trigger a lazy load on the new note.
-    if payload.tags:
-        tag_objs = await _get_or_create_tags(db, current_user_id, payload.tags)
+    if initial_tags:
+        tag_objs = await _get_or_create_tags(db, current_user_id, initial_tags)
         if tag_objs:
             await db.execute(
                 insert(note_tags_table),

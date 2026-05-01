@@ -327,6 +327,37 @@ Failed deploys leave Cognitive Services accounts in soft-delete state for ~7 day
 ### 22m — Frontend TypeScript build excludes tests
 `tsconfig.json` originally included `src/`. Production build (`tsc && vite build`) ran type checks against test files which had unused imports + node-specific globals (`global`, `process`, `fs`, `path`). Solution: added `"exclude": ["src/__tests__", "src/**/*.test.ts", "src/**/*.test.tsx"]`. Tests still type-check via `vitest` configuration which has its own tsconfig context.
 
+### 22n — MediaRecorder webm/opus must be transcoded before Azure Speech file-mode (Round 4 / Bug 13)
+Browsers' `MediaRecorder` produces `audio/webm; codecs=opus` (or `audio/ogg; opus`) for the live recording. Azure Speech `SpeechRecognizer.recognize_once_async()` in file mode expects WAV (PCM) by default and silently returns `NoMatch` when the file doesn't parse — there's no clear error to the caller. Renaming the file to `.wav` doesn't help; the SDK reads the container/codec.
+
+**Decision:** in `services/speech.py`, write the inbound bytes to a `.webm` temp file and convert to **16 kHz mono PCM WAV** via the `ffmpeg` binary already present in the Docker image. Hand the resulting WAV path to `AudioConfig`. Two helpers: `_write_temp(data, suffix)` and `_ffmpeg_to_wav(src)`.
+
+**Why ffmpeg over another codec adapter:**
+- ffmpeg is already installed in the backend Dockerfile (`apt-get install -y ffmpeg`).
+- It tolerates *any* MediaRecorder mime type the browser picks (Safari may emit `audio/mp4`, Firefox `audio/ogg`); a single ffmpeg invocation handles all.
+- 60 s subprocess timeout is plenty for a one-shot recording (MVP caps voice notes well below that).
+
+**Trade-off accepted:** an extra subprocess fork per upload (≤200 ms in our tests). The streaming WebSocket STT path (`/api/voice/stream`) is unaffected — it talks PCM frames directly to `PushAudioInputStream` and never sees the file.
+
+### 22o — Stage 1 capture must skip image notes (Round 4 / Bug 14)
+The OCR pipeline writes the recognized text directly to `note.content` and sets `processing_status='transcribed'`, then schedules the main pipeline. Stage 1 (`_stage_capture`) was originally only short-circuited for `source_type='text'`. For images, `raw_transcription` is `None`/empty, so the empty-transcription guard added in Round 1 (Bug 6) wrongly marked image notes `failed` with "(no speech detected)". The visible OCR text was overwritten in the UI by that marker.
+
+**Decision:** treat `image` like `text` in Stage 1 — both already have clean content. Skip the LLM cleanup, advance status to `processed`, and let Stage 2 enrichment run. No new state machine, no separate code path; one tuple membership check.
+
+### 22p — Image notes auto-tagged `'image'` at creation (Round 4 / Bug 15)
+Library/sidebar tag filters needed a uniform way to find image notes. Decision: in `create_note`, if `source_type == 'image'`, merge `'image'` into the caller-supplied tag list (case-insensitive de-dup). Image-extracted text content can still produce additional Stage 2 LLM tags. We did **not** introduce a hard-coded `image` row in the DB — it's just another `Tag` row created on-demand via `_get_or_create_tags`, indistinguishable from any other tag.
+
+### 22q — Shadow Reader auto-render restored, positioned above BottomNav (Round 4 / Bug 16)
+Round 3 (Bug 8) had replaced the auto-rendering bottom-sheet with a manual launcher button after the user complained about the sheet randomly popping mid-scroll. Round 4 user feedback was that the launcher felt manual and they preferred auto-render — *but with proper alignment* (no overlap with the 64 px BottomNav).
+
+**Decision:** rewrite `ShadowReaderPrompt.tsx` to:
+1. Poll `/api/notes/{id}/shadow-reader` on mount via the B17 schedule (10×2 s + 5×5 s, 45 s total window). Stop on terminal status (`asked`/`answered`/`dismissed`/`skipped`).
+2. When `status === 'asked'`, auto-render an inline bottom-sheet at `fixed inset-x-0 bottom-20 z-30 mx-auto w-full max-w-md sm:bottom-6`. The `bottom-20` (80 px) on mobile clears the BottomNav (h-16 = 64 px); on `≥ sm` the BottomNav is hidden so we drop to `bottom-6` (24 px).
+3. Never use `role='dialog'` — this preserves the UI non-blocking guarantee codified in `ShadowReaderPrompt.test.tsx`.
+4. Local "hidden" flag after dismiss/answer so the sheet doesn't reappear on the next poll.
+
+The voice mic button stays out (Round 3 / Bug 10) — text answers only; voice answer remains a P3 follow-up.
+
 ---
 
 ## 23 — Things explicitly NOT done (and why)

@@ -2,9 +2,23 @@
 
 > **Open work, bugs not fixed, gaps from "fully done."** Anything tagged P0/P1/P2 here is meant to be picked up by the next agent.
 
-**Last updated:** 2026-05-01 (round 3 closed)
+**Last updated:** 2026-05-01 (round 4 closed)
 
 ---
+
+## ✅ Round 4 closed (2026-05-01) — see PROGRESS.md "Round 4"
+
+User-reported follow-up bug-bash with **5 issues** including a P0 voice-transcription regression. All fixed and deployed.
+
+| # | Bug | Status |
+|---|---|---|
+| 12 | Delete note with audio/image attachments → 500 / "Failed to fetch" | ✅ Added `from app.config import settings` to `notes.py` (was used by `_blob_path_from_url` without import) |
+| 13 (P0) | Voice notes show "(no speech detected)" despite real audible speech | ✅ MediaRecorder emits `audio/webm;opus`; Azure Speech file-mode expected WAV. Added `_write_temp` + `_ffmpeg_to_wav` helpers in `services/speech.py` so transcribe path converts WebM→16 kHz mono PCM WAV via the ffmpeg already present in the Docker image, then hands the WAV to the SDK |
+| 14 | Image upload regressed to "(no speech detected)" after the OCR write | ✅ Stage 1 capture in `pipeline/processor.py` now skips `source_type in ("text", "image")` — image notes get content from OCR directly; the empty-`raw_transcription` guard no longer fires |
+| 15 | Image notes had no default `image` tag → not filterable in Library | ✅ `create_note` in `api/notes.py` auto-merges `image` tag for `source_type == 'image'` |
+| 16 | Shadow Reader was opt-in launcher button (Round-3 fix); user wanted auto-render restored without overlap with BottomNav | ✅ Rewrote `ShadowReaderPrompt.tsx` to auto-render an inline bottom-sheet on `status === 'asked'`, positioned `bottom-20` (clears 64 px BottomNav) with `sm:bottom-6` on desktop. NOT `role='dialog'` — non-blocking. Polling preserves B17 schedule (10×2 s + 5×5 s, 45 s window). |
+
+**Tests:** New `backend/tests/test_regression_round4_fixes.py` with 14 cases (all pass). Existing `test_pipeline.py` (39/39) still green.
 
 ## ✅ Round 3 closed (2026-05-01) — see PROGRESS.md "Round 3"
 

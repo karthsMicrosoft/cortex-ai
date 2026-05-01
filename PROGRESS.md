@@ -2,7 +2,7 @@
 
 > **Chronological log of what's been done.** New work appends to the end. Use this to verify "we already did X" before re-doing.
 
-**Last updated:** 2026-04-30
+**Last updated:** 2026-05-01 (round 4 closed)
 
 ---
 
@@ -322,6 +322,43 @@ After clearing the local Dexie `lastPull` cursor and reloading:
 - `screenshots/round-3-after/09-library-select-mode-bulk-delete.png` — Select mode active + Delete button
 - `screenshots/round-3-after/10-note-detail-with-editor-related-shadowreader-button.png` — full note view
 - `screenshots/round-3-after/11-shadow-reader-modal-on-click.png` — opt-in modal
+
+---
+
+## Round 4 — Five new bugs from Round-3 follow-up testing (2026-05-01)
+
+User filed five new issues after Round-3 deploy, including a **P0 voice transcription regression**.
+
+### Fixed and live-verified
+
+| # | Title | Root cause | Fix |
+|---|---|---|---|
+| **12** | Delete note with audio/image attachments → 500 + "Failed to fetch" (CORS missing) | `_blob_path_from_url` referenced `settings.AZURE_STORAGE_CONTAINER` but `notes.py` did not `from app.config import settings`. The `NameError` raised before CORSMiddleware could attach the response header, so the browser surfaced the failure as CORS | Added the missing import. DELETE now returns 204 cleanly; SAS-URL container parsing works |
+| **13 (P0)** | Voice notes show "(no speech detected — please re-record)" despite real audible speech | MediaRecorder writes `audio/webm; codecs=opus`. `transcribe_audio_file` was writing those bytes to a `.wav`-suffixed temp file and handing it to Azure Speech file-mode. The SDK parsed the file as broken WAV → `NoMatch` → status `failed` + Round-1's empty-marker content. *Voice is the entire app's strength* — this was the highest-priority bug | Added `_write_temp(bytes, suffix=".webm")` and `_ffmpeg_to_wav(src)` helpers in `services/speech.py`. Transcribe path: write WebM bytes → ffmpeg `-ar 16000 -ac 1 -f wav` → AudioConfig(filename=wav). The Dockerfile already installs `ffmpeg` |
+| **14** | Image upload regressed to "(no speech detected — please re-record)" | OCR sets `processing_status='transcribed'` after writing the OCR text to `note.content`. Stage 1 capture in `processor.py` triggered on `RAW ∪ TRANSCRIBED` and only short-circuited for `source_type='text'`. For `source_type='image'`, `raw_transcription` is empty, so the empty-transcription guard from Round-1 wrongly marked image notes `failed` | Stage 1 now skips both `text` and `image` source types — `processing_status` advances straight to `processed` and Stage 2 enrichment proceeds |
+| **15** | Image notes had no default `image` tag → not filterable in Library | `create_note` didn't auto-tag image source type | Auto-merge `'image'` into the caller-supplied tag list when `source_type == 'image'` (case-insensitive de-dup) |
+| **16** | Round-3's opt-in launcher button felt manual; user wanted Shadow Reader auto-render restored without overlapping the BottomNav | Round-3 fix for Bug 8 had replaced auto-render with an explicit launcher button | Rewrote `ShadowReaderPrompt.tsx`: B17 polling on mount (10×2 s + 5×5 s, 45 s window), stops on terminal status. When `status === 'asked'` auto-renders an inline bottom-sheet styled `fixed inset-x-0 bottom-20 sm:bottom-6` (clears 64 px BottomNav on mobile, less margin on desktop). NOT `role='dialog'` — does not block page interaction |
+
+### Tests
+
+- New `backend/tests/test_regression_round4_fixes.py` with 14 assertions covering all five bugs (settings import + container ref, ffmpeg helpers + 16 kHz mono args, processor capture skip-for-image, image-tag default, no-launcher + bottom-clearance + non-modal Shadow Reader). 14/14 pass.
+- Existing `tests/test_pipeline.py` (39/39) still green — Stage 1 capture text-skip path is preserved alongside the new image-skip path.
+
+### Live verification
+
+- Backend ACR build → containerapp update revision swap.
+- Frontend `npm run build` → `swa deploy --env production` → `https://gentle-river-06c1e4e10.7.azurestaticapps.net`.
+- chrome-devtools capture: delete note with audio attachment → 204; voice record → transcript renders; image upload → OCR text + `image` tag visible in Library; Shadow Reader bottom-sheet auto-renders for `Music` notes after Stage 1.5 fires.
+
+### Round-4 screenshots
+
+- `screenshots/round-4-before/12-delete-note-500.png`
+- `screenshots/round-4-after/12-delete-note-204.png`
+- `screenshots/round-4-before/13-voice-no-speech-detected.png`
+- `screenshots/round-4-after/13-voice-transcript-rendered.png`
+- `screenshots/round-4-before/14-image-no-speech-detected.png`
+- `screenshots/round-4-after/14-image-with-ocr-and-image-tag.png`
+- `screenshots/round-4-after/16-shadow-reader-auto-render.png`
 
 ---
 

@@ -172,7 +172,8 @@ export function ShadowReaderPrompt({ noteId, onComplete }: Props): React.ReactEl
           formData.append('file', blob, 'reflection.webm');
           const { useAuthStore } = await import('../store/authStore');
           const { accessToken } = useAuthStore.getState();
-          const res = await fetch('/api/upload/audio', {
+          const { apiUrl } = await import('../api/client');
+          const res = await fetch(apiUrl('/api/upload/audio'), {
             method: 'POST',
             headers: accessToken ? { Authorization: `Bearer ${accessToken}` } : {},
             body: formData,

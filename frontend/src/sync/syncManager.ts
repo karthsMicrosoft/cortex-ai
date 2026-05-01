@@ -1,6 +1,7 @@
 import { db } from '../db';
 import type { LocalNote, SyncQueue } from '../db';
 import { useAuthStore } from '../store/authStore';
+import { apiUrl } from '../api/client';
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -54,7 +55,7 @@ async function uploadBlob(blob: Blob, mimeType: string): Promise<string> {
   const ext = mimeType.startsWith('image') ? 'jpg' : 'webm';
   formData.append('file', blob, `upload-${Date.now()}.${ext}`);
 
-  const res = await fetch('/api/upload', {
+  const res = await fetch(apiUrl('/api/upload'), {
     method: 'POST',
     headers: { Authorization: `Bearer ${token}` },
     body: formData,
@@ -69,7 +70,7 @@ async function createNoteOnServer(payload: NoteCreatePayload): Promise<NoteOut> 
   const token = getToken();
   if (!token) throw new Error('Not authenticated');
 
-  const res = await fetch('/api/notes', {
+  const res = await fetch(apiUrl('/api/notes'), {
     method: 'POST',
     headers: {
       Authorization: `Bearer ${token}`,
@@ -86,7 +87,7 @@ async function updateNoteOnServer(id: string, payload: Record<string, unknown>):
   const token = getToken();
   if (!token) throw new Error('Not authenticated');
 
-  const res = await fetch(`/api/notes/${id}`, {
+  const res = await fetch(apiUrl(`/api/notes/${id}`), {
     method: 'PUT',
     headers: {
       Authorization: `Bearer ${token}`,
@@ -103,7 +104,7 @@ async function deleteNoteOnServer(id: string): Promise<void> {
   const token = getToken();
   if (!token) throw new Error('Not authenticated');
 
-  const res = await fetch(`/api/notes/${id}`, {
+  const res = await fetch(apiUrl(`/api/notes/${id}`), {
     method: 'DELETE',
     headers: { Authorization: `Bearer ${token}` },
   });
@@ -340,7 +341,7 @@ export class SyncManager {
     const metaEntry = await db.meta.get('lastPull');
     const lastPull = metaEntry?.value ?? '1970-01-01T00:00:00Z';
 
-    const res = await fetch(`/api/sync/pull?since=${encodeURIComponent(lastPull)}`, {
+    const res = await fetch(apiUrl(`/api/sync/pull?since=${encodeURIComponent(lastPull)}`), {
       headers: { Authorization: `Bearer ${token}` },
     });
 

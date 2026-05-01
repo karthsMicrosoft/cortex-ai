@@ -47,6 +47,34 @@ function resolveUrl(url: string): string {
   return `${API_BASE}${url.startsWith('/') ? '' : '/'}${url}`;
 }
 
+/**
+ * Resolve a relative API path against the configured API base. Use this for
+ * raw fetch() calls (multipart uploads, FormData) that bypass apiPost helper.
+ *
+ * Example: apiUrl('/api/upload') -> 'https://cortexks-api.../api/upload'
+ */
+export function apiUrl(path: string): string {
+  return resolveUrl(path);
+}
+
+/**
+ * Build a WebSocket URL that targets the same host as the API base. Converts
+ * https -> wss and http -> ws. Falls back to current page host in dev.
+ *
+ * Example: wsUrl('/api/voice/stream?token=abc')
+ *   -> 'wss://cortexks-api.../api/voice/stream?token=abc'
+ */
+export function wsUrl(path: string): string {
+  if (API_BASE) {
+    return API_BASE.replace(/^https:/, 'wss:').replace(/^http:/, 'ws:') +
+      (path.startsWith('/') ? path : `/${path}`);
+  }
+  // Same-origin fallback (dev / SSR)
+  const proto = typeof window !== 'undefined' && window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+  const host = typeof window !== 'undefined' ? window.location.host : 'localhost';
+  return `${proto}//${host}${path.startsWith('/') ? path : `/${path}`}`;
+}
+
 async function fetchWithAuth(
   url: string,
   options: RequestOptions = {},

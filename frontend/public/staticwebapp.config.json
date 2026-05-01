@@ -10,6 +10,7 @@
   },
   "globalHeaders": {
     "X-Content-Type-Options": "nosniff",
-    "X-Frame-Options": "DENY"
+    "X-Frame-Options": "DENY",
+    "Permissions-Policy": "microphone=(self), camera=(self)"
   }
 }

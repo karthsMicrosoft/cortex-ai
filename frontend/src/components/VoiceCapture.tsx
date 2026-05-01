@@ -6,23 +6,18 @@ import type { LocalNote } from '../db';
 import { useVoiceRecorder } from '../hooks/useVoiceRecorder';
 import { syncManager } from '../sync/syncManager';
 import { useAuthStore } from '../store/authStore';
+import { apiUrl, wsUrl } from '../api/client';
 
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
-
-/** Derive the WebSocket base URL from the current page origin. */
-function _wsBaseUrl(): string {
-  const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-  return `${proto}//${window.location.host}`;
-}
 
 /** Upload a blob to /api/upload and return the resulting URL. */
 async function uploadBlob(blob: Blob, token: string): Promise<string> {
   const formData = new FormData();
   formData.append('file', blob, `audio-${Date.now()}.webm`);
 
-  const res = await fetch('/api/upload', {
+  const res = await fetch(apiUrl('/api/upload'), {
     method: 'POST',
     headers: { Authorization: `Bearer ${token}` },
     body: formData,
@@ -44,7 +39,7 @@ async function uploadVoice(
   const formData = new FormData();
   formData.append('audio', audioBlob, `voice-${Date.now()}.webm`);
 
-  const res = await fetch('/api/voice/upload', {
+  const res = await fetch(apiUrl('/api/voice/upload'), {
     method: 'POST',
     headers: { Authorization: `Bearer ${token}` },
     body: formData,
@@ -177,8 +172,7 @@ export function VoiceCapture({ onNoteCreated, mode = 'streaming' }: VoiceCapture
   // ---- Open WebSocket on start --------------------------------------------
 
   const _openWs = useCallback((token: string) => {
-    const base = _wsBaseUrl();
-    const url = `${base}/api/voice/stream?token=${encodeURIComponent(token)}`;
+    const url = wsUrl(`/api/voice/stream?token=${encodeURIComponent(token)}`);
     const ws = new WebSocket(url);
     wsRef.current = ws;
 

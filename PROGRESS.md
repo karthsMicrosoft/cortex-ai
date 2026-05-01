@@ -362,6 +362,37 @@ User filed five new issues after Round-3 deploy, including a **P0 voice transcri
 
 ---
 
+## Bug 17 — Different browsers showed different data for the same user (2026-05-01)
+
+User reported: notes created in browser A invisible in browser B (or in any incognito session) for the same logged-in user account.
+
+### Root cause
+
+`syncManager.start()` seeded `lastPull = new Date().toISOString()` on first boot (the QA-09 fix from a prior round). A fresh browser / incognito session then asked `/api/sync/pull?since=<now>` and silently received zero history — the server's `since=` filter excluded everything older than that timestamp. Each browser was effectively starting from "now" and only saw notes created after it first ran.
+
+### Why the QA-09 concern was unfounded
+
+`pullChanges()`'s conflict branch only fires when an incoming server note matches a local note by `serverId`. Local-only pending notes (`serverId` undefined) never enter that branch, so they are never wrongly flagged as conflicts regardless of `lastPull`. `frontend/src/__tests__/syncManager.test.ts § QA-09` already proves this.
+
+### Fix
+
+`frontend/src/sync/syncManager.ts:215–225`:
+- Fresh installs seed `lastPull` to `'1970-01-01T00:00:00Z'` → first pull retrieves the user's full history.
+- Existing browsers that were stuck mid-life with the buggy "now" seed are auto-migrated: if Dexie has zero notes with a `serverId`, no successful pull has ever happened → reset `lastPull` to epoch on next `start()`.
+
+### Tests
+
+- New `tests/test_regression_round4_fixes.py::TestR17SyncManagerFirstBootSeed` — 2 cases (negative: not `new Date().toISOString()`; positive: literal epoch). Comments stripped before regex match so docstring rationale doesn't false-match.
+- Existing `frontend/src/__tests__/syncManager.test.ts` QA-09 cluster (3 tests) still pass.
+
+### Live verification
+
+- Frontend rebuilt + redeployed to SWA.
+- DevTools confirmed: existing browser with prior synced notes keeps its cursor (no spurious re-pull); the migration path triggers on next start() of any browser that has never completed a pull.
+- User-reported repro path: opening fresh incognito → sign in → full history visible (was: 0 notes).
+
+---
+
 ## 7 — Pickup points (for resuming work)
 
 **If continuing here in this session:** Smoke test the live deployment in a browser (see `PLAN.md` § 5). Then triage the 30 backend test failures (see `KNOWN_ISSUES.md`).

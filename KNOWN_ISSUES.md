@@ -2,9 +2,17 @@
 
 > **Open work, bugs not fixed, gaps from "fully done."** Anything tagged P0/P1/P2 here is meant to be picked up by the next agent.
 
-**Last updated:** 2026-05-01 (round 4 closed)
+**Last updated:** 2026-05-01 (round 4 closed + bug 17)
 
 ---
+
+## ✅ Bug 17 closed (2026-05-01) — see PROGRESS.md "Bug 17"
+
+User reported: notes created in browser A invisible in browser B / incognito for the same logged-in user account.
+
+| # | Bug | Status |
+|---|---|---|
+| 17 | Different browsers showed different data for the same user | ✅ `syncManager.start()` was seeding `lastPull = new Date()` on first boot — a fresh browser then pulled `since=now` and saw zero history. Reverted to epoch seed; existing buggy browsers auto-migrate when no synced notes exist locally |
 
 ## ✅ Round 4 closed (2026-05-01) — see PROGRESS.md "Round 4"
 

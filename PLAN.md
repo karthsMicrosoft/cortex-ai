@@ -2,7 +2,7 @@
 
 > **Living document.** Captures what we're building, what's done, what's next. Update as work progresses.
 
-**Last updated:** 2026-04-30
+**Last updated:** 2026-05-01 (round 4 closed + bug 17)
 
 ---
 
@@ -83,6 +83,11 @@ Per spec § 2.1. Currently deployed in **`centralus`** with OpenAI in **`eastus`
 | Deploy Phase 1 to Azure | ✅ Done | All resources live, migrations applied, health-check 200 |
 | Browser smoke test (auth flow) | ✅ Auto-login fixed and deployed | Register → me() race fixed; SW skipWaiting + clientsClaim |
 | Browser smoke test (full pipeline) | ⏳ Not yet validated end-to-end | Pick this up — see § 5 |
+| Round 1 — Live UX bug-bash | ✅ 4 production bugs fixed + AI pipeline unblock | See PROGRESS § Round 1 |
+| Round 2 — UX-tester findings | ✅ ISSUE-03 + ISSUE-04 fixed; voice 500→422 | See PROGRESS § Round 2 |
+| Round 3 — User functional bug-bash | ✅ 10/11 fixed + 1 schema bonus; P1.1 (scheduler) deferred | See PROGRESS § Round 3 |
+| Round 4 — Voice-P0 + delete-500 + image-tag + Shadow-Reader revert | ✅ 5 bugs fixed and deployed; 14 regression tests added | See PROGRESS § Round 4 |
+| Bug 17 — Different browsers showed different data for same user | ✅ syncManager `lastPull` seed = epoch on first boot + auto-migrate | See PROGRESS § Bug 17 |
 
 ---
 

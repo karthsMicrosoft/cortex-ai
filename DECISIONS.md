@@ -348,6 +348,18 @@ The OCR pipeline writes the recognized text directly to `note.content` and sets 
 Library/sidebar tag filters needed a uniform way to find image notes. Decision: in `create_note`, if `source_type == 'image'`, merge `'image'` into the caller-supplied tag list (case-insensitive de-dup). Image-extracted text content can still produce additional Stage 2 LLM tags. We did **not** introduce a hard-coded `image` row in the DB — it's just another `Tag` row created on-demand via `_get_or_create_tags`, indistinguishable from any other tag.
 
 ### 22q — Shadow Reader auto-render restored, positioned above BottomNav (Round 4 / Bug 16)
+
+### 22r — `lastPull` seed on first boot must be epoch, not "now" (Bug 17)
+
+QA-09 had introduced `db.meta.put({ key: 'lastPull', value: new Date().toISOString() })` on first boot to "avoid flagging local-only pending notes as conflicts." The downside, surfaced in Round 4 user testing: a fresh browser / incognito session asks `/api/sync/pull?since=<now>` and silently receives zero history. Each browser was effectively starting from "now."
+
+**Decision:** seed `lastPull` to `'1970-01-01T00:00:00Z'` (epoch). The QA-09 concern was unfounded — `pullChanges()`'s conflict branch only fires when an incoming server note matches a local note by `serverId`, so local-only pending notes (no `serverId`) are never conflict candidates regardless of `lastPull`. This is verified by `frontend/src/__tests__/syncManager.test.ts` § QA-09 (3 tests, all pass with the new seed).
+
+**Migration for existing buggy browsers:** if Dexie has zero notes with a `serverId`, no successful pull has ever happened — reset `lastPull` to epoch on next `start()`. Browsers that already have synced notes keep their cursor (no spurious re-pull of unchanged data).
+
+**Trade-off accepted:** a brand-new user account (just registered, never synced anywhere) will pull `since=epoch` once and the server will return zero rows. Negligible cost.
+
+
 Round 3 (Bug 8) had replaced the auto-rendering bottom-sheet with a manual launcher button after the user complained about the sheet randomly popping mid-scroll. Round 4 user feedback was that the launcher felt manual and they preferred auto-render — *but with proper alignment* (no overlap with the 64 px BottomNav).
 
 **Decision:** rewrite `ShadowReaderPrompt.tsx` to:

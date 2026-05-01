@@ -208,13 +208,27 @@ export class SyncManager {
 
   /** Call once after auth to wire up event listeners and start polling. */
   async start(): Promise<void> {
-    // QA-09 fix: on first boot (no lastPull entry), initialize to now so the
-    // first pull only marks conflicts on notes modified AFTER app installation.
-    // Without this the epoch default causes every pending local note (no serverId)
-    // to be incorrectly flagged as a conflict on first pull.
+    // Bug 17 fix (2026-05-01): on first boot (no lastPull entry) we MUST start
+    // from epoch — otherwise a fresh browser / incognito session asks the
+    // server for "notes since now" and never sees the user's existing
+    // history. The earlier QA-09 seed-to-now was overcorrection: the
+    // conflict-detection branch in pullChanges() only fires for local notes
+    // that already have a matching serverId (i.e. previously synced), so
+    // brand-new local-only notes can never be wrongly flagged as conflicts
+    // by an epoch baseline. See syncManager.test.ts § QA-09.
+    //
+    // Additionally, MIGRATE existing browsers that were stuck with a "now"
+    // seed from the buggy build: if the local DB has zero notes with
+    // serverIds, no successful pull has ever happened — reset lastPull to
+    // epoch so the next pull retrieves the user's full history. This is
+    // safe (the conflict path is gated on serverId-match, so non-empty
+    // local-only notes don't get flagged).
     const existing = await db.meta.get('lastPull');
-    if (!existing) {
-      await db.meta.put({ key: 'lastPull', value: new Date().toISOString() });
+    const seenServerNote = await db.notes
+      .filter((n) => n.serverId !== undefined && n.serverId !== null)
+      .first();
+    if (!existing || !seenServerNote) {
+      await db.meta.put({ key: 'lastPull', value: '1970-01-01T00:00:00Z' });
     }
 
     window.addEventListener('online', () => void this.pushChanges());

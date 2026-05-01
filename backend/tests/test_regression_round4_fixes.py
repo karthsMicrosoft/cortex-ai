@@ -200,3 +200,60 @@ class TestR16ShadowReaderAutoRender:
             "Shadow Reader must NEVER use role='dialog' — the spec calls "
             "this out explicitly as the UI non-blocking guarantee."
         )
+
+
+# ---------------------------------------------------------------------------
+# R17 — syncManager first-boot seed must be epoch, not "now" (Bug 17)
+# ---------------------------------------------------------------------------
+
+
+class TestR17SyncManagerFirstBootSeed:
+    """Bug 17: a fresh browser / incognito session was getting `lastPull = now()`
+    on first boot, so /api/sync/pull?since=now never returned the user's
+    historical notes — leading to "different browsers show different data
+    for the same user." Fix: seed to epoch so the first pull retrieves
+    everything; the conflict path only matches notes with serverIds, so
+    local-only pending notes are never wrongly flagged."""
+
+    @staticmethod
+    def _read_sync_manager() -> str:
+        repo_root = Path(__file__).resolve().parents[2]
+        path = repo_root / "frontend" / "src" / "sync" / "syncManager.ts"
+        return path.read_text(encoding="utf-8")
+
+    def test_first_boot_seed_is_not_now(self):
+        src = self._read_sync_manager()
+        # Strip block + line comments so the rationale comment doesn't trip
+        # the regex.
+        no_block_comments = re.sub(r"/\*[\s\S]*?\*/", "", src)
+        code_only = re.sub(r"//[^\n]*", "", no_block_comments)
+        # The old bug: db.meta.put({ key: 'lastPull', value: new Date().toISOString() })
+        bad = re.search(
+            r"meta\.put\s*\(\s*\{\s*key:\s*['\"]lastPull['\"]\s*,\s*value:\s*new\s+Date\(\)\.toISOString\(\)",
+            code_only,
+        )
+        assert bad is None, (
+            "First-boot seed of `lastPull` must NOT be the current time — that "
+            "causes a fresh browser to skip all of the user's historical notes "
+            "on the very first /api/sync/pull (Bug 17)."
+        )
+
+    def test_first_boot_seed_uses_epoch(self):
+        src = self._read_sync_manager()
+        # Strip comments so we only inspect runtime code.
+        no_block_comments = re.sub(r"/\*[\s\S]*?\*/", "", src)
+        code_only = re.sub(r"//[^\n]*", "", no_block_comments)
+        seed = re.search(
+            r"meta\.put\s*\(\s*\{\s*key:\s*['\"]lastPull['\"]\s*,\s*value:\s*['\"]([^'\"]+)['\"]",
+            code_only,
+        )
+        assert seed is not None, (
+            "syncManager.start() must seed `lastPull` to a literal ISO "
+            "timestamp on first boot (epoch) so the first pull retrieves all "
+            "of the user's notes."
+        )
+        assert seed.group(1).startswith("1970-01-01"), (
+            f"Expected epoch seed for lastPull, got {seed.group(1)!r}. "
+            "Anything later than epoch causes a fresh browser to miss "
+            "historical notes."
+        )

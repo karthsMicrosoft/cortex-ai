@@ -31,14 +31,18 @@ async def transcribe_audio_file(
     audio_bytes: bytes,
     language: str = "en-US",
     phrase_list: list[str] | None = None,
+    src_suffix: str = ".webm",
 ) -> str:
     """Transcribe *audio_bytes* using Azure Speech file-mode recognition.
 
     Args:
-        audio_bytes:  Raw audio content (WAV, MP3, OGG, WEBM, etc.).
+        audio_bytes:  Raw audio content (WAV, MP3, OGG, WEBM, MP4/M4A, etc.).
         language:     BCP-47 language tag (default: "en-US").
         phrase_list:  Optional list of phrase strings to boost via PhraseListGrammar
                       before recognition (QA-08 / US-7 task 3.3 personal dictionary).
+        src_suffix:   File extension for the temp source file; helps ffmpeg detect
+                      the container format. Defaults to ".webm"; pass ".mp4" or
+                      ".m4a" for iOS Safari recordings.
 
     Returns:
         Transcribed text string (may be empty if no speech detected).
@@ -57,7 +61,9 @@ async def transcribe_audio_file(
     # bytes inside a .wav-suffixed temp file caused NoMatch on every audible
     # recording. Convert WebM (or any input) to 16 kHz mono PCM WAV via ffmpeg
     # (already in our Docker image) before handing the path to Speech.
-    src_path = _write_temp(audio_bytes, suffix=".webm")
+    # Bug 20 fix (2026-05-01): iOS Safari records audio/mp4 — use the correct
+    # suffix so ffmpeg can detect the container format.
+    src_path = _write_temp(audio_bytes, suffix=src_suffix)
     try:
         wav_path = _ffmpeg_to_wav(src_path)
     except Exception as exc:  # noqa: BLE001

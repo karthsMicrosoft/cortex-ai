@@ -50,8 +50,11 @@ _REFRESH_COOKIE_NAME = "refresh_token"
 
 @router.post("/register", response_model=UserOut, status_code=status.HTTP_201_CREATED)
 @limiter.limit("10/minute")  # SEC-03 — brute-force / account-enumeration protection
-async def register(request: Request, payload: RegisterRequest, db: AsyncSession = Depends(get_db)) -> UserOut:
-    """Register a new user. Returns UserOut (no tokens). Raises 409 on duplicate email."""
+async def register(request: Request, payload: RegisterRequest, response: Response, db: AsyncSession = Depends(get_db)) -> UserOut:
+    """Register a new user. Returns UserOut. Also plants a refresh cookie so a
+    hard reload after sign-up doesn't log the user out (Bug 18 fix).
+    Raises 409 on duplicate email.
+    """
     # Check for existing user
     result = await db.execute(select(User).where(User.email == payload.email))
     existing = result.scalar_one_or_none()
@@ -69,6 +72,20 @@ async def register(request: Request, payload: RegisterRequest, db: AsyncSession 
     db.add(user)
     await db.flush()
     await db.refresh(user)
+
+    # Plant the refresh cookie immediately so the frontend can restore the
+    # session on hard reload without requiring a separate /login call.
+    refresh_token = create_refresh_token(user.id)
+    response.set_cookie(
+        key=_REFRESH_COOKIE_NAME,
+        value=refresh_token,
+        httponly=True,
+        secure=True,
+        samesite="none",  # SameSite=None+Secure required for cross-origin SWA→backend cookie.
+        max_age=30 * 24 * 3600,  # 30 days
+        path="/api/auth",
+    )
+
     return UserOut.model_validate(user)
 
 

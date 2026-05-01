@@ -68,8 +68,12 @@ export function useVoiceRecorder(): UseVoiceRecorderReturn {
     const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
     streamRef.current = stream;
 
-    const mimeType = 'audio/webm';
-    const recorder = new MediaRecorder(stream, { mimeType });
+    // Pick the first MIME type the browser supports. iOS Safari supports audio/mp4
+    // but not audio/webm. Chrome/Firefox prefer audio/webm. The backend ffmpeg
+    // conversion path in speech.py handles any container ffmpeg understands.
+    const PREFERRED_TYPES = ['audio/webm', 'audio/mp4', 'audio/ogg'];
+    const mimeType = PREFERRED_TYPES.find((t) => MediaRecorder.isTypeSupported(t)) ?? '';
+    const recorder = new MediaRecorder(stream, mimeType ? { mimeType } : undefined);
     mediaRecorderRef.current = recorder;
     chunksRef.current = [];
     setPartialText('');
@@ -115,7 +119,7 @@ export function useVoiceRecorder(): UseVoiceRecorderReturn {
       resolveStopRef.current = resolve;
 
       recorder.onstop = () => {
-        const blob = new Blob(chunksRef.current, { type: 'audio/webm' });
+        const blob = new Blob(chunksRef.current, { type: recorder.mimeType || 'audio/webm' });
         chunksRef.current = [];
 
         // Clear WS ref on stop

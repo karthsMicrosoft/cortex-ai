@@ -31,27 +31,39 @@ async function uploadBlob(blob: Blob, token: string): Promise<string> {
   return json.url;
 }
 
+interface VoiceUploadResponse {
+  id: string;
+  content: string;
+  processing_status: string;
+  raw_transcription?: string;
+  audio_url?: string;
+}
+
 /** POST audio blob to /api/voice/upload for STT; returns the NoteOut. */
 async function uploadVoice(
   audioBlob: Blob,
   token: string,
-): Promise<{ id: string; content: string; processing_status: string }> {
+): Promise<VoiceUploadResponse> {
   const formData = new FormData();
   // Backend voice_upload expects field name 'file' (matches generic /api/upload).
   // Sending 'audio' triggers a 422 "Field required: body.file" — fixed 2026-05-01.
-  formData.append('file', audioBlob, `voice-${Date.now()}.webm`);
+  // Use the blob's actual MIME type for the filename extension so the backend
+  // can detect audio/mp4 (iOS Safari) vs audio/webm (Chrome/Firefox).
+  const ext = audioBlob.type.includes('mp4') ? 'mp4' : audioBlob.type.includes('ogg') ? 'ogg' : 'webm';
+  formData.append('file', audioBlob, `voice-${Date.now()}.${ext}`);
 
   const res = await fetch(apiUrl('/api/voice/upload'), {
     method: 'POST',
     headers: { Authorization: `Bearer ${token}` },
     body: formData,
+    credentials: 'include',
   });
 
   if (!res.ok) {
     throw new Error(`Voice upload failed: ${res.status}`);
   }
 
-  return res.json() as Promise<{ id: string; content: string; processing_status: string }>;
+  return res.json() as Promise<VoiceUploadResponse>;
 }
 
 // ---------------------------------------------------------------------------
@@ -315,24 +327,32 @@ export function VoiceCapture({ onNoteCreated, mode = 'streaming' }: VoiceCapture
       void (async () => {
         try {
           if (wsDegradedRef.current || !wsHasFinalRef.current) {
-            // Degraded or no WS final transcript: fall back to file-mode upload
-            if (wsDegradedRef.current) {
-              setShowDegradedToast(true);
-              setTimeout(() => setShowDegradedToast(false), 4000);
-            }
+            // Degraded or no WS final transcript: fall back to file-mode upload.
+            // Always show the degraded toast so the user knows we're in fallback mode.
+            setShowDegradedToast(true);
 
+            let noteOut: { id: string; content: string; processing_status: string; raw_transcription?: string; audio_url?: string } | null = null;
             try {
-              await uploadBlob(audioBlob, accessToken);
-            } catch {
-              // Non-fatal
+              noteOut = await uploadVoice(audioBlob, accessToken);
+            } catch (uploadErr) {
+              // Fallback upload failed — hide the "Network issue" toast and
+              // show a real error so the user knows to try again.
+              setShowDegradedToast(false);
+              // Surface error in the local note so the UI can show a failed state.
+              await db.notes.update(localId, {
+                processingStatus: 'failed',
+                updatedAt: new Date(),
+              });
+              console.warn('Voice fallback upload failed:', uploadErr);
+              return;
             }
 
-            const noteOut = await uploadVoice(audioBlob, accessToken);
-
+            // Fallback succeeded — update the local note to mark it synced.
+            setShowDegradedToast(false);
             await db.notes.update(localId, {
               serverId: noteOut.id,
-              content: noteOut.content,
-              rawTranscription: noteOut.content,
+              content: noteOut.content || noteOut.raw_transcription || '',
+              rawTranscription: noteOut.raw_transcription ?? noteOut.content ?? '',
               audioBlob: undefined,
               syncStatus: 'synced',
               processingStatus: noteOut.processing_status as LocalNote['processingStatus'],
@@ -343,7 +363,7 @@ export function VoiceCapture({ onNoteCreated, mode = 'streaming' }: VoiceCapture
             try {
               await uploadBlob(audioBlob, accessToken);
             } catch {
-              // Non-fatal
+              // Non-fatal — note already has audio from WS transcript
             }
 
             await db.notes.update(localId, {
@@ -363,6 +383,7 @@ export function VoiceCapture({ onNoteCreated, mode = 'streaming' }: VoiceCapture
           }
         } catch {
           // Leave syncStatus='pending' — syncManager will retry
+          setShowDegradedToast(false);
         }
       })();
     }

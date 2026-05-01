@@ -349,6 +349,33 @@ Library/sidebar tag filters needed a uniform way to find image notes. Decision: 
 
 ### 22q — Shadow Reader auto-render restored, positioned above BottomNav (Round 4 / Bug 16)
 
+### 22s — Deletes propagate via a tombstone table, not soft-delete (Bug 19)
+
+`/api/sync/pull` returns a `deletions: string[]` array but `DELETE /api/notes/{id}` was hard-deleting the row, leaving the array always empty — so other clients never learned about the delete.
+
+**Decision:** add a `note_deletions` tombstone table (`id` mirroring the deleted note's id, `user_id` FK, `deleted_at` timestamptz) instead of converting `notes` to soft-delete. `DELETE` still hard-deletes the note row; `delete_note` / `bulk_delete` / sync-push-delete each insert one tombstone in the same transaction. `/api/sync/pull` queries `NoteDeletion.deleted_at >= since` and returns the IDs.
+
+**Why tombstone over soft-delete:**
+- Hard-delete keeps the `notes` table small; `note_deletions` is a write-once log we can prune on a schedule (TODO: a 30-day pruning job is P3 — not blocking).
+- All existing queries (search, listing, embeddings) already assume rows that exist are live; soft-delete would have required adding `WHERE deleted_at IS NULL` everywhere with high regression risk.
+- The tombstone payload is minimal (id + user_id + ts), so storage cost is negligible.
+
+**SQLite test caveat:** `server_default=sa.text("now()")` returns a naive string in SQLite, breaking timezone-aware comparisons in tests. The model uses a Python-side `default=_utcnow` instead, where `_utcnow()` returns `datetime.now(tz=timezone.utc)`. The migration retains `server_default=sa.text("now()")` for Postgres compatibility — both produce timezone-aware timestamps in the prod DB.
+
+### 22t — Voice recording: client-side MIME probing + server-side `client_id` dedup (Bugs 20 + 21)
+
+Two related quirks surfaced in user testing:
+- **iOS Safari** records `audio/mp4`, not `audio/webm`. Our recorder hard-coded `audio/webm`, so `MediaRecorder` either threw or produced silent output on iPhone.
+- **Desktop voice** was creating *two* server rows per recording: the good one from `POST /api/voice/upload` (audio + transcript) and a redundant failed one from `syncManager.pushChanges()` pushing the local Dexie note via `POST /api/notes` (which the backend then tried to enrich with no audio_url and marked failed).
+
+**Decisions:**
+1. **MIME probing** — `useVoiceRecorder.ts` calls `MediaRecorder.isTypeSupported(['audio/webm','audio/mp4','audio/ogg'])` in priority order and uses the first hit. This is one if/else, not a polyfill — Safari falls into MP4, Chrome into WebM, Firefox into one of the first two.
+2. **`src_suffix` plumbing** — `transcribe_audio_file(src_suffix=...)` in `services/speech.py` lets the caller hint the temp-file extension so ffmpeg detects the container. Default stays `.webm`; voice.py picks `.mp4`/`.m4a` based on the upload's content type.
+3. **`client_id` dedup at `POST /api/notes`** — if a row with the same `(user_id, client_id)` already exists, return it instead of creating a new one. This is the server-side backstop for the race; cheap to add, hard to bypass.
+4. **Frontend skip on synced-with-serverId** — `pushCreate` in `syncManager.ts` early-returns when `note.syncStatus === 'synced' && note.serverId`, removing the queue item. Belt + suspenders: even if the dedup at (3) fires, it still costs a network round-trip; this avoids it.
+
+The fallback toast was also reworked: on fallback failure the local note flips to `processingStatus='failed'` and the toast hides. Previously the toast hung indefinitely because the failure path silently swallowed the error.
+
 ### 22r — `lastPull` seed on first boot must be epoch, not "now" (Bug 17)
 
 QA-09 had introduced `db.meta.put({ key: 'lastPull', value: new Date().toISOString() })` on first boot to "avoid flagging local-only pending notes as conflicts." The downside, surfaced in Round 4 user testing: a fresh browser / incognito session asks `/api/sync/pull?since=<now>` and silently receives zero history. Each browser was effectively starting from "now."

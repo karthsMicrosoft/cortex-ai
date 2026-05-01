@@ -2,9 +2,20 @@
 
 > **Open work, bugs not fixed, gaps from "fully done."** Anything tagged P0/P1/P2 here is meant to be picked up by the next agent.
 
-**Last updated:** 2026-05-01 (round 4 closed + bug 17)
+**Last updated:** 2026-05-01 (round 5 closed)
 
 ---
+
+## ✅ Round 5 closed (2026-05-01) — see PROGRESS.md "Round 5"
+
+User filed 4 new issues immediately after Round 4 deploy. Fixed via parallel coder + tester agent pair (TDD). 21 regression tests added.
+
+| # | Bug | Status |
+|---|---|---|
+| 18 | Refresh page logs the user out (chrome debug window survived) | ✅ Two-layer fix: (a) `fetchWithAuth` in `client.ts` no longer recursively re-tries `/api/auth/refresh` on a 401 from itself; (b) `/api/auth/register` now plants the same `samesite=none + secure + httponly` refresh cookie as `/login` |
+| 19 | Note delete doesn't propagate across browsers | ✅ New `NoteDeletion` tombstone model + alembic 006 migration; `delete_note`, `bulk_delete`, and the sync-push delete branch all insert a tombstone in the same transaction; `/api/sync/pull` returns it in the `deletions` array |
+| 20 | Mobile voice "Network issue — using file upload fallback" then nothing | ✅ MediaRecorder probes `audio/webm`/`audio/mp4`/`audio/ogg` in order; backend `_audio_ext` maps `audio/m4a`/`audio/x-m4a`; `transcribe_audio_file` accepts `src_suffix` so ffmpeg detects the iOS Safari MP4 container; fallback failure shows a real error state (not silent) |
+| 21 | Desktop voice creates duplicate (good + failed) | ✅ Frontend: `pushCreate` short-circuits when local note already has `syncStatus='synced' && serverId`. Backend: `create_note` deduplicates by `client_id` — second POST returns existing note instead of inserting |
 
 ## ✅ Bug 17 closed (2026-05-01) — see PROGRESS.md "Bug 17"
 

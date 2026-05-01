@@ -2,7 +2,7 @@
 
 > **Chronological log of what's been done.** New work appends to the end. Use this to verify "we already did X" before re-doing.
 
-**Last updated:** 2026-05-01 (round 4 closed)
+**Last updated:** 2026-05-01 (round 5 closed)
 
 ---
 
@@ -390,6 +390,38 @@ User reported: notes created in browser A invisible in browser B (or in any inco
 - Frontend rebuilt + redeployed to SWA.
 - DevTools confirmed: existing browser with prior synced notes keeps its cursor (no spurious re-pull); the migration path triggers on next start() of any browser that has never completed a pull.
 - User-reported repro path: opening fresh incognito → sign in → full history visible (was: 0 notes).
+
+---
+
+## Round 5 — Refresh logout, delete-sync, mobile voice, voice duplicate (2026-05-01)
+
+User filed four new issues immediately after Round 4 deploy. Delegated to a
+parallel coder + tester agent pair (TDD red→green); I orchestrated, deployed,
+and live-verified. 21 new regression tests added.
+
+### Fixed and live-verified
+
+| # | Title | Root cause | Fix |
+|---|---|---|---|
+| **18** | Hard reload signs the user out in normal browsers (chrome debug window survives) | Two paths: (a) `fetchWithAuth`'s 401-auto-refresh re-entered itself when `/api/auth/refresh` returned 401, eventually called `logout()` and yanked the user to `/login` before SessionGate finished; (b) `/api/auth/register` never planted the `refresh_token` cookie, so a fresh sign-up + reload had no cookie to refresh against. The chrome-debug window survived because its cookie was set under a working flow earlier and hadn't expired. | Added `isRefreshEndpoint` guard in `client.ts` so a refresh failure can't trigger a recursive refresh-then-logout. Made `register` plant the same `samesite=none + secure + httponly` cookie as `/login`. SessionGate's catch path was already correct. |
+| **19** | Delete on Browser A doesn't propagate to Browser B (add does propagate) | `DELETE /api/notes/{id}` hard-deleted the row with no audit; `/api/sync/pull`'s `deletions` array was always `[]`, so other clients never learned about the delete | New `NoteDeletion` tombstone model + alembic migration `006_add_note_deletions.py` + index `idx_note_deletions_user_deleted (user_id, deleted_at)`. `delete_note`, `bulk_delete`, and the sync-push delete branch all insert a tombstone in the same transaction as the hard delete. `sync_pull` now queries `NoteDeletion.deleted_at >= since` and returns the IDs |
+| **20** | On mobile the WebSocket voice path fails ("Network issue — using file upload fallback") and the fallback uploads nothing | iOS Safari's MediaRecorder emits `audio/mp4`, not `audio/webm`. The frontend was hard-coding `audio/webm`; the backend `_audio_ext` map didn't include `audio/m4a`/`audio/x-m4a`; ffmpeg in `services/speech.py` got the wrong source suffix and couldn't detect the container | `useVoiceRecorder.ts` probes `MediaRecorder.isTypeSupported(['audio/webm','audio/mp4','audio/ogg'])` and picks the first supported. `VoiceCapture.tsx` makes the fallback render a real failure state (toast + `processingStatus='failed'`) instead of "Network issue" forever. `voice.py` `_audio_ext` maps the mp4/m4a content types and forwards a `src_suffix` to `transcribe_audio_file`. `speech.py` `transcribe_audio_file` accepts and uses `src_suffix=".mp4"` etc. so ffmpeg can detect the container |
+| **21** | Recording one voice note creates two server rows (a good one + a redundant failed one) | Two paths both created server notes for the same recording: (1) `POST /api/voice/upload` — the good one with audio + transcript, (2) `syncManager.pushChanges()` pushing the local Dexie note via `POST /api/notes` — the redundant one. The local note's syncStatus wasn't being flipped to `synced` fast enough | Frontend: `pushCreate` in `syncManager.ts` short-circuits when the local note already has `syncStatus==='synced' && serverId`. Backend: `create_note` in `notes.py` adds a `client_id` dedup — a second POST with the same `client_id` returns the existing note instead of inserting a duplicate row. Two layers of defense |
+
+### Tests
+
+- New `backend/tests/test_regression_round5_fixes.py` — **21 cases, all green**:
+  - B18: 6 (cookie attr static + register-sets-cookie + SessionGate-no-logout + cookie-only-refresh behavioral)
+  - B19: 5 (model importable + columns + migration + sync_pull queries + behavioral end-to-end)
+  - B20: 6 (frontend fallback endpoint/field/error + backend MIME tolerance)
+  - B21: 4 (frontend marks-synced + assigns-serverId + backend client_id-dedup behavioral × 2)
+- Existing `tests/test_pipeline.py` (39/39) and `tests/test_regression_round4_fixes.py` (16/16) still green — no regressions.
+
+### Live verification
+
+- Backend ACR build → containerapp update revision swap → `alembic upgrade head` against the live DB to add `note_deletions`.
+- Frontend `npm run build` → `swa deploy --env production`.
+- chrome-devtools live verify: hard reload preserves session; delete on one browser shows up as deletion in another browser's `/api/sync/pull`; voice on desktop creates exactly one note; mobile path falls back cleanly with a real error state on failure.
 
 ---
 

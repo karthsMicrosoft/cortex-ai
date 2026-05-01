@@ -109,9 +109,12 @@ async def voice_upload(
     # on unhandled errors, so the browser sees a CORS failure rather than the
     # real cause. Translate to 422 with a clear detail so the frontend can
     # show a useful error and CORS headers stay attached.
+    # Bug 20 fix: pass the correct src_suffix so ffmpeg can detect the audio
+    # container format (iOS Safari sends audio/mp4 or audio/m4a, not audio/webm).
+    src_suffix = ext if ext else ".webm"
     try:
         raw_transcription = await transcribe_audio_file(
-            audio_bytes, phrase_list=loaded_phrases or None
+            audio_bytes, phrase_list=loaded_phrases or None, src_suffix=src_suffix
         )
     except RuntimeError as exc:
         logger.warning(
@@ -318,6 +321,8 @@ def _audio_ext(content_type: str, filename: str | None) -> str:
         "audio/webm": ".webm",
         "audio/ogg": ".ogg",
         "audio/mp4": ".mp4",
+        "audio/m4a": ".m4a",
+        "audio/x-m4a": ".m4a",
         "audio/mpeg": ".mp3",
         "audio/wav": ".wav",
         "audio/x-wav": ".wav",

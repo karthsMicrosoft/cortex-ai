@@ -100,8 +100,12 @@ async function fetchWithAuth(
 
   const res = await fetch(resolveUrl(url), init);
 
-  // On 401 — attempt token refresh once, then retry
-  if (res.status === 401 && !_isRetry) {
+  // On 401 — attempt token refresh once, then retry.
+  // Guard: skip auto-refresh when the failing request IS the refresh endpoint
+  // (avoids an infinite loop and prevents spurious logout on page reload when
+  // the refresh cookie is still valid but the race hasn't resolved yet).
+  const isRefreshEndpoint = resolveUrl(url).includes('/api/auth/refresh');
+  if (res.status === 401 && !_isRetry && !isRefreshEndpoint) {
     try {
       const refreshRes = await fetch(resolveUrl('/api/auth/refresh'), { method: 'POST', credentials: 'include' });
       if (refreshRes.ok) {

@@ -2,7 +2,7 @@
 
 > **Living document.** Captures what we're building, what's done, what's next. Update as work progresses.
 
-**Last updated:** 2026-05-01 (round 4 closed + bug 17)
+**Last updated:** 2026-05-01 (round 5 closed)
 
 ---
 
@@ -88,6 +88,7 @@ Per spec § 2.1. Currently deployed in **`centralus`** with OpenAI in **`eastus`
 | Round 3 — User functional bug-bash | ✅ 10/11 fixed + 1 schema bonus; P1.1 (scheduler) deferred | See PROGRESS § Round 3 |
 | Round 4 — Voice-P0 + delete-500 + image-tag + Shadow-Reader revert | ✅ 5 bugs fixed and deployed; 14 regression tests added | See PROGRESS § Round 4 |
 | Bug 17 — Different browsers showed different data for same user | ✅ syncManager `lastPull` seed = epoch on first boot + auto-migrate | See PROGRESS § Bug 17 |
+| Round 5 — Refresh logout, delete-sync, mobile voice, voice duplicate | ✅ 4 bugs fixed via parallel coder + tester agents; alembic 006 (note_deletions tombstone) deployed | See PROGRESS § Round 5 |
 
 ---
 

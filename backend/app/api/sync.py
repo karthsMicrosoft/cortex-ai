@@ -27,6 +27,7 @@ from app.api._note_serializers import _note_to_out
 from app.auth.jwt import get_current_user
 from app.database import get_db
 from app.models.note import Note
+from app.models.note_deletion import NoteDeletion
 from app.models.tag import Tag
 from app.schemas.note import NoteCreate, NoteOut, NoteUpdate
 from app.schemas.sync import SyncOperation, SyncPullResponse, SyncPushRequest, SyncPushResponse
@@ -116,9 +117,17 @@ async def sync_pull(
     )
     notes = result.scalars().all()
 
+    deletions_result = await db.execute(
+        select(NoteDeletion.id).where(
+            NoteDeletion.user_id == current_user_id,
+            NoteDeletion.deleted_at >= since_dt,
+        )
+    )
+    deleted_ids = list(deletions_result.scalars().all())
+
     return SyncPullResponse(
         notes=[_note_to_out(n) for n in notes],
-        deletions=[],
+        deletions=deleted_ids,
         server_time=datetime.now(tz=timezone.utc),
     )
 
@@ -181,7 +190,10 @@ async def _apply_note_op(
         )
         note = result.scalar_one_or_none()
         if note is not None:
+            deleted_note_id = note.id
+            deleted_user_id = note.user_id
             await db.delete(note)
+            db.add(NoteDeletion(id=deleted_note_id, user_id=deleted_user_id))
             await db.flush()
 
     else:

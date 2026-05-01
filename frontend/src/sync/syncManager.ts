@@ -334,6 +334,17 @@ export class SyncManager {
       return;
     }
 
+    // Bug 21 fix: voice notes that went through the /api/voice/upload fallback
+    // path are already synced (syncStatus='synced', serverId set). Pushing them
+    // again via POST /api/notes creates a duplicate server-side row.
+    // The fallback path removes the queue item itself — but if pushChanges()
+    // races ahead before the fallback resolves, the queue item is still visible.
+    // Skip it here; the fallback cleanup or the next push cycle will tidy up.
+    if (note.syncStatus === 'synced' && note.serverId) {
+      if (op.id !== undefined) await db.syncQueue.delete(op.id);
+      return;
+    }
+
     let audioUrl: string | undefined;
     let imageUrl: string | undefined;
 

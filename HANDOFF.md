@@ -2,8 +2,8 @@
 
 > **Read this first.** This document briefs an incoming agent (Claude / Copilot / Aider / human) on the state of the project so work can resume without context loss.
 
-**Last updated:** 2026-05-01 (round 4 closed + bug 17)
-**Status:** Live on Azure. Phase 1 MVP + Phase 2 (Personal Dictionary + Shadow Reader) deployed. Four rounds of user-reported UX bug-bashes closed (round 1: 4 prod bugs + AI pipeline; round 2: ISSUE-03/04; round 3: 10 functional + 1 schema bonus; round 4: 5 bugs incl. P0 voice transcription via webm→ffmpeg→wav) + bug 17 (multi-browser sync history visibility). 30 test-side failures remain after fix-pair pass; production code blessed by reviewers. Voice/text/image capture all working end-to-end.
+**Last updated:** 2026-05-01 (round 5 closed)
+**Status:** Live on Azure. Phase 1 MVP + Phase 2 (Personal Dictionary + Shadow Reader) deployed. Five rounds of user-reported UX bug-bashes closed (round 1: 4 prod bugs + AI pipeline; round 2: ISSUE-03/04; round 3: 10 functional + 1 schema bonus; round 4: 5 bugs incl. P0 voice webm→ffmpeg→wav; round 5: refresh-logout, delete-sync via tombstone table, mobile voice MIME, voice-duplicate dedup) + bug 17 (multi-browser sync history). 30 test-side failures remain after fix-pair pass; production code blessed by reviewers. Voice/text/image capture all working end-to-end on desktop and mobile.
 
 ---
 

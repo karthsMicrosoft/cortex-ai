@@ -28,6 +28,7 @@ from app.auth.jwt import get_current_user
 from app.config import settings
 from app.database import get_db
 from app.models.note import Note
+from app.models.note_deletion import NoteDeletion
 from app.models.tag import Tag, note_tags as note_tags_table
 from app.pipeline.ocr import process_image_note
 from app.pipeline.processor import AIPipeline
@@ -94,7 +95,24 @@ async def create_note(
     - voice notes with audio_url: status='transcribed', pipeline scheduled.
     - image notes with image_url: OCR scheduled first (sets status='transcribed'),
       then pipeline Stage 2 (Stage 1 skipped for images).
+
+    Bug 21 (2026-05-01): if a note with the same client_id already exists for
+    this user, return the existing note instead of creating a duplicate. This
+    prevents the double-create that occurs when /api/voice/upload creates a note
+    and syncManager.pushChanges() subsequently pushes the same local note via
+    this endpoint.
     """
+    # Bug 21 dedup: if a note with the same client_id already exists, return it.
+    if payload.client_id:
+        existing_result = await db.execute(
+            select(Note)
+            .options(selectinload(Note.tags))
+            .where(Note.client_id == payload.client_id, Note.user_id == current_user_id)
+        )
+        existing_note = existing_result.scalar_one_or_none()
+        if existing_note is not None:
+            return _note_to_out(existing_note)
+
     # Determine initial processing_status
     if payload.audio_url and payload.source_type == "voice":
         initial_status = "transcribed"
@@ -333,10 +351,16 @@ async def delete_note(
 
     2026-05-01 (bug 3): also purge the audio/image blobs from Storage so a
     deleted note does not leave orphaned media behind.
+    2026-05-01 (bug 19): write a NoteDeletion tombstone in the same transaction
+    so sync pull can propagate the deletion to other browsers.
     """
     note = await _fetch_note(db, note_id, current_user_id)
+    # Capture ids BEFORE delete so the tombstone references the correct note.
+    deleted_note_id = note.id
+    deleted_user_id = note.user_id
     await _purge_note_blobs(note)
     await db.delete(note)
+    db.add(NoteDeletion(id=deleted_note_id, user_id=deleted_user_id))
     await db.flush()
 
 
@@ -370,8 +394,12 @@ async def bulk_delete(
     )
     notes = list(result.scalars().all())
     for note in notes:
+        # Capture ids BEFORE delete for the tombstone.
+        deleted_note_id = note.id
+        deleted_user_id = note.user_id
         await _purge_note_blobs(note)
         await db.delete(note)
+        db.add(NoteDeletion(id=deleted_note_id, user_id=deleted_user_id))
     await db.flush()
     return {"deleted": len(notes)}
 

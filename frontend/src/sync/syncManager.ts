@@ -58,6 +58,7 @@ async function uploadBlob(blob: Blob, mimeType: string): Promise<string> {
   const res = await fetch(apiUrl('/api/upload'), {
     method: 'POST',
     headers: { Authorization: `Bearer ${token}` },
+    credentials: 'include',
     body: formData,
   });
 
@@ -76,6 +77,7 @@ async function createNoteOnServer(payload: NoteCreatePayload): Promise<NoteOut> 
       Authorization: `Bearer ${token}`,
       'Content-Type': 'application/json',
     },
+    credentials: 'include',
     body: JSON.stringify(payload),
   });
 
@@ -93,6 +95,7 @@ async function updateNoteOnServer(id: string, payload: Record<string, unknown>):
       Authorization: `Bearer ${token}`,
       'Content-Type': 'application/json',
     },
+    credentials: 'include',
     body: JSON.stringify(payload),
   });
 
@@ -107,6 +110,7 @@ async function deleteNoteOnServer(id: string): Promise<void> {
   const res = await fetch(apiUrl(`/api/notes/${id}`), {
     method: 'DELETE',
     headers: { Authorization: `Bearer ${token}` },
+    credentials: 'include',
   });
 
   if (!res.ok) throw new Error(`Note delete failed: ${res.status}`);
@@ -117,6 +121,7 @@ async function getNoteOnServer(id: string): Promise<NoteOut> {
   if (!token) throw new Error('Not authenticated');
   const res = await fetch(apiUrl(`/api/notes/${id}`), {
     headers: { Authorization: `Bearer ${token}` },
+    credentials: 'include',
   });
   if (!res.ok) throw new Error(`Note fetch failed: ${res.status}`);
   return res.json() as Promise<NoteOut>;
@@ -422,6 +427,7 @@ export class SyncManager {
 
     const res = await fetch(apiUrl(`/api/sync/pull?since=${encodeURIComponent(lastPull)}`), {
       headers: { Authorization: `Bearer ${token}` },
+      credentials: 'include',
     });
 
     if (!res.ok) return; // network error or 4xx — skip silently
@@ -433,12 +439,15 @@ export class SyncManager {
         const local = await db.notes.where('serverId').equals(serverNote.id).first();
 
         if (!local) {
-          // New note from server — add locally
+          // New note from server — add locally.
+          // mapServerToLocal is spread LAST so AI-enriched fields (category, tags, mood)
+          // from the server win over any defaults. Bug 24: placing category:'Ideas' after
+          // the spread was overwriting the AI-assigned category on receiving browsers.
+          const mapped = mapServerToLocal(serverNote);
           await db.notes.add({
             localId: serverNote.id, // use serverId as localId for server-originated notes
-            ...mapServerToLocal(serverNote),
             serverId: serverNote.id,
-            sourceType: 'text',
+            sourceType: (serverNote['source_type'] as LocalNote['sourceType']) ?? 'text',
             category: 'Ideas',
             tags: [],
             syncStatus: 'synced',
@@ -446,7 +455,18 @@ export class SyncManager {
               (serverNote.processing_status as LocalNote['processingStatus']) ?? 'raw',
             createdAt: new Date(String(serverNote['created_at'] ?? Date.now())),
             updatedAt: new Date(String(serverNote.updated_at ?? Date.now())),
+            ...mapped,
           } as LocalNote);
+          // Bug 24 follow-up: if the note isn't enriched yet on the receiving browser,
+          // schedule a re-fetch so category/tags update within ~10s rather than waiting
+          // for the full 60s pull tick.
+          if (
+            serverNote.processing_status === 'raw' ||
+            serverNote.processing_status === 'transcribed' ||
+            serverNote.processing_status === 'processed'
+          ) {
+            void scheduleEnrichmentRefetch(serverNote.id, serverNote.id);
+          }
         } else if (
           local.updatedAt > new Date(lastPull) &&
           local.syncStatus !== 'synced'

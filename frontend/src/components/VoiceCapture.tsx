@@ -20,6 +20,7 @@ async function uploadBlob(blob: Blob, token: string): Promise<string> {
   const res = await fetch(apiUrl('/api/upload'), {
     method: 'POST',
     headers: { Authorization: `Bearer ${token}` },
+    credentials: 'include',
     body: formData,
   });
 

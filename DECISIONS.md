@@ -349,6 +349,41 @@ Library/sidebar tag filters needed a uniform way to find image notes. Decision: 
 
 ### 22q — Shadow Reader auto-render restored, positioned above BottomNav (Round 4 / Bug 16)
 
+### 22u — `recognize_once_async` → `start_continuous_recognition_async` (Bug 25)
+
+`recognize_once_async()` is documented to return after the FIRST recognition result — i.e. the first segment of silence ends the session. A 20-second voice note with three natural pauses was returning only the first ~5 seconds of transcribed text. Users saw obviously-truncated content.
+
+**Decision:** rewrite `transcribe_audio_file` in `services/speech.py` to use **continuous recognition**:
+
+```python
+loop = asyncio.get_event_loop()
+done = asyncio.Event()
+segments: list[str] = []
+
+def on_recognized(evt):
+    if evt.result.reason == speechsdk.ResultReason.RecognizedSpeech and evt.result.text:
+        segments.append(evt.result.text)
+
+def on_session_stopped(evt):
+    loop.call_soon_threadsafe(done.set)
+
+def on_canceled(evt):
+    # capture details, signal done so we don't hang
+    loop.call_soon_threadsafe(done.set)
+
+recognizer.recognized.connect(on_recognized)
+recognizer.session_stopped.connect(on_session_stopped)
+recognizer.canceled.connect(on_canceled)
+recognizer.start_continuous_recognition_async().get()
+await done.wait()
+recognizer.stop_continuous_recognition_async().get()
+return " ".join(segments)
+```
+
+**Watch out:** the SDK callbacks fire on a worker thread. All asyncio interaction (signaling the `done` event) MUST go through `loop.call_soon_threadsafe`. Don't await anything inside the callbacks — they're synchronous from the event loop's perspective.
+
+**Trade-off accepted:** continuous recognition takes slightly longer end-to-end (an explicit `session_stopped` event arrives a few hundred ms after the audio ends). This is invisible to the user — the recording is already finished by the time `transcribe_audio_file` is called. Total latency change: < 200 ms in practice.
+
 ### 22s — Deletes propagate via a tombstone table, not soft-delete (Bug 19)
 
 `/api/sync/pull` returns a `deletions: string[]` array but `DELETE /api/notes/{id}` was hard-deleting the row, leaving the array always empty — so other clients never learned about the delete.

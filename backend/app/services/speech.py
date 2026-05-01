@@ -7,12 +7,14 @@ Exposes:
 - increment_term_usage(content, user_id, db)                          [US-7]
 
 WebSocket streaming STT is added in US-9; this module handles only file-mode
-recognition using SpeechRecognizer.recognize_once_async().
+recognition using start_continuous_recognition_async() (Bug 25 fix — the
+previous recognize_once_async() truncated at the first pause).
 
 Environment:
 - AZURE_SPEECH_KEY
 - AZURE_SPEECH_REGION  (default: westus2)
 """
+import asyncio
 import logging
 import subprocess
 import tempfile
@@ -33,7 +35,7 @@ async def transcribe_audio_file(
     phrase_list: list[str] | None = None,
     src_suffix: str = ".webm",
 ) -> str:
-    """Transcribe *audio_bytes* using Azure Speech file-mode recognition.
+    """Transcribe *audio_bytes* using Azure Speech continuous recognition.
 
     Args:
         audio_bytes:  Raw audio content (WAV, MP3, OGG, WEBM, MP4/M4A, etc.).
@@ -49,6 +51,10 @@ async def transcribe_audio_file(
 
     Raises:
         RuntimeError: If the Speech SDK returns an error or cancellation.
+
+    Bug 25 fix: replaced recognize_once_async() (stops at first silence) with
+    start_continuous_recognition_async() + session_stopped event so multi-pause
+    recordings are fully transcribed instead of truncated at the first pause.
     """
     speech_config = speechsdk.SpeechConfig(
         subscription=settings.AZURE_SPEECH_KEY,
@@ -86,40 +92,56 @@ async def transcribe_audio_file(
             for phrase in phrase_list:
                 grammar.addPhrase(phrase)
 
-        # recognize_once_async() is a one-shot file recognition call.
-        result = await _recognize_once(recognizer)
+        # Bug 25 fix: continuous recognition accumulates all segments across
+        # natural pauses. recognize_once_async() stopped at the first silence,
+        # so a 20s recording with 3 pauses returned only the first segment.
+        # The SDK callbacks fire on a worker thread; all asyncio interaction
+        # must go through loop.call_soon_threadsafe to avoid cross-thread issues.
+        loop = asyncio.get_event_loop()
+        done = asyncio.Event()
+        segments: list[str] = []
+        cancellation_error: list[str] = []
 
-        if result.reason == speechsdk.ResultReason.RecognizedSpeech:
-            logger.info("Speech transcription complete, text_len=%d", len(result.text))
-            return result.text
-        elif result.reason == speechsdk.ResultReason.NoMatch:
-            logger.warning("Speech no match: %s", result.no_match_details)
-            return ""
-        else:
-            # Cancelled — extract error details
-            cancellation = speechsdk.CancellationDetails(result)
-            logger.error(
-                "Speech cancellation: reason=%s error_code=%s error_details=%s",
-                cancellation.reason,
-                cancellation.error_code,
-                cancellation.error_details,
-            )
-            raise RuntimeError(
-                f"Speech recognition cancelled: {cancellation.reason} — {cancellation.error_details}"
-            )
+        def on_recognized(evt) -> None:  # type: ignore[type-arg]
+            if (
+                evt.result.reason == speechsdk.ResultReason.RecognizedSpeech
+                and evt.result.text
+            ):
+                segments.append(evt.result.text)
+
+        def on_session_stopped(evt) -> None:  # type: ignore[type-arg]
+            loop.call_soon_threadsafe(done.set)
+
+        def on_canceled(evt) -> None:  # type: ignore[type-arg]
+            details = speechsdk.CancellationDetails(evt.result)
+            if details.reason == speechsdk.CancellationReason.Error:
+                cancellation_error.append(
+                    f"{details.reason} — {details.error_details}"
+                )
+                logger.error(
+                    "Speech cancellation: reason=%s error_code=%s error_details=%s",
+                    details.reason,
+                    details.error_code,
+                    details.error_details,
+                )
+            loop.call_soon_threadsafe(done.set)
+
+        recognizer.recognized.connect(on_recognized)
+        recognizer.session_stopped.connect(on_session_stopped)
+        recognizer.canceled.connect(on_canceled)
+
+        recognizer.start_continuous_recognition_async().get()
+        await done.wait()
+        recognizer.stop_continuous_recognition_async().get()
+
+        if cancellation_error:
+            raise RuntimeError(f"Speech recognition cancelled: {cancellation_error[0]}")
+
+        text = " ".join(segments)
+        logger.info("Speech transcription complete, segments=%d text_len=%d", len(segments), len(text))
+        return text
     finally:
         os.unlink(tmp_path)
-
-
-async def _recognize_once(recognizer: speechsdk.SpeechRecognizer):
-    """Await the SDK's recognize_once_async() future and return the result."""
-    import asyncio
-
-    loop = asyncio.get_event_loop()
-    future = recognizer.recognize_once_async()
-    # The SDK returns a concurrent.futures-style Future; run it in executor.
-    result = await loop.run_in_executor(None, future.get)
-    return result
 
 
 def _write_temp(data: bytes, suffix: str) -> str:

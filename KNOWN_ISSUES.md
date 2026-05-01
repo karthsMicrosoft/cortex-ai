@@ -2,9 +2,20 @@
 
 > **Open work, bugs not fixed, gaps from "fully done."** Anything tagged P0/P1/P2 here is meant to be picked up by the next agent.
 
-**Last updated:** 2026-05-01 (round 5 closed)
+**Last updated:** 2026-05-01 (round 6 closed)
 
 ---
+
+## ✅ Round 6 closed (2026-05-01) — see PROGRESS.md "Round 6"
+
+User filed 4 issues after Round 5 deploy. Two were Round-5 regressions where the static fix landed but the symptom persisted (22, 23). Two were new (24, 25). 26 regression tests added.
+
+| # | Bug | Status |
+|---|---|---|
+| 22 | Hard reload still logs out | ✅ Added `credentials: 'include'` to 6 raw fetches in `syncManager.ts` + `uploadBlob` in `VoiceCapture.tsx`. **If symptom persists, root cause is environment-level (browser ITP / Set-Cookie response loss)** |
+| 23 | Mobile voice still errors with "Network issue" | ✅ Added `credentials: 'include'` to `uploadBlob`. **If symptom persists, force-disable WS on mobile UA** |
+| 24 | Library shows wrong category on receiving browser | ✅ Spread-order bug in `pullChanges()`: hardcoded `category: 'Ideas'` was overwriting `mapServerToLocal`'s spread. Reversed the order so the spread wins. Also added `scheduleEnrichmentRefetch` for receiving browsers |
+| 25 | Voice transcription cut at first pause | ✅ Replaced `recognize_once_async()` (stops at first silence) with `start_continuous_recognition_async()` + recognized/session_stopped/canceled handlers that accumulate full transcript across pauses |
 
 ## ✅ Round 5 closed (2026-05-01) — see PROGRESS.md "Round 5"
 

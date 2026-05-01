@@ -2,7 +2,7 @@
 
 > **Chronological log of what's been done.** New work appends to the end. Use this to verify "we already did X" before re-doing.
 
-**Last updated:** 2026-05-01 (round 5 closed)
+**Last updated:** 2026-05-01 (round 6 closed)
 
 ---
 
@@ -422,6 +422,33 @@ and live-verified. 21 new regression tests added.
 - Backend ACR build → containerapp update revision swap → `alembic upgrade head` against the live DB to add `note_deletions`.
 - Frontend `npm run build` → `swa deploy --env production`.
 - chrome-devtools live verify: hard reload preserves session; delete on one browser shows up as deletion in another browser's `/api/sync/pull`; voice on desktop creates exactly one note; mobile path falls back cleanly with a real error state on failure.
+
+---
+
+## Round 6 — Refresh-logout regression #2, mobile voice, library categories, voice cut at first pause (2026-05-01)
+
+User filed 4 issues after Round 5 deploy, including TWO Round-5 regressions where the symptom persisted (refresh logout, mobile voice). Delegated to a parallel coder + tester agent pair (TDD red→green); 26 tests added (21 already green from Round-5 contracts + 5 red on Bug 25, all green after fix).
+
+### Fixed
+
+| # | Title | Root cause | Fix |
+|---|---|---|---|
+| **22** | Hard reload still logs the user out (chrome debug window survived because of stale cookie) | Round-5 fixed two layers (`fetchWithAuth` recursive guard + `/register` cookie). Static checks now all pass — but the symptom persists, suggesting a third layer where some raw `fetch()` call was missing `credentials: 'include'`. The `syncManager.ts` raw fetches (uploadBlob, createNoteOnServer, updateNoteOnServer, deleteNoteOnServer, getNoteOnServer, pullChanges) bypassed `fetchWithAuth` and were missing the flag. On a cross-origin SWA→Container App deployment with `allow_credentials=True`, omitting the flag means the cookie is unreliable across requests. | Added `credentials: 'include'` to all 6 raw fetches in `syncManager.ts` plus the `uploadBlob` helper in `VoiceCapture.tsx`. **If the symptom STILL persists after this round, the root cause is in a layer not catchable by static analysis (Apple ITP / third-party cookie blocking / Set-Cookie response loss in production CORS).** |
+| **23** | Mobile voice still errors "Network issue — using file upload fallback" | Round-5 added MIME probing + backend audio/m4a + ffmpeg src_suffix — all confirmed by green static tests. Remaining gap: `uploadBlob` in `VoiceCapture.tsx` was missing `credentials: 'include'`. On cross-origin uploads with cookie auth, this can race the WS-failure → fallback path on mobile (where cross-site cookie handling is stricter). | Added `credentials: 'include'` to the `uploadBlob` helper. **If symptom persists, the WS path needs to be force-disabled on mobile (UA-sniff for iOS Safari) and the recorder should go straight to file-upload.** |
+| **24** | Library shows wrong category on receiving browser; Note Detail correct | Spread-order bug in `pullChanges()`: the line was `{ ...mapServerToLocal(serverNote), category: 'Ideas' }` — the hardcoded default OVERWROTE the server's category. The Note Detail page reads the server response directly, so it showed correctly; the Library reads from Dexie which had been polluted with the default | Reordered to `{ category: 'Ideas', ...mapServerToLocal(serverNote) }` so the spread wins. Also added a `scheduleEnrichmentRefetch()` call for non-enriched notes received via pull, so receiving browsers see categories within ~10s instead of waiting 60s for the next pull |
+| **25** | Voice transcription cut at first pause | `transcribe_audio_file` in `services/speech.py` used `recognize_once_async()` which is documented to stop at the first segment of silence. A 20-second recording with 3 pauses transcribed only ~5 seconds | Replaced with `start_continuous_recognition_async()` + three event handlers: `recognized` accumulates `evt.result.text` segments into a list; `session_stopped` signals an `asyncio.Event` to release the await; `canceled` captures errors and signals done. Result is `' '.join(segments)`. Callbacks fire on a worker thread, so all asyncio interaction goes through `loop.call_soon_threadsafe`. Removed the now-dead `_recognize_once` helper |
+
+### Tests
+
+- New `backend/tests/test_regression_round6_fixes.py` — 26 cases: B22 ×8, B23 ×7, B24 ×6, B25 ×5. All green post-fix. Static analysis confirms the contracts are intact at the file level.
+- Existing test files (round-4 + round-5 + pipeline) all still green: 102 total.
+
+### Live verification
+
+- Backend ACR build (run `cjn`) → Container App revision `cortexks-api--round6-1777678474` → health 200.
+- Frontend `npm run build` → `swa deploy --env production`.
+- Bug 24 + Bug 25 are mechanical fixes — high confidence.
+- **Bug 22 + Bug 23: needs user verification.** If symptoms persist, root cause is environment-level (browser ITP / CORS / Set-Cookie response loss); next round will add server-side debug logging + consider IndexedDB-backed refresh-token fallback or SWA same-origin proxy.
 
 ---
 

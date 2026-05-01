@@ -2,9 +2,29 @@
 
 > **Open work, bugs not fixed, gaps from "fully done."** Anything tagged P0/P1/P2 here is meant to be picked up by the next agent.
 
-**Last updated:** 2026-05-01 (round 2 closed)
+**Last updated:** 2026-05-01 (round 3 closed)
 
 ---
+
+## ✅ Round 3 closed (2026-05-01) — see PROGRESS.md "Round 3"
+
+User-reported bug-bash with **11 functional issues** + P0 polish. Fixed 10/11 plus 1 bonus bug. All deployed live and verified end-to-end via chrome-devtools.
+
+| # | Bug | Status |
+|---|---|---|
+| P0 | `/api/auth/login` rate limit too aggressive | ✅ 5→30/min |
+| 3  | Delete note (single + bulk) | ✅ Trash button on detail; Select mode + bulk-delete on Library; backend cascades blob storage |
+| 4 + 5 | NoteEditor Save/Cancel were no-op | ✅ Real PUT + navigate(-1) |
+| 6  | Voice notes show "Sure! Please provide…" | ✅ Stage 1 bails on empty transcription |
+| 7  | Related notes click didn't navigate | ✅ NoteDetailPage handles serverId in URL |
+| 8  | "Want to go deeper?" auto-popping bottom-sheet | ✅ Persistent launcher + opt-in modal |
+| 9  | Image attachments not displayed | ✅ `<img>` rendered from `image_url` |
+| 10 | Shadow Reader voice answer hung note state | ✅ Voice mic removed (text-only) |
+| 11 | Library showed everything as "Ideas" | ✅ syncManager merges all enriched fields + auto-refetch |
+| bonus | `/api/sync/pull` 500 with `answer_pending` | ✅ Pydantic Literal updated |
+
+**Deferred:**
+- **P1.1** Move APScheduler distill cron to Container Apps Job (still gated on `SCHEDULER_ENABLED=false`; on-demand weekly summary works without it)
 
 ## ✅ Round 2 closed (2026-05-01) — see PROGRESS.md "Round 2"
 

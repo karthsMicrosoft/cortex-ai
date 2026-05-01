@@ -253,6 +253,37 @@ User filed HAR + console log after deploy showing:
 
 ---
 
+## Round 2 — UX-tester findings (2026-05-01)
+
+UX-tester agent (Playwright) ran the suite against the post-round-1 deploy and filed `e2e/ISSUES.md` with 4 issues. Two were already fixed by round 1 (notes pending sync, session restore). The remaining two were real backend bugs:
+
+| # | Issue | Root cause | Fix |
+|---|---|---|---|
+| ISSUE-03 | `/api/upload` 500 + missing CORS header | `services/blob_storage.py` passed a `dict` as `content_settings=` to `BlobClient.upload_blob()`. Azure SDK 12.22 expects `ContentSettings(content_type=...)` and accesses `.cache_control` on it; dict doesn't have that attribute → `AttributeError` mid-upload. The unhandled exception bypasses CORSMiddleware, so the browser sees CORS failure rather than the real cause. | Imported `ContentSettings` from `azure.storage.blob` and wrapped the content type in it. |
+| ISSUE-04 | `/api/ai/summary/weekly` 500 ProgrammingError | `pipeline/distill.py:generate_weekly_summary` filtered `Note.created_at >= str(monday)` against a `timestamptz` column. Postgres rejected the implicit text→timestamptz coercion. Same bug existed in `generate_daily_summary`. | Replaced `str(date)` with proper `datetime.combine(date, time.min, tzinfo=UTC)` so asyncpg binds the right type. |
+
+Plus a defensive fix:
+- **Voice upload 500 → 422 with detail** when audio is corrupt/empty. The Speech SDK raises `RuntimeError`; we now catch and return HTTPException, keeping CORS headers attached and giving the frontend a usable error message.
+
+### Live verification
+
+- `POST /api/upload` (multipart) → **200** with SAS URL ✓
+- `GET /api/ai/summary/weekly?week=2026-W18` → **200** with full LLM-generated summary ✓
+- Insights page renders the weekly summary live (`screenshots/round-2-after/07-insights-page-with-weekly-summary.png`)
+
+### e2e suite results
+
+- Before round 2: 6 fail / 4 flaky / 7 pass
+- After round 1 deploy (no test changes): 3 fail / 4 flaky / 14 pass
+- After round 2 backend fixes: 1 fail / 1 flaky / 15 pass
+- Remaining failure: post-sign-out tests in the shared-auth Playwright suite hit `/login` rate limit on the rapid re-login fallback (test-infra issue, not app — documented in `KNOWN_ISSUES.md` for next round)
+
+### Round-2 screenshots
+
+- `screenshots/round-2-after/07-insights-page-with-weekly-summary.png` — Insights page renders Today's Summary + This Week + Recurring Patterns with LLM-generated content
+
+---
+
 ## 7 — Pickup points (for resuming work)
 
 **If continuing here in this session:** Smoke test the live deployment in a browser (see `PLAN.md` § 5). Then triage the 30 backend test failures (see `KNOWN_ISSUES.md`).

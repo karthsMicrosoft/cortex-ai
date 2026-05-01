@@ -105,14 +105,16 @@ async def generate_daily_summary(
         user_id = _uuid.UUID(str(user_id))
 
     # Fetch notes created on target_date
-    day_start = target_date
-    day_end = target_date + timedelta(days=1)
+    # 2026-05-01 fix: same str(date) → timestamptz mismatch as weekly_summary
+    from datetime import datetime, time, timezone
+    day_start = datetime.combine(target_date, time.min).replace(tzinfo=timezone.utc)
+    day_end = datetime.combine(target_date + timedelta(days=1), time.min).replace(tzinfo=timezone.utc)
 
     result = await db.execute(
         select(Note).where(
             Note.user_id == user_id,
-            Note.created_at >= str(day_start),
-            Note.created_at < str(day_end),
+            Note.created_at >= day_start,
+            Note.created_at < day_end,
         )
     )
     notes = list(result.scalars().all())
@@ -212,11 +214,19 @@ async def generate_weekly_summary(
     # scan even when daily_summaries already provided all needed data.
     notes: list[Note] = []
     if not daily_summaries:
+        # 2026-05-01 fix: Postgres rejects str() cast of a date against a
+        # timestamptz column ("operator does not exist: timestamp with time
+        # zone >= text"). Use typed datetime bounds with UTC to match the
+        # column's timezone and let asyncpg bind the right parameter type.
+        from datetime import datetime, time, timezone
+
+        start_dt = datetime.combine(monday, time.min).replace(tzinfo=timezone.utc)
+        end_dt = datetime.combine(sunday + timedelta(days=1), time.min).replace(tzinfo=timezone.utc)
         notes_result = await db.execute(
             select(Note).where(
                 Note.user_id == user_id,
-                Note.created_at >= str(monday),
-                Note.created_at < str(sunday + timedelta(days=1)),
+                Note.created_at >= start_dt,
+                Note.created_at < end_dt,
             )
         )
         notes = list(notes_result.scalars().all())

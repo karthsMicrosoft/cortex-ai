@@ -2,9 +2,22 @@
 
 > **Open work, bugs not fixed, gaps from "fully done."** Anything tagged P0/P1/P2 here is meant to be picked up by the next agent.
 
-**Last updated:** 2026-04-30
+**Last updated:** 2026-05-01 (round 2 closed)
 
 ---
+
+## ✅ Round 2 closed (2026-05-01) — see PROGRESS.md "Round 2"
+
+UX-tester agent's 4 filed issues triaged:
+- ISSUE-01 (notes pending sync) — **already fixed by round 1** (embedding column + sync drain)
+- ISSUE-02 (hard-reload bounces to /login) — **already fixed by round 1** (SameSite=None + SessionGate)
+- ISSUE-03 (`/api/upload` 500 + CORS missing) — **fixed**: wrap `content_settings` in `ContentSettings()` object (azure-storage-blob 12.22 requires this)
+- ISSUE-04 (`/api/ai/summary/weekly` 500 ProgrammingError) — **fixed**: replace `str(date)` with typed `datetime` bounds in `distill.py` daily + weekly summary queries
+
+Plus defensive: voice upload returns 422 with helpful detail (instead of 500 + missing CORS) when audio is invalid/corrupt.
+
+e2e suite is now **15/17 passing**. The two remaining failures are **test-infra flakiness**, not app bugs:
+- Post-sign-out tests in the shared-auth Playwright suite hit `/login` 5/min rate limit on rapid re-login fallback. Either bump that route's limit or run sign-out test last via `serial` mode.
 
 ## ✅ Round 1 closed (2026-05-01) — see PROGRESS.md "Round 1"
 

@@ -103,7 +103,29 @@ async def voice_upload(
         except Exception as exc:  # noqa: BLE001
             logger.warning("voice_upload: phrase list load failed for user=%s: %s", current_user_id, exc)
 
-    raw_transcription = await transcribe_audio_file(audio_bytes, phrase_list=loaded_phrases or None)
+    # 2026-05-01 fix: Azure Speech SDK raises RuntimeError on invalid audio
+    # bytes (corrupted webm, empty body, unsupported codec, etc.). Without a
+    # guard the exception escapes as a 500 — Starlette skips CORSMiddleware
+    # on unhandled errors, so the browser sees a CORS failure rather than the
+    # real cause. Translate to 422 with a clear detail so the frontend can
+    # show a useful error and CORS headers stay attached.
+    try:
+        raw_transcription = await transcribe_audio_file(
+            audio_bytes, phrase_list=loaded_phrases or None
+        )
+    except RuntimeError as exc:
+        logger.warning(
+            "voice_upload: transcription failed user=%s err=%s",
+            current_user_id,
+            exc,
+        )
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=(
+                "Could not transcribe audio. The file may be corrupted, "
+                "empty, or in an unsupported format."
+            ),
+        ) from exc
 
     # 4b. Increment usage counts for matched terms (B16 soft-fail; US-7 may not be merged yet)
     if increment_term_usage is not None and raw_transcription:

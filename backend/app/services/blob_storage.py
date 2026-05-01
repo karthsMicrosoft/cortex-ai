@@ -21,6 +21,7 @@ from azure.storage.blob import (
     BlobClient,
     BlobSasPermissions,
     BlobServiceClient,
+    ContentSettings,
     generate_blob_sas,
 )
 
@@ -79,10 +80,13 @@ async def upload_blob(
     service_client = _get_service_client()
     container_client = service_client.get_container_client(container)
     blob_client: BlobClient = container_client.get_blob_client(blob_path)
+    # azure-storage-blob 12.22 requires a ContentSettings object here, not a
+    # dict — passing dict raises 'dict object has no attribute cache_control'
+    # mid-upload (ISSUE-03 from the 2026-05-01 UX bug-bash).
     blob_client.upload_blob(
         data,
         blob_type="BlockBlob",
-        content_settings={"content_type": content_type},
+        content_settings=ContentSettings(content_type=content_type),
         overwrite=True,
     )
     logger.info("Blob uploaded: container=%s path=%s bytes=%d", container, blob_path, len(data))

@@ -25,10 +25,16 @@ test.describe('Voice capture (fake media stream)', () => {
     // Wait for upload + redirect
     await page.waitForTimeout(6_000);
 
-    // /api/voice/upload must NOT return 422 — that's the form-field-name bug
-    const fieldNameBugs = issues.filter(
-      (i) => i.url.endsWith('/api/voice/upload') && i.status === 422,
-    );
+    // /api/voice/upload must NOT return 422 with the form-field-name bug
+    // signature. The chromium fake media stream produces invalid webm bytes
+    // that Azure Speech rejects, so a 422 with a "Could not transcribe"
+    // detail is acceptable; only the OLD 422 ("Field required: body.file")
+    // should fail this test.
+    const fieldNameBugs = issues.filter((i) => {
+      if (!i.url.endsWith('/api/voice/upload') || i.status !== 422) return false;
+      const body = i.body ?? '';
+      return /Field required.*body\.file|"loc":\["body","file"\]/i.test(body);
+    });
     expect(fieldNameBugs, JSON.stringify(fieldNameBugs)).toHaveLength(0);
 
     // /api/upload must NOT return 500 — embedding/blob storage regression
@@ -37,7 +43,16 @@ test.describe('Voice capture (fake media stream)', () => {
     );
     expect(upload500, JSON.stringify(upload500)).toHaveLength(0);
 
-    // No CORS errors in console
+    // /api/voice/upload must also NOT return 500. A 422 from invalid fake
+    // audio (chromium synthetic stream isn't a valid webm) is acceptable.
+    const voice500 = issues.filter(
+      (i) => i.url.endsWith('/api/voice/upload') && i.status === 500,
+    );
+    expect(voice500, JSON.stringify(voice500)).toHaveLength(0);
+
+    // No CORS errors in console (any 500 strips CORSMiddleware response
+    // headers — this assertion catches that regression even if we missed
+    // the specific 5xx above).
     const corsErrors = consoleErrors.filter((e) => /CORS|Access-Control/i.test(e));
     expect(corsErrors, JSON.stringify(corsErrors)).toHaveLength(0);
   });

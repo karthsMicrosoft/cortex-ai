@@ -7,7 +7,11 @@ test.describe('Auth + session restore', () => {
     // endpoint end-to-end. Clear any pre-loaded storageState first so the
     // registration flow runs as an unauthenticated visitor.
     await context.clearCookies();
-    await page.evaluate(() => localStorage.clear());
+    // Navigate to the app before clearing localStorage (can't access it on about:blank)
+    await page.goto('/');
+    await page.evaluate(() => {
+      try { localStorage.clear(); } catch { /* ignore if unavailable */ }
+    });
     const { issues, consoleErrors } = startNetworkRecorder(page);
     // Use a unique email to avoid "already registered" errors
     await registerAndLogin(page, uniqueEmail('e2e-reg'));

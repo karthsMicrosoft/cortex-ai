@@ -284,6 +284,47 @@ Plus a defensive fix:
 
 ---
 
+## Round 3 — User bug-bash + functional gaps (2026-05-01)
+
+User reported 11 functional issues plus P0 + P1.1 polish. Fixed 10/12; 2 deferred.
+
+### Fixed and live-verified
+
+| # | Title | Root cause | Fix |
+|---|---|---|---|
+| **P0** | `/api/auth/login` 5/min limit too aggressive | Tripped legitimate flows + e2e suite | Bumped to 30/min; bcrypt CPU still bounds attacker throughput |
+| **3** | No way to delete notes (single or bulk) | Endpoint existed, no UI; no blob cleanup | Added `POST /api/notes/bulk-delete` (cascades blob storage), single-note Trash button on `NoteDetailPage`, "Select" mode + bulk-delete button on `LibraryPage` |
+| **4 + 5** | NoteEditor Save/Cancel were no-op (`async (_patch) => {…}`); fields appeared editable but did nothing | Earlier TS-quieting hack replaced real handlers with stubs | Wired `handleEditorSave` → `updateNote(serverId, patch)` + Dexie mirror; `handleEditorCancel` → `navigate(-1)` |
+| **6** | Voice notes show "Sure! Please provide the raw voice note…" instead of transcription | When Speech SDK returned empty (silence/NoMatch), Stage 1 prompt `"Raw transcription:\n{empty}\n\n…"` produced GPT's helpful "please provide" reply | Bail early in `_stage_capture` when raw_transcription is empty/whitespace; set `processing_status='failed'` with `(no speech detected — please re-record)` |
+| **7** | Related notes click did nothing — page treated URL `:id` as a localId only | NoteDetailPage useEffect only looked up `db.notes.get(id)` (localId index); Related Notes card uses serverId | Try localId, then `db.notes.where('serverId').equals(id).first()`, then fall back to direct backend fetch — works for both routes |
+| **8** | "Want to go deeper?" auto-rendered as misaligned bottom-sheet, randomly | Auto-poll on every detail-page render whenever shadow_reader_status was pending/asked; sheet had `fixed bottom-0` overlapping bottom nav | Replaced with persistent inline launcher button rendered for every synced note; opens a centered modal on click (no auto-pop) |
+| **9** | Image notes uploaded but image was never displayed | NoteDetailPage only rendered `audio_url` for music notes; never `image_url` | Added image section that renders `<img>` from `image_url` (server) or `URL.createObjectURL(localNote.imageBlob)` (offline) |
+| **10** | Voice answer in Shadow Reader hung the note in `(recording pending transcription…)` | Mic button POSTed to non-existent `/api/upload/audio`; on failure the parent NoteDetailPage's empty-content branch rendered | Removed voice mic from ShadowReaderPrompt entirely (text-only answers for now; voice answer is P3 follow-up) |
+| **11** | Library shows everything as "Ideas" but detail page shows correct AI category | `syncManager.mapServerToLocal` only merged `content + processingStatus + updatedAt`. AI-inferred `category/tags/mood` from Stage 2 never propagated to Dexie | Merge ALL enriched fields (`category`, `tags`, `mood`, `raw_transcription`, `syncStatus`) in `mapServerToLocal`; added `scheduleEnrichmentRefetch` (3s/6s/12s/25s polls after create) so the Library card updates without waiting for the 60s pull |
+| **bonus** | `/api/sync/pull` returning 500 once any note hit `answer_pending` state | `NoteOut.shadow_reader_status` Pydantic Literal didn't include `'answer_pending'`; QA-04 fix added the DB CHECK value but missed the schema | Added `'answer_pending'` to the Literal — pull now returns 200 with all enriched notes |
+
+### Deferred
+
+- **P1.1**: Move APScheduler distill cron OUT of Container App into Container Apps Job. Still gated on `SCHEDULER_ENABLED=false`. Does not affect on-demand `/api/ai/summary/weekly` which works (verified live), but daily summary auto-generation still relies on this. Ticket: `KNOWN_ISSUES.md` § P1.
+
+### Live verification (chrome-devtools captured)
+
+After clearing the local Dexie `lastPull` cursor and reloading:
+- "My weight is 190 lbs..." → category **Fitness** + tags `weight-loss / health / fitness` ✓
+- "Plan mode is on..." → category **Learning** + tags `code-review / git / configuration / software-development` ✓
+- "AI pipeline test..." → category **Learning** + tags `ai / pipeline / test / deployments` ✓
+- Note detail: edit fields visible (content/category/tags/mood) + Save + Cancel + Delete buttons + Related Notes (15%/11%/10%/8% match scores) + Shadow Reader launcher button — all functional ✓
+
+### Round-3 screenshots
+
+- `screenshots/round-3-before/08-library-everything-as-ideas.png` — before fix
+- `screenshots/round-3-after/08-library-correctly-categorized.png` — Fitness/Learning/Ideas with auto-tags
+- `screenshots/round-3-after/09-library-select-mode-bulk-delete.png` — Select mode active + Delete button
+- `screenshots/round-3-after/10-note-detail-with-editor-related-shadowreader-button.png` — full note view
+- `screenshots/round-3-after/11-shadow-reader-modal-on-click.png` — opt-in modal
+
+---
+
 ## 7 — Pickup points (for resuming work)
 
 **If continuing here in this session:** Smoke test the live deployment in a browser (see `PLAN.md` § 5). Then triage the 30 backend test failures (see `KNOWN_ISSUES.md`).

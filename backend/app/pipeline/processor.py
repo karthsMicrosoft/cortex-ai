@@ -130,6 +130,24 @@ class AIPipeline:
             logger.info("pipeline_stage_complete: capture(skip) note_id=%s", note.id)
             return
 
+        # Bug 6 fix (2026-05-01): if raw_transcription is empty/blank (Azure
+        # Speech returned NoMatch — silence, language mismatch, corrupt audio),
+        # the prompt below would resolve to "Raw transcription:\n\n" and
+        # GPT-4o-mini answers "Sure! Please provide the raw voice note you
+        # would like me to clean and structure." We never want that text in
+        # the user's note content. Bail early with a clear marker and a
+        # 'failed' status so the UI can surface the issue.
+        raw_text = (note.raw_transcription or "").strip()
+        if not raw_text:
+            note.content = "(no speech detected — please re-record)"
+            note.processing_status = ProcessingStage.FAILED
+            await self.db.commit()
+            logger.warning(
+                "pipeline_stage_capture: empty raw_transcription on voice note %s",
+                note.id,
+            )
+            return
+
         prompt = (
             "You are a personal knowledge assistant. Clean and structure this raw voice note.\n"
             "Rules:\n"
@@ -138,7 +156,7 @@ class AIPipeline:
             "- Format into clear paragraphs\n"
             "- If it is a list, format as bullet points\n"
             "- Keep it concise but complete\n\n"
-            f"Raw transcription:\n{note.raw_transcription or note.content}\n\n"
+            f"Raw transcription:\n{raw_text}\n\n"
             "Return ONLY the cleaned text, nothing else."
         )
 
@@ -149,8 +167,10 @@ class AIPipeline:
             temperature=0.3,
         )
 
-        cleaned = response.choices[0].message.content or ""
-        note.content = cleaned
+        cleaned = (response.choices[0].message.content or "").strip()
+        # Defensive: if the LLM still produced an empty response (rare but
+        # possible) keep the raw transcription rather than blanking the note.
+        note.content = cleaned or raw_text
         note.processing_status = ProcessingStage.PROCESSED
         await self.db.commit()
         logger.info("pipeline_stage_complete: capture note_id=%s", note.id)

@@ -13,7 +13,14 @@ from pydantic import BaseModel, Field
 _CATEGORY_TYPE = Literal["Music", "Fitness", "Journal", "Ideas", "Spiritual", "Learning"]
 _SOURCE_TYPE = Literal["voice", "text", "image"]
 _PROCESSING_STATUS = Literal["raw", "transcribed", "processed", "enriched", "failed"]
-_SHADOW_READER_STATUS = Literal["pending", "asked", "answered", "dismissed", "skipped"]
+_SHADOW_READER_STATUS = Literal[
+    "pending",
+    "asked",
+    "answer_pending",  # QA-04 transient state — answer received, merge queued
+    "answered",
+    "dismissed",
+    "skipped",
+]
 
 
 class NoteCreate(BaseModel):

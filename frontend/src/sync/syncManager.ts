@@ -112,17 +112,66 @@ async function deleteNoteOnServer(id: string): Promise<void> {
   if (!res.ok) throw new Error(`Note delete failed: ${res.status}`);
 }
 
+async function getNoteOnServer(id: string): Promise<NoteOut> {
+  const token = getToken();
+  if (!token) throw new Error('Not authenticated');
+  const res = await fetch(apiUrl(`/api/notes/${id}`), {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  if (!res.ok) throw new Error(`Note fetch failed: ${res.status}`);
+  return res.json() as Promise<NoteOut>;
+}
+
+/**
+ * After a freshly-created note syncs, the AI pipeline (Stage 1 + Stage 2)
+ * runs server-side for ~5–15s. Poll a few times so the local row gets the
+ * enriched category/tags/mood/raw_transcription without waiting for the
+ * full 60s pull tick. Bug 11 fix.
+ */
+async function scheduleEnrichmentRefetch(localId: string, serverId: string): Promise<void> {
+  const delays = [3_000, 6_000, 12_000, 25_000]; // up to 46s window
+  for (const delay of delays) {
+    await new Promise((r) => setTimeout(r, delay));
+    try {
+      const fresh = await getNoteOnServer(serverId);
+      await db.notes.update(localId, mapServerToLocal(fresh));
+      if (fresh.processing_status === 'enriched' || fresh.processing_status === 'failed') {
+        return;
+      }
+    } catch {
+      // Ignore individual failures — next 60s pull will catch up.
+    }
+  }
+}
+
 function mapServerToLocal(
   serverNote: NoteOut,
   opts?: { keepLocalContent?: string },
 ): Partial<LocalNote> {
-  return {
+  // 2026-05-01 fix (bug 11): merge ALL the AI-enriched fields from the server
+  // back into the local row. Previously this only updated content + status +
+  // updatedAt, so the Library card kept showing the default 'Ideas' category
+  // and empty tags even after Stage 2 ran on the backend.
+  const tags = Array.isArray(serverNote.tags)
+    ? (serverNote.tags as string[])
+    : undefined;
+  const merged: Partial<LocalNote> = {
     serverId: serverNote.id,
     content: opts?.keepLocalContent ?? String(serverNote.content ?? ''),
-    processingStatus: (serverNote.processing_status as LocalNote['processingStatus']) ?? 'raw',
+    processingStatus:
+      (serverNote.processing_status as LocalNote['processingStatus']) ?? 'raw',
+    syncStatus: 'synced',
     updatedAt: new Date(String(serverNote.updated_at)),
-    // Other fields from server can be merged as needed
   };
+  if (typeof serverNote.category === 'string') {
+    merged.category = serverNote.category as LocalNote['category'];
+  }
+  if (typeof serverNote.raw_transcription === 'string') {
+    merged.rawTranscription = serverNote.raw_transcription;
+  }
+  if (tags) merged.tags = tags;
+  if (typeof serverNote.mood === 'string') merged.mood = serverNote.mood;
+  return merged;
 }
 
 // ---------------------------------------------------------------------------
@@ -294,16 +343,21 @@ export class SyncManager {
       category: note.category,
     });
 
+    // Immediately merge whatever the server returned (status will be 'raw' or
+    // 'transcribed' here — Stage 2 enrichment fires asynchronously).
     await db.notes.update(localId, {
-      serverId: created.id,
-      syncStatus: 'synced',
-      processingStatus: (created.processing_status as LocalNote['processingStatus']) ?? 'raw',
+      ...mapServerToLocal(created),
       audioBlob: undefined,
       imageBlob: undefined,
-      updatedAt: new Date(),
     });
 
     if (op.id !== undefined) await db.syncQueue.delete(op.id);
+
+    // Schedule a delayed re-fetch so we can pick up the AI-enriched
+    // category/tags/mood once the backend pipeline finishes (~5–15s typical).
+    // Without this the Library card stays on the default 'Ideas' label until
+    // the next 60s poll tick.
+    void scheduleEnrichmentRefetch(localId, created.id);
   }
 
   private async pushUpdate(op: SyncQueue): Promise<void> {

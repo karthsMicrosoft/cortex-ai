@@ -1,286 +1,223 @@
 /**
- * ShadowReaderPrompt — bottom-sheet component for the Shadow Reader feature (US-8).
+ * ShadowReaderPrompt — opt-in modal for the Shadow Reader feature (US-8).
  *
- * Behaviour:
- *  - Polls GET /api/notes/{noteId}/shadow-reader on the B17 tiered schedule:
- *      Phase 1: 10 polls × 2s intervals (0–20s)
- *      Phase 2:  5 polls × 5s intervals (20–45s)
- *    Stops immediately on any terminal status (asked | skipped | dismissed | answered).
- *  - Renders a fixed-bottom bottom-sheet when status === 'asked'.
- *  - Dismiss (X) → POST dismiss; Answer (Send) → POST answer.
- *  - Voice-mic button uses useVoiceRecorder; transcribed text is pasted into textarea.
- *  - Never blocks the UI — rendered via a fixed overlay, always has a dismiss button.
+ * Behaviour (revised 2026-05-01 to address bugs 8 + 10):
+ *  - Renders a small "Want to go deeper?" launcher button in the page chrome.
+ *    The user clicks it to open the modal — NO auto-pop, NO bottom-sheet
+ *    that randomly appears mid-scroll.
+ *  - On open, fetches /api/notes/{noteId}/shadow-reader.
+ *      • status === 'asked' + questions → show questions + textarea
+ *      • status === 'pending'            → "Questions are still generating…"
+ *      • everything else                 → "No active prompt for this note"
+ *  - Send → POST /api/notes/{id}/shadow-reader/answer; modal closes.
+ *  - Voice mic was REMOVED: it called a non-existent /api/upload/audio
+ *    endpoint and on failure left the page rendering
+ *    "(recording pending transcription…)". Text-only answers for now;
+ *    voice answer is P3 follow-up.
  */
 
-import { useCallback, useEffect, useRef, useState } from 'react';
-import { Mic, Send, Sparkles, X } from 'lucide-react';
+import { useCallback, useEffect, useState } from 'react';
+import { Send, Sparkles, X } from 'lucide-react';
 import { answer, dismiss, getQuestions } from '../api/shadowReader';
 import type { ShadowReaderStatus } from '../api/shadowReader';
-import { useVoiceRecorder } from '../hooks/useVoiceRecorder';
-
-// ---------------------------------------------------------------------------
-// B17 polling schedule
-// ---------------------------------------------------------------------------
-
-/** Each entry is [intervalMs, maxPolls] */
-const POLL_PHASES: [number, number][] = [
-  [2000, 10], // Phase 1: 10 polls × 2s = 0–20s
-  [5000, 5],  // Phase 2:  5 polls × 5s = 20–45s
-];
-
-const TERMINAL_STATUSES: ShadowReaderStatus[] = ['asked', 'skipped', 'dismissed', 'answered'];
-
-// ---------------------------------------------------------------------------
-// Props
-// ---------------------------------------------------------------------------
 
 interface Props {
   noteId: string;
   onComplete?: () => void;
 }
 
-// ---------------------------------------------------------------------------
-// Component
-// ---------------------------------------------------------------------------
-
-type UiStatus = 'loading' | 'asked' | 'hidden';
+type ModalState =
+  | { kind: 'closed' }
+  | { kind: 'loading' }
+  | { kind: 'asked'; questions: string[] }
+  | { kind: 'pending' }
+  | { kind: 'unavailable'; status: ShadowReaderStatus };
 
 export function ShadowReaderPrompt({ noteId, onComplete }: Props): React.ReactElement | null {
-  const [uiStatus, setUiStatus] = useState<UiStatus>('loading');
-  const [questions, setQuestions] = useState<string[]>([]);
+  const [modal, setModal] = useState<ModalState>({ kind: 'closed' });
   const [answerText, setAnswerText] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
-  // Voice recording
-  const recorder = useVoiceRecorder();
-  const [isTranscribing, setIsTranscribing] = useState(false);
-
-  // Polling refs
-  const phaseRef = useRef(0);
-  const pollCountRef = useRef(0);
-  const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-
-  const clearTimer = useCallback(() => {
-    if (timerRef.current !== null) {
-      clearTimeout(timerRef.current);
-      timerRef.current = null;
-    }
-  }, []);
-
-  // -----------------------------------------------------------------------
-  // Polling logic
-  // -----------------------------------------------------------------------
-
-  const schedulePoll = useCallback(
-    (onPoll: () => Promise<void>) => {
-      const [intervalMs, maxPolls] = POLL_PHASES[phaseRef.current] ?? [0, 0];
-      if (maxPolls === 0) {
-        // All phases exhausted — give up
-        setUiStatus('hidden');
+  const open = useCallback(async () => {
+    setModal({ kind: 'loading' });
+    setError(null);
+    try {
+      const data = await getQuestions(noteId);
+      if (data.status === 'asked' && data.questions.length > 0) {
+        setModal({ kind: 'asked', questions: data.questions });
         return;
       }
-
-      timerRef.current = setTimeout(async () => {
-        await onPoll();
-        pollCountRef.current += 1;
-
-        if (pollCountRef.current >= maxPolls) {
-          // Advance to next phase
-          phaseRef.current += 1;
-          pollCountRef.current = 0;
-        }
-      }, intervalMs);
-    },
-    [],
-  );
-
-  useEffect(() => {
-    if (!noteId) return;
-
-    phaseRef.current = 0;
-    pollCountRef.current = 0;
-
-    const doPoll = async () => {
-      try {
-        const data = await getQuestions(noteId);
-
-        if (data.status === 'asked' && data.questions.length > 0) {
-          setQuestions(data.questions);
-          setUiStatus('asked');
-          clearTimer();
-          return; // terminal — stop polling
-        }
-
-        if (TERMINAL_STATUSES.includes(data.status)) {
-          setUiStatus('hidden');
-          clearTimer();
-          return; // terminal
-        }
-
-        // Still pending — schedule next poll
-        schedulePoll(doPoll);
-      } catch {
-        // Network error — schedule next poll anyway (don't crash UI)
-        schedulePoll(doPoll);
+      if (data.status === 'pending') {
+        setModal({ kind: 'pending' });
+        return;
       }
-    };
-
-    // Fire the first poll immediately (but inside the schedule loop so the
-    // interval is applied from the start to keep the budget accurate).
-    schedulePoll(doPoll);
-
-    return () => clearTimer();
-  // eslint-disable-next-line react-hooks/exhaustive-deps
+      setModal({ kind: 'unavailable', status: data.status });
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Could not load follow-up questions');
+      setModal({ kind: 'closed' });
+    }
   }, [noteId]);
 
-  // -----------------------------------------------------------------------
-  // Handlers
-  // -----------------------------------------------------------------------
+  const close = useCallback(() => {
+    setModal({ kind: 'closed' });
+    setAnswerText('');
+    setError(null);
+  }, []);
 
-  const handleDismiss = async () => {
-    clearTimer();
+  const handleDismiss = useCallback(async () => {
     try {
       await dismiss(noteId);
     } catch {
-      // Non-critical — still hide the sheet
+      // Best-effort — close the modal regardless
     }
-    setUiStatus('hidden');
+    close();
     onComplete?.();
-  };
+  }, [noteId, close, onComplete]);
 
-  const handleSubmit = async () => {
+  const handleSubmit = useCallback(async () => {
     const trimmed = answerText.trim();
     if (!trimmed || isSubmitting) return;
     setIsSubmitting(true);
+    setError(null);
     try {
       await answer(noteId, trimmed);
-      setUiStatus('hidden');
+      close();
       onComplete?.();
-    } catch {
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to submit reflection');
+    } finally {
       setIsSubmitting(false);
     }
-  };
+  }, [answerText, isSubmitting, noteId, close, onComplete]);
 
-  const handleVoiceToggle = async () => {
-    if (recorder.isRecording) {
-      setIsTranscribing(true);
-      const blob = await recorder.stop();
-      if (blob) {
-        // Upload blob to the standard voice upload endpoint for transcription
-        try {
-          const formData = new FormData();
-          formData.append('file', blob, 'reflection.webm');
-          const { useAuthStore } = await import('../store/authStore');
-          const { accessToken } = useAuthStore.getState();
-          const { apiUrl } = await import('../api/client');
-          const res = await fetch(apiUrl('/api/upload/audio'), {
-            method: 'POST',
-            headers: accessToken ? { Authorization: `Bearer ${accessToken}` } : {},
-            body: formData,
-          });
-          if (res.ok) {
-            const data = (await res.json()) as { transcription?: string };
-            if (data.transcription) {
-              setAnswerText((prev) => prev ? `${prev} ${data.transcription}` : data.transcription!);
-            }
-          }
-        } catch {
-          // Transcription failed — user still has audio recorded, no-op
-        }
-      }
-      setIsTranscribing(false);
-    } else {
-      await recorder.start();
-    }
-  };
+  // Trigger an open() on demand from outside (e.g. a header button on the
+  // detail page). For now, the button is rendered inline below.
+  useEffect(() => {
+    // No-op — modal stays closed until the user clicks the launcher.
+  }, []);
 
-  // -----------------------------------------------------------------------
-  // Render
-  // -----------------------------------------------------------------------
-
-  if (uiStatus !== 'asked') return null;
+  const isOpen = modal.kind !== 'closed';
 
   return (
-    <div
-      className="fixed bottom-0 left-0 right-0 z-40 animate-slide-up"
-      aria-label="Shadow Reader — follow-up questions"
-    >
-      <div className="bg-gradient-to-t from-slate-900 to-slate-800 border-t border-indigo-500/30 rounded-t-3xl p-5 shadow-2xl">
-        {/* Header */}
-        <div className="flex items-start justify-between mb-3">
-          <div className="flex items-center gap-2">
-            <Sparkles className="w-4 h-4 text-indigo-400" aria-hidden="true" />
-            <span className="text-sm text-slate-300">Want to go deeper?</span>
-          </div>
-          <button
-            type="button"
-            onClick={() => void handleDismiss()}
-            className="text-slate-500 hover:text-slate-300 focus:outline-none focus:ring-2 focus:ring-indigo-400 rounded"
-            aria-label="Dismiss shadow reader"
+    <>
+      {/* Launcher — always visible (Bug 8 fix: persistent button instead of
+         random bottom-sheet popups) */}
+      <button
+        type="button"
+        onClick={() => void open()}
+        className="inline-flex items-center gap-2 rounded-full border border-indigo-500/40 bg-indigo-900/30 px-3 py-1.5 text-xs font-medium text-indigo-200 hover:bg-indigo-900/60 focus:outline-none focus:ring-2 focus:ring-indigo-400"
+        aria-label="Open Shadow Reader follow-up prompt"
+        data-testid="shadow-reader-launcher"
+      >
+        <Sparkles className="h-3.5 w-3.5" aria-hidden="true" />
+        Want to go deeper?
+      </button>
+
+      {/* Modal overlay */}
+      {isOpen && (
+        <div
+          className="fixed inset-0 z-50 flex items-end justify-center bg-black/60 sm:items-center"
+          role="dialog"
+          aria-modal="true"
+          aria-label="Shadow Reader"
+          onClick={close}
+        >
+          <div
+            className="w-full max-w-md rounded-t-3xl border-t border-indigo-500/30 bg-slate-900 p-5 shadow-2xl sm:rounded-3xl sm:border"
+            onClick={(e) => e.stopPropagation()}
           >
-            <X className="w-4 h-4" aria-hidden="true" />
-          </button>
-        </div>
+            {/* Header */}
+            <div className="mb-3 flex items-start justify-between">
+              <div className="flex items-center gap-2">
+                <Sparkles className="h-4 w-4 text-indigo-400" aria-hidden="true" />
+                <span className="text-sm font-medium text-slate-200">Want to go deeper?</span>
+              </div>
+              <button
+                type="button"
+                onClick={close}
+                className="rounded p-1 text-slate-500 hover:text-slate-300 focus:outline-none focus:ring-2 focus:ring-indigo-400"
+                aria-label="Close"
+              >
+                <X className="h-4 w-4" aria-hidden="true" />
+              </button>
+            </div>
 
-        {/* Questions */}
-        <div className="space-y-2 mb-4">
-          {questions.map((q, idx) => (
-            <p key={idx} className="text-base text-slate-100 leading-relaxed">
-              {q}
-            </p>
-          ))}
-        </div>
+            {/* Body */}
+            {modal.kind === 'loading' && (
+              <p className="text-sm text-slate-400">Loading…</p>
+            )}
 
-        {/* Answer area */}
-        <div className="flex gap-2">
-          <textarea
-            value={answerText}
-            onChange={(e) => setAnswerText(e.target.value)}
-            placeholder="Reflect briefly… (or skip)"
-            rows={2}
-            className="flex-1 bg-slate-950 rounded-xl px-3 py-2 text-sm resize-none text-slate-100 placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-indigo-500"
-            aria-label="Reflection answer"
-            onKeyDown={(e) => {
-              if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
-                void handleSubmit();
-              }
-            }}
-          />
-          <div className="flex flex-col gap-2">
-            <button
-              type="button"
-              onClick={() => void handleSubmit()}
-              disabled={isSubmitting || !answerText.trim()}
-              className="bg-indigo-600 p-2 rounded-xl hover:bg-indigo-500 disabled:opacity-50 focus:outline-none focus:ring-2 focus:ring-indigo-400"
-              aria-label="Submit reflection"
-            >
-              <Send className="w-4 h-4" aria-hidden="true" />
-            </button>
-            <button
-              type="button"
-              onClick={() => void handleVoiceToggle()}
-              disabled={isTranscribing}
-              className={[
-                'p-2 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-400',
-                recorder.isRecording
-                  ? 'bg-red-600 hover:bg-red-500 animate-pulse'
-                  : 'bg-slate-700 hover:bg-slate-600',
-                isTranscribing ? 'opacity-50' : '',
-              ].join(' ')}
-              aria-label={recorder.isRecording ? 'Stop voice recording' : 'Start voice recording'}
-            >
-              <Mic className="w-4 h-4" aria-hidden="true" />
-            </button>
+            {modal.kind === 'pending' && (
+              <p className="text-sm text-slate-400">
+                Follow-up questions are still being generated. Please try again in a few seconds.
+              </p>
+            )}
+
+            {modal.kind === 'unavailable' && (
+              <p className="text-sm text-slate-400">
+                {modal.status === 'answered'
+                  ? 'You already answered the prompt for this note.'
+                  : modal.status === 'dismissed'
+                  ? 'You dismissed the prompt for this note.'
+                  : modal.status === 'skipped'
+                  ? 'No prompt was generated for this note.'
+                  : 'No active prompt for this note.'}
+              </p>
+            )}
+
+            {modal.kind === 'asked' && (
+              <>
+                <ul className="mb-4 space-y-2">
+                  {modal.questions.map((q, idx) => (
+                    <li key={idx} className="text-base leading-relaxed text-slate-100">
+                      {q}
+                    </li>
+                  ))}
+                </ul>
+
+                <textarea
+                  value={answerText}
+                  onChange={(e) => setAnswerText(e.target.value)}
+                  placeholder="Reflect briefly…"
+                  rows={3}
+                  className="mb-3 w-full resize-none rounded-xl border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-100 placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                  aria-label="Reflection answer"
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
+                      void handleSubmit();
+                    }
+                  }}
+                />
+
+                {error && (
+                  <p className="mb-3 text-xs text-red-400" role="alert">{error}</p>
+                )}
+
+                <div className="flex justify-end gap-2">
+                  <button
+                    type="button"
+                    onClick={() => void handleDismiss()}
+                    className="rounded-lg px-3 py-2 text-sm text-slate-300 hover:bg-slate-800 focus:outline-none focus:ring-2 focus:ring-indigo-400"
+                  >
+                    Skip
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => void handleSubmit()}
+                    disabled={isSubmitting || !answerText.trim()}
+                    className="inline-flex items-center gap-1.5 rounded-lg bg-indigo-600 px-3 py-2 text-sm font-semibold text-white hover:bg-indigo-500 disabled:opacity-50 focus:outline-none focus:ring-2 focus:ring-indigo-400"
+                    aria-label="Submit reflection"
+                  >
+                    <Send className="h-4 w-4" aria-hidden="true" />
+                    {isSubmitting ? 'Saving…' : 'Send'}
+                  </button>
+                </div>
+              </>
+            )}
           </div>
         </div>
-
-        {/* Partial transcript preview while recording */}
-        {recorder.isRecording && recorder.partialText && (
-          <p className="mt-2 text-xs text-slate-400 italic truncate">
-            {recorder.partialText}
-          </p>
-        )}
-      </div>
-    </div>
+      )}
+    </>
   );
 }

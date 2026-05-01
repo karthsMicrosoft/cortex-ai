@@ -18,6 +18,7 @@ from datetime import datetime, date
 from typing import Optional
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, status
+from pydantic import BaseModel, Field
 from sqlalchemy import func, insert, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
@@ -283,16 +284,86 @@ async def update_note(
 # DELETE /api/notes/{id}
 # ---------------------------------------------------------------------------
 
+def _blob_path_from_url(url: Optional[str]) -> Optional[str]:
+    """Extract the blob_path (e.g. 'audio/<uuid>/<file>.webm') from a SAS URL.
+
+    Returns None if the URL is not from our blob container.
+    """
+    if not url:
+        return None
+    import re
+
+    container = settings.AZURE_STORAGE_CONTAINER
+    # SAS URLs look like https://<account>.blob.core.windows.net/<container>/<path>?<token>
+    match = re.search(rf"/{re.escape(container)}/([^?]+)", url)
+    return match.group(1) if match else None
+
+
+async def _purge_note_blobs(note: Note) -> None:
+    """Delete the audio/image blobs associated with *note* (best-effort)."""
+    from app.services.blob_storage import delete_blob
+
+    for url in (note.audio_url, note.image_url):
+        path = _blob_path_from_url(url)
+        if not path:
+            continue
+        try:
+            await delete_blob(path)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("delete_note: blob purge failed path=%s err=%s", path, exc)
+
+
 @router.delete("/{note_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_note(
     note_id: uuid.UUID,
     current_user_id: uuid.UUID = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> None:
-    """Delete a note owned by the authenticated user. Returns 204."""
+    """Delete a note owned by the authenticated user. Returns 204.
+
+    2026-05-01 (bug 3): also purge the audio/image blobs from Storage so a
+    deleted note does not leave orphaned media behind.
+    """
     note = await _fetch_note(db, note_id, current_user_id)
+    await _purge_note_blobs(note)
     await db.delete(note)
     await db.flush()
+
+
+# ---------------------------------------------------------------------------
+# POST /api/notes/bulk-delete  — multi-note delete from the Library page
+# ---------------------------------------------------------------------------
+
+class BulkDeleteRequest(BaseModel):
+    """Body for POST /api/notes/bulk-delete (Bug 3)."""
+
+    ids: list[uuid.UUID] = Field(..., max_length=200)
+
+
+@router.post("/bulk-delete", status_code=status.HTTP_200_OK)
+async def bulk_delete(
+    payload: BulkDeleteRequest,
+    current_user_id: uuid.UUID = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """Delete every note in payload.ids that belongs to the authenticated
+    user. Notes owned by other users (or non-existent ids) are silently
+    skipped — the response returns the count actually deleted.
+    """
+    if not payload.ids:
+        return {"deleted": 0}
+    result = await db.execute(
+        select(Note).where(
+            Note.id.in_(payload.ids),
+            Note.user_id == current_user_id,
+        )
+    )
+    notes = list(result.scalars().all())
+    for note in notes:
+        await _purge_note_blobs(note)
+        await db.delete(note)
+    await db.flush()
+    return {"deleted": len(notes)}
 
 
 # ---------------------------------------------------------------------------

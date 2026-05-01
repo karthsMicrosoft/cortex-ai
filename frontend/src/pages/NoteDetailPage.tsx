@@ -1,9 +1,9 @@
 import { useCallback, useEffect, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
-import { ArrowLeft, Music, Pencil, Check, X } from 'lucide-react';
+import { ArrowLeft, Music, Pencil, Check, X, Trash2 } from 'lucide-react';
 import { db } from '../db';
 import type { LocalNote } from '../db';
-import { getNote, updateNote } from '../api/notes';
+import { deleteNote, getNote, updateNote } from '../api/notes';
 import type { NoteOut } from '../api/notes';
 import { searchSimilar } from '../api/search';
 import type { SearchResult } from '../api/search';
@@ -152,16 +152,21 @@ export default function NoteDetailPage(): React.ReactElement {
     void (async () => {
       setIsLoading(true);
       try {
-        // Try IndexedDB first (offline-first)
-        const local = await db.notes.get(id);
+        // 2026-05-01 fix (bug 7): the URL :id param can be EITHER a localId
+        // (when navigated from Library/NoteCard) OR a serverId (when the
+        // user clicked a Related Note card whose `rel.id` is the serverId).
+        // Try localId first, then fall back to serverId lookup, then to a
+        // direct backend fetch for server-only views.
+        let local = await db.notes.get(id);
+        if (!local) {
+          local = await db.notes.where('serverId').equals(id).first();
+        }
         if (local) setLocalNote(local);
 
-        // 2026-05-01 fix: only call the backend when we actually have a
-        // serverId. The URL :id param is the localId; falling back to it
-        // for unsynced notes hits /api/notes/<localId> -> 404 and the same
-        // for /api/search/similar/<localId>. Skip both calls and let the
-        // page render purely from the local row until sync completes.
-        const sId = local?.serverId;
+        // Resolve the serverId for backend calls. Use the local row's
+        // serverId when present; otherwise treat the URL param as the
+        // serverId directly (related-note click).
+        const sId = local?.serverId ?? (local ? undefined : id);
         if (sId) {
           try {
             const server = await getNote(sId);
@@ -187,6 +192,51 @@ export default function NoteDetailPage(): React.ReactElement {
   const handleSaved = useCallback((updated: NoteOut) => {
     setServerNote(updated);
   }, []);
+
+  // 2026-05-01 fix (bugs 4 + 5): real Save handler — PUT /api/notes/{serverId}
+  // with the patch, then refresh local + server state and navigate back.
+  // Cancel returns to wherever the user came from.
+  const handleEditorSave = useCallback(
+    async (patch: import('../components/NoteEditor').NotePatch): Promise<void> => {
+      const targetServerId = serverNote?.id ?? localNote?.serverId;
+      if (!targetServerId) {
+        throw new Error('Cannot save — note is not yet synced.');
+      }
+      const updated = await updateNote(targetServerId, patch);
+      setServerNote(updated);
+      // Mirror into Dexie so Library reflects the new category/tags/mood
+      if (localNote) {
+        await db.notes.update(localNote.localId, {
+          category: updated.category as LocalNote['category'],
+          tags: Array.isArray(updated.tags) ? (updated.tags as string[]) : localNote.tags,
+          mood: typeof updated.mood === 'string' ? updated.mood : localNote.mood,
+          content: updated.content ?? localNote.content,
+          updatedAt: new Date(String(updated.updated_at ?? Date.now())),
+        });
+      }
+    },
+    [serverNote, localNote],
+  );
+
+  const handleEditorCancel = useCallback(() => {
+    navigate(-1);
+  }, [navigate]);
+
+  const handleDelete = useCallback(async () => {
+    const targetServerId = serverNote?.id ?? localNote?.serverId;
+    if (!window.confirm('Delete this note? This cannot be undone.')) return;
+    try {
+      if (targetServerId) {
+        await deleteNote(targetServerId);
+      }
+      if (localNote) {
+        await db.notes.delete(localNote.localId);
+      }
+      navigate('/library', { replace: true });
+    } catch (err) {
+      window.alert(err instanceof Error ? err.message : 'Delete failed');
+    }
+  }, [serverNote, localNote, navigate]);
 
   // ------------------------------------------------------------------ render
 
@@ -219,6 +269,9 @@ export default function NoteDetailPage(): React.ReactElement {
     serverNote?.processing_status ?? localNote?.processingStatus ?? 'raw';
   const tags = serverNote?.tags ?? localNote?.tags ?? [];
   const audioUrl = serverNote?.audio_url;
+  // Bug 9 fix (2026-05-01): show the uploaded image when image_url is present.
+  // Falls back to the local imageBlob (object URL) for offline-still-pending notes.
+  const imageUrl = serverNote?.image_url;
   const sourceType = serverNote?.source_type ?? localNote?.sourceType;
   const createdAt = serverNote?.created_at ?? localNote?.createdAt.toISOString() ?? '';
   const updatedAt = serverNote?.updated_at ?? localNote?.updatedAt.toISOString() ?? '';
@@ -260,6 +313,16 @@ export default function NoteDetailPage(): React.ReactElement {
           </span>
           <ProcessingBadge status={processingStatus as LocalNote['processingStatus']} />
         </div>
+        {/* Delete button (Bug 3) — single-note delete from the detail view */}
+        <button
+          type="button"
+          aria-label="Delete note"
+          data-testid="note-detail-delete"
+          onClick={() => void handleDelete()}
+          className="rounded-lg p-1 text-slate-400 hover:bg-red-900/30 hover:text-red-300 focus:outline-none focus:ring-2 focus:ring-red-400"
+        >
+          <Trash2 className="h-5 w-5" />
+        </button>
       </header>
 
       <main className="flex flex-1 flex-col gap-5 px-4 py-5">
@@ -268,6 +331,17 @@ export default function NoteDetailPage(): React.ReactElement {
           <span>Created: {formatDateTime(createdAt)}</span>
           <span>Updated: {formatDateTime(updatedAt)}</span>
         </div>
+
+        {/* Image attachment (Bug 9) — render uploaded image for image notes */}
+        {sourceType === 'image' && (imageUrl || localNote?.imageBlob) && (
+          <section aria-label="Image attachment">
+            <img
+              src={imageUrl ?? (localNote?.imageBlob ? URL.createObjectURL(localNote.imageBlob) : '')}
+              alt="Note attachment"
+              className="w-full max-h-96 rounded-xl object-contain bg-slate-900 border border-slate-700"
+            />
+          </section>
+        )}
 
         {/* Music player (US-6) — shown for voice + Music category notes */}
         {isMusicNote && (
@@ -320,8 +394,8 @@ export default function NoteDetailPage(): React.ReactElement {
         {serverNote ? (
           <NoteEditor
             note={serverNote}
-            onSave={async (_patch) => { handleSaved(serverNote); }}
-            onCancel={() => { /* no-op: stay on detail page */ }}
+            onSave={handleEditorSave}
+            onCancel={handleEditorCancel}
           />
         ) : (
           <div className="rounded-xl border border-slate-700 bg-slate-800/60 p-4">
@@ -364,20 +438,21 @@ export default function NoteDetailPage(): React.ReactElement {
             </div>
           </section>
         )}
-      </main>
-
-      {/* Shadow Reader prompt (US-8) — shown when note is enriched and status is pending/asked */}
-      {serverNote &&
-        (serverNote.shadow_reader_status === 'asked' ||
-          serverNote.shadow_reader_status === 'pending') && (
-          <ShadowReaderPrompt
-            noteId={serverNote.id}
-            onComplete={() => {
-              // Refresh note to pick up answered/dismissed status
-              void getNote(serverNote.id).then(setServerNote).catch(() => undefined);
-            }}
-          />
+        {/* Shadow Reader prompt (US-8) — Bug 8 fix: persistent launcher button
+            rendered for ALL synced notes; modal opens only on user click,
+            regardless of status. */}
+        {serverNote && (
+          <section aria-label="Shadow Reader">
+            <ShadowReaderPrompt
+              noteId={serverNote.id}
+              onComplete={() => {
+                // Refresh note to pick up answered/dismissed status
+                void getNote(serverNote.id).then(setServerNote).catch(() => undefined);
+              }}
+            />
+          </section>
         )}
+      </main>
     </div>
   );
 }

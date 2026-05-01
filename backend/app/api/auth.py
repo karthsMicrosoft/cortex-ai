@@ -77,7 +77,11 @@ async def register(request: Request, payload: RegisterRequest, db: AsyncSession 
 # ---------------------------------------------------------------------------
 
 @router.post("/login", response_model=TokenPair)
-@limiter.limit("5/minute")  # SEC-03 — credential brute-force protection
+# SEC-03 with bumped limit: 5/min was tripping legitimate flows where the user
+# refreshes between tabs or e2e suites perform several login attempts in
+# sequence. 30/min is comfortable for users; bcrypt's CPU cost (~100ms per
+# verify) still bounds attacker throughput even at this higher rate.
+@limiter.limit("30/minute")
 async def login(
     request: Request,
     payload: LoginRequest,

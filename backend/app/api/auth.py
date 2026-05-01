@@ -29,6 +29,8 @@ from app.models.user import User
 from app.schemas.auth import (
     AccessTokenResponse,
     LoginRequest,
+    PasswordChangeRequest,
+    ProfileUpdateRequest,
     RefreshRequest,
     RegisterRequest,
     TokenPair,
@@ -103,7 +105,7 @@ async def login(
         value=refresh_token,
         httponly=True,
         secure=True,
-        samesite="lax",
+        samesite="none",  # SameSite=None+Secure required for cross-origin SWA→backend refresh; otherwise the browser refuses to send the cookie on fetch from gentle-river-*.azurestaticapps.net to cortexks-*.azurecontainerapps.io and refresh always 401s.
         max_age=30 * 24 * 3600,  # 30 days
         path="/api/auth",
     )
@@ -192,7 +194,7 @@ async def refresh_token(
         value=new_refresh,
         httponly=True,
         secure=True,
-        samesite="lax",
+        samesite="none",  # SameSite=None+Secure required for cross-origin SWA→backend refresh; otherwise the browser refuses to send the cookie on fetch from gentle-river-*.azurestaticapps.net to cortexks-*.azurecontainerapps.io and refresh always 401s.
         max_age=30 * 24 * 3600,
         path="/api/auth",
     )
@@ -215,3 +217,95 @@ async def get_me(
     if user is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
     return UserOut.model_validate(user)
+
+
+# ---------------------------------------------------------------------------
+# PUT /api/auth/me — update profile (currently: display_name only)
+# ---------------------------------------------------------------------------
+
+@router.put("/me", response_model=UserOut)
+async def update_me(
+    payload: ProfileUpdateRequest,
+    current_user_id: uuid.UUID = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> UserOut:
+    """Partial profile update. Email is intentionally not editable here —
+    changing the auth identity should go through a separate confirm-email flow.
+    """
+    result = await db.execute(select(User).where(User.id == current_user_id))
+    user = result.scalar_one_or_none()
+    if user is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
+
+    if payload.display_name is not None:
+        user.display_name = payload.display_name
+
+    await db.commit()
+    await db.refresh(user)
+    return UserOut.model_validate(user)
+
+
+# ---------------------------------------------------------------------------
+# POST /api/auth/password — change password
+# ---------------------------------------------------------------------------
+
+@router.post("/password", status_code=status.HTTP_204_NO_CONTENT)
+@limiter.limit("5/minute")  # SEC-03 — slow brute-force on current_password
+async def change_password(
+    request: Request,
+    payload: PasswordChangeRequest,
+    current_user_id: uuid.UUID = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> Response:
+    """Change the authenticated user's password. Requires the current
+    password as a defense-in-depth check (so a stolen access token alone
+    cannot rotate the password without also knowing the existing one)."""
+    result = await db.execute(select(User).where(User.id == current_user_id))
+    user = result.scalar_one_or_none()
+    if user is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
+
+    if not verify_password(payload.current_password, user.password_hash):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Current password is incorrect",
+        )
+
+    user.password_hash = hash_password(payload.new_password)
+    await db.commit()
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+# ---------------------------------------------------------------------------
+# POST /api/auth/logout — clear refresh cookie + revoke its JTI
+# ---------------------------------------------------------------------------
+
+@router.post("/logout", status_code=status.HTTP_204_NO_CONTENT)
+async def logout(
+    request: Request,
+    response: Response,
+    refresh_cookie: Optional[str] = Cookie(default=None, alias=_REFRESH_COOKIE_NAME),
+) -> Response:
+    """Revoke the current refresh token (if any) and clear the cookie.
+    Idempotent — silently succeeds if no cookie is present or the token is
+    already invalid (so a button click never exposes information to attackers)."""
+    if refresh_cookie:
+        try:
+            payload = decode_token(refresh_cookie)
+            jti = payload.get("jti")
+            if jti:
+                revoke_jti(jti)
+        except HTTPException:
+            pass  # already invalid — idempotent
+
+    response.delete_cookie(
+        key=_REFRESH_COOKIE_NAME,
+        path="/api/auth",
+        secure=True,
+        samesite="none",
+        httponly=True,
+    )
+    return Response(
+        status_code=status.HTTP_204_NO_CONTENT,
+        headers=dict(response.headers),
+    )

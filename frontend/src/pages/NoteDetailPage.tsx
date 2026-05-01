@@ -156,19 +156,21 @@ export default function NoteDetailPage(): React.ReactElement {
         const local = await db.notes.get(id);
         if (local) setLocalNote(local);
 
-        // If the note has a serverId, fetch from API
-        const sId = local?.serverId ?? id;
-        try {
-          const server = await getNote(sId);
-          setServerNote(server);
-        } catch {
-          // Offline or not yet synced — stay with local
-        }
-
-        // Fetch related notes (server only, optional)
-        if (local?.serverId ?? id) {
+        // 2026-05-01 fix: only call the backend when we actually have a
+        // serverId. The URL :id param is the localId; falling back to it
+        // for unsynced notes hits /api/notes/<localId> -> 404 and the same
+        // for /api/search/similar/<localId>. Skip both calls and let the
+        // page render purely from the local row until sync completes.
+        const sId = local?.serverId;
+        if (sId) {
           try {
-            const rel = await searchSimilar(local?.serverId ?? id);
+            const server = await getNote(sId);
+            setServerNote(server);
+          } catch {
+            // Offline or backend hiccup — local row is still rendered.
+          }
+          try {
+            const rel = await searchSimilar(sId);
             setSimilar(rel.slice(0, 5));
           } catch {
             // Non-critical

@@ -6,6 +6,7 @@ import { db } from '../db';
 import type { LocalNote } from '../db';
 import { VoiceCapture } from '../components/VoiceCapture';
 import { SyncIndicator } from '../components/SyncIndicator';
+import { syncManager } from '../sync/syncManager';
 
 // ---------------------------------------------------------------------------
 // CapturePage
@@ -59,6 +60,9 @@ export function CapturePage(): React.ReactElement {
 
     setTextContent('');
     setIsSubmitting(false);
+    // 2026-05-01 fix: nudge a sync push immediately so the note flips from
+    // 'pending' to 'synced' without waiting for the 30s polling tick.
+    void syncManager.pushChanges();
     navigate('/library');
   }, [textContent, navigate]);
 
@@ -92,6 +96,9 @@ export function CapturePage(): React.ReactElement {
       retryCount: 0,
     });
 
+    // 2026-05-01 fix: nudge a sync push immediately so image notes don't
+    // sit in 'pending' until the 30s polling tick.
+    void syncManager.pushChanges();
     navigate('/library');
   }, [navigate]);
 

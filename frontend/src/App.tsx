@@ -14,19 +14,30 @@ const BrainViewPage = lazy(() => import('./pages/BrainViewPage'));
 import CreatePage from './pages/CreatePage';
 import ConflictsPage from './pages/ConflictsPage';
 import SettingsPage from './pages/SettingsPage';  // US-7
+import ProfilePage from './pages/ProfilePage';   // 2026-05-01 — issue #3
 import { BottomNav } from './components/BottomNav';
+import { AppHeader } from './components/AppHeader';
+import { SessionGate } from './components/SessionGate';
 
 // ---------------------------------------------------------------------------
-// Protected layout — AuthGate + BottomNav
+// Protected layout — AuthGate + AppHeader + BottomNav
 // ---------------------------------------------------------------------------
 
 function AuthGate({ children }: { children: React.ReactNode }): React.ReactElement {
   const accessToken = useAuthStore((s) => s.accessToken);
+  const isRestoring = useAuthStore((s) => s.isRestoring);
+
+  // While SessionGate is still attempting refresh on first boot, render
+  // nothing — SessionGate itself shows the splash.
+  if (isRestoring && !accessToken) {
+    return <></>;
+  }
   if (!accessToken) {
     return <Navigate to="/login" replace />;
   }
   return (
     <>
+      <AppHeader />
       {children}
       <BottomNav />
     </>
@@ -40,6 +51,7 @@ function AuthGate({ children }: { children: React.ReactNode }): React.ReactEleme
 export default function App(): React.ReactElement {
   return (
     <div className="min-h-screen bg-[#0F172A]">
+      <SessionGate>
       <Routes>
         {/* Public routes */}
         <Route path="/login" element={<LoginPage />} />
@@ -125,6 +137,14 @@ export default function App(): React.ReactElement {
             </AuthGate>
           }
         />
+        <Route
+          path="/profile"
+          element={
+            <AuthGate>
+              <ProfilePage />
+            </AuthGate>
+          }
+        />
 
         {/* Wildcard: redirect unknown paths */}
         <Route
@@ -136,6 +156,7 @@ export default function App(): React.ReactElement {
           }
         />
       </Routes>
+      </SessionGate>
     </div>
   );
 }

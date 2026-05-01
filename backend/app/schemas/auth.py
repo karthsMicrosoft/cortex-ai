@@ -49,3 +49,16 @@ class UserOut(BaseModel):
     shadow_reader_disabled_categories: list[str] = []
 
     model_config = {"from_attributes": True}
+
+
+class ProfileUpdateRequest(BaseModel):
+    """Body for PUT /api/auth/me — partial update of display_name."""
+    display_name: Optional[str] = Field(default=None, max_length=100)
+
+
+class PasswordChangeRequest(BaseModel):
+    """Body for POST /api/auth/password — current_password verifies the
+    caller's identity even if their access token is still valid; new_password
+    follows the same min_length=8 / max_length=128 SEC-04 rule as register."""
+    current_password: str
+    new_password: str = Field(..., min_length=8, max_length=128)

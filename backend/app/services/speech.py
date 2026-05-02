@@ -159,6 +159,53 @@ def _write_temp(data: bytes, suffix: str) -> str:
     return path
 
 
+def _transcode_to_m4a(src_path: str) -> str:
+    """Transcode *src_path* (any container/codec ffmpeg supports) to AAC-in-M4A.
+
+    Purpose: **playback compatibility**.  iOS Safari has zero WebM container
+    support, so audio/webm blobs stored in Blob Storage silently fail to play on
+    iPhone.  MP4/AAC (audio/mp4, .m4a) plays on every browser including Safari.
+
+    This helper is intentionally separate from ``_ffmpeg_to_wav`` which converts
+    audio for **transcription** (16 kHz mono PCM WAV for Azure Speech SDK).
+    Keeping the two helpers distinct lets callers clean up each temp file
+    independently and avoids coupling the transcription pipeline to playback needs.
+
+    Args:
+        src_path: Path to the source audio file (any ffmpeg-readable container).
+
+    Returns:
+        Path to the transcoded .m4a file. Caller must unlink it.
+
+    Raises:
+        RuntimeError: if ffmpeg is not installed, times out, or returns non-zero.
+    """
+    out_path = src_path + ".m4a"
+    try:
+        result = subprocess.run(
+            [
+                "ffmpeg",
+                "-y",
+                "-i", src_path,
+                "-c:a", "aac",
+                "-b:a", "128k",
+                "-ar", "44100",
+                out_path,
+            ],
+            capture_output=True,
+            timeout=60,
+        )
+    except FileNotFoundError as exc:
+        raise RuntimeError("ffmpeg binary not found in PATH") from exc
+    except subprocess.TimeoutExpired as exc:
+        raise RuntimeError("ffmpeg M4A transcode timed out after 60s") from exc
+
+    if result.returncode != 0:
+        stderr = result.stderr.decode("utf-8", errors="replace")[-500:]
+        raise RuntimeError(f"ffmpeg M4A transcode exited {result.returncode}: {stderr}")
+    return out_path
+
+
 def _ffmpeg_to_wav(src_path: str) -> str:
     """Convert *src_path* (any container/codec ffmpeg supports) to 16 kHz mono PCM WAV.
 

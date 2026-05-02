@@ -336,28 +336,36 @@ export function VoiceCapture({ onNoteCreated, mode = 'streaming' }: VoiceCapture
     if (navigator.onLine && accessToken) {
       void (async () => {
         try {
-          if (wsDegradedRef.current || !wsHasFinalRef.current) {
-            // Degraded or no WS final transcript: fall back to file-mode upload.
-            // Always show the degraded toast so the user knows we're in fallback mode.
-            setShowDegradedToast(true);
+          // On mobile, file-upload is the PRIMARY (not fallback) transport.
+          // We always call uploadVoice directly — never show the "Network issue"
+          // degraded toast, never gate on WS state.
+          // On desktop, the same file-upload path runs when WS was degraded or
+          // produced no final transcript; in that case we show the fallback toast.
+          const useFileUpload = isMobile || wsDegradedRef.current || !wsHasFinalRef.current;
+
+          if (useFileUpload) {
+            // Show degraded toast only on desktop where WS is the expected path.
+            if (!isMobile) {
+              setShowDegradedToast(true);
+            }
 
             let noteOut: { id: string; content: string; processing_status: string; raw_transcription?: string; audio_url?: string } | null = null;
             try {
               noteOut = await uploadVoice(audioBlob, accessToken);
             } catch (uploadErr) {
-              // Fallback upload failed — hide the "Network issue" toast and
-              // show a real error so the user knows to try again.
+              // Upload failed — hide toast and surface the error explicitly.
               setShowDegradedToast(false);
-              // Surface error in the local note so the UI can show a failed state.
+              // Mark the local note as failed so the UI can show a retry option.
               await db.notes.update(localId, {
                 processingStatus: 'failed',
                 updatedAt: new Date(),
               });
-              console.warn('Voice fallback upload failed:', uploadErr);
+              console.error('Voice upload failed:', uploadErr);
               return;
             }
 
-            // Fallback succeeded — update the local note to mark it synced.
+            // Upload succeeded — update local note with server response fields
+            // and mark synced so syncManager won't double-push.
             setShowDegradedToast(false);
             await db.notes.update(localId, {
               serverId: noteOut.id,
@@ -369,11 +377,11 @@ export function VoiceCapture({ onNoteCreated, mode = 'streaming' }: VoiceCapture
               updatedAt: new Date(),
             });
           } else {
-            // WS path was healthy: upload blob to storage only
+            // WS path was healthy: upload blob to storage only (for archival)
             try {
               await uploadBlob(audioBlob, accessToken);
             } catch {
-              // Non-fatal — note already has audio from WS transcript
+              // Non-fatal — note already has transcript from WS
             }
 
             await db.notes.update(localId, {

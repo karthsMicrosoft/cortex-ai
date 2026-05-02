@@ -2,7 +2,7 @@
 
 > **Living document.** Captures what we're building, what's done, what's next. Update as work progresses.
 
-**Last updated:** 2026-05-01 (round 7 closed)
+**Last updated:** 2026-05-01 (round 8 closed)
 
 ---
 
@@ -91,6 +91,7 @@ Per spec § 2.1. Currently deployed in **`centralus`** with OpenAI in **`eastus`
 | Round 5 — Refresh logout, delete-sync, mobile voice, voice duplicate | ✅ 4 bugs fixed via parallel coder + tester agents; alembic 006 (note_deletions tombstone) deployed | See PROGRESS § Round 5 |
 | Round 6 — Refresh-logout #2, mobile voice #2, library categories, voice cut at first pause | ✅ B24 (spread-order in pullChanges) + B25 (continuous recognition) confirmed by user. B22 + B23 still failed despite credentials fix → addressed in Round 7 | See PROGRESS § Round 6 |
 | Round 7 — Refresh-logout root cause (Edge cookie blocking) + mobile voice WS skip | ✅ HAR analysis confirmed third-party cookie blocked by Edge tracking-prevention. Moved refresh token to localStorage + JSON body (SEC-02 reversed). Skipped WS on mobile UA. P1 follow-up: revert to first-party cookie when custom domain or SWA Standard SKU is in place | See PROGRESS § Round 7 |
+| Round 8 — Mobile recording silent failure + cross-browser audio playback | ✅ B26: `recorder.start(isMobile ? 1000 : 250)` so iOS Safari emits chunks mid-stream; visible error on upload failure; mobile no longer shows degraded toast. B27: backend transcodes incoming audio to MP4/AAC at upload time via existing ffmpeg; one-time migration script converts existing webm blobs | See PROGRESS § Round 8 |
 
 ---
 

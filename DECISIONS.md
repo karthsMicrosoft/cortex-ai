@@ -349,6 +349,26 @@ Library/sidebar tag filters needed a uniform way to find image notes. Decision: 
 
 ### 22q — Shadow Reader auto-render restored, positioned above BottomNav (Round 4 / Bug 16)
 
+### 22x — All uploaded audio transcoded to MP4/AAC at upload time (Round 8 / Bug 27)
+
+iOS Safari has zero WebM container support. Audio captured by Chrome/Edge is `audio/webm; codecs=opus`. When a note created on Chrome is opened on an iPhone, `<audio src=<sas-url-pointing-at-webm-blob>>` silently does nothing — the browser refuses to load the container.
+
+**Decision:** at upload time, the backend transcodes incoming audio to **MP4/AAC** (`-c:a aac -b:a 128k -ar 44100`) using the ffmpeg already in the Docker image. The blob is stored as `.m4a` with `content-type: audio/mp4`. MP4/AAC plays on every browser without a polyfill.
+
+**Two ffmpeg targets, two distinct helpers in `services/speech.py`:**
+- `_ffmpeg_to_wav(src)` → 16 kHz mono PCM WAV. **For transcription** (Azure Speech file-mode). Round-4 fix.
+- `_transcode_to_m4a(src)` → 44.1 kHz AAC in MP4 container. **For playback**. Round-8 fix.
+
+**Soft-fail policy:** if ffmpeg is missing or fails, the upload handler falls back to storing the original bytes under the original extension. The note is not lost; mobile playback is degraded for that one row. This trades worst-case correctness for resilience to ffmpeg outages.
+
+**Existing blobs:** `backend/scripts/migrate_audio_to_m4a.py` is an idempotent one-time script that downloads each existing `.webm`/`.ogg` blob, transcodes via `_transcode_to_m4a`, uploads the `.m4a` to a new SAS URL, and updates `notes.audio_url`. Run after deploy via:
+```
+az containerapp exec --name cortexks-api --resource-group cortex-rg \
+  --command "python scripts/migrate_audio_to_m4a.py"
+```
+
+**Trade-off accepted:** ~150 ms extra per upload (subprocess fork + ffmpeg pass). Negligible for a one-shot recording. Storage cost slightly higher than the original opus stream (AAC at 128 kbps is ~1.7× the size of opus at 64 kbps), but on the order of 1 MB per minute of audio — irrelevant for an MVP.
+
 ### 22v — Refresh token in localStorage + JSON body (Round 7 / Bug 22 — reverses SEC-02)
 
 **Original SEC-02 design:** the refresh token was delivered only via the httpOnly cookie. Rationale: keep it out of JavaScript reach so an XSS payload can't read and exfiltrate it.

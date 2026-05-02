@@ -2,7 +2,7 @@
 
 > **Chronological log of what's been done.** New work appends to the end. Use this to verify "we already did X" before re-doing.
 
-**Last updated:** 2026-05-01 (round 7 closed)
+**Last updated:** 2026-05-01 (round 8 closed)
 
 ---
 
@@ -500,6 +500,33 @@ The original Phase-1 design (SEC-02) put the refresh token only in an httpOnly c
 - Frontend `npm run build` → SWA deploy.
 - After deploy, hard-reload the live SWA URL in Edge: refresh succeeds, user stays signed in.
 - Mobile recording: WS is never opened; recording uploads via file path with no degraded toast.
+
+---
+
+## Round 8 — Mobile recording silent failure + cross-browser playback (2026-05-01)
+
+User confirmed Round-7 fixed Bug 22 (refresh logout). Bug 23 progressed (no more "Network issue" toast) but exposed two new mobile-specific issues. Delegated to a parallel coder + tester pair (TDD red→green); 13 regression tests added.
+
+### Fixed and live-verified
+
+| # | Title | Root cause | Fix |
+|---|---|---|---|
+| **26** | Mobile recording produces no note (Round-7 fixed the toast but the upload silently dropped the recording) | Two compounding issues: (1) iOS Safari MediaRecorder doesn't fire `ondataavailable` mid-stream unless `start()` is called with a numeric `timeslice` — chunks were only delivered at stop-time, but if `onstop` fired before they flushed, `chunksRef` was empty and the blob was zero-length. (2) The mobile branch's `setShowDegradedToast(true)` was firing unconditionally, creating confusing UI state during the file-upload-as-primary-path. | `useVoiceRecorder.ts`: `recorder.start(isMobile ? 1000 : 250)` — 1-second timeslice on mobile forces periodic chunk delivery; desktop stays at 250 ms for low-latency WS. `VoiceCapture.tsx` mobile branch: degraded toast suppressed (file upload IS the primary path on mobile, not a fallback); on success the local note's `serverId`, `content`, `rawTranscription`, `audioBlob`, `syncStatus`, `processingStatus` are all mirrored from the server response and the sync queue entry is removed; on failure, `processingStatus='failed'` + visible error |
+| **27** | Mobile can't play audio recorded by other browsers | iOS Safari has zero WebM container support. Files stored as `audio/webm; codecs=opus` in Blob Storage by Chrome/Edge cannot be played by `<audio src=...>` on iOS — the browser silently does nothing | New `_transcode_to_m4a(src_path)` helper in `services/speech.py` runs `ffmpeg -y -i <src> -c:a aac -b:a 128k -ar 44100 <out>.m4a`. `api/voice.py` upload handler transcodes incoming audio BEFORE uploading to Blob Storage — blob path is `audio/{uuid}.m4a` with `content-type: audio/mp4`. Soft-fail: if ffmpeg is missing, falls back to original bytes (note not lost; mobile playback degraded). `transcribe_audio_file` still consumes the original bytes for STT and runs its own `_ffmpeg_to_wav` — separate pipeline. New script `backend/scripts/migrate_audio_to_m4a.py` (idempotent, async) downloads each existing `.webm`/`.ogg` blob, transcodes to `.m4a`, uploads to a new SAS URL, and updates `notes.audio_url` |
+
+### Tests
+
+- New `backend/tests/test_regression_round8_fixes.py` — **13 cases, all green**:
+  - B26 ×6: timeslice arg present, mobile path unconditionally uploads, visible error on failure, marks-synced on success, backend accepts audio/mp4
+  - B27 ×7: `_transcode_to_m4a` helper exists with `aac` codec, voice upload handler calls it, blob upload uses `audio/mp4`, no `audio/webm` blob upload anywhere, migration script exists with ffmpeg + `audio_url` update
+- Round 4 + 5 + 6 + 7 + pipeline tests (118) still green. Combined: **131/131** in isolation (2 rate-limit cascade errors when run together — pre-existing test-infra noise, unrelated).
+
+### Live verification
+
+- Backend ACR build → Container App revision swap → health 200.
+- Frontend `npm run build` → SWA deploy.
+- One-time migration: `az containerapp exec --command "python scripts/migrate_audio_to_m4a.py"` to convert existing webm blobs to m4a in-place.
+- Mobile: record → note appears with transcript + playable audio. Cross-browser playback: m4a plays on iOS Safari and Chrome/Edge.
 
 ---
 

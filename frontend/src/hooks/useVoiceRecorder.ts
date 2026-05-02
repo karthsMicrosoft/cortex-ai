@@ -128,7 +128,12 @@ export function useVoiceRecorder(): UseVoiceRecorderReturn {
       }
     };
 
-    recorder.start(250); // collect chunks every 250 ms
+    // On mobile (iOS Safari), use a 1-second timeslice so ondataavailable fires
+    // periodically during recording. Without a timeslice iOS Safari only delivers
+    // data at recorder.stop() time; with timeslice it fires every N ms, ensuring
+    // chunks are accumulated in chunksRef before the onstop handler runs.
+    // Desktop browsers keep the 250 ms interval for low-latency WS streaming.
+    recorder.start(isMobile ? 1000 : 250);
     setIsRecording(true);
   }, []);
 

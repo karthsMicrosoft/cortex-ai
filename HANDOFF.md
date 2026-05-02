@@ -2,8 +2,8 @@
 
 > **Read this first.** This document briefs an incoming agent (Claude / Copilot / Aider / human) on the state of the project so work can resume without context loss.
 
-**Last updated:** 2026-05-01 (round 7 closed)
-**Status:** Live on Azure. Phase 1 MVP + Phase 2 (Personal Dictionary + Shadow Reader) deployed. **Seven rounds** of user-reported UX bug-bashes closed. Round 7 (latest): a HAR file from the user pinpointed Bug 22's root cause — Edge "Balanced" tracking-prevention drops the refresh cookie because Free-tier SWA + Container Apps puts the API on a different eTLD+1 from the frontend, making the cookie third-party. SEC-02 reversed for /login + /refresh + /register: refresh token now also returned in JSON body and stored in localStorage. WebSocket streaming is skipped on mobile UA (file upload is reliable, WS isn't). P1 follow-up: migrate to first-party cookies via custom domain or SWA Standard SKU. 120 backend regression tests now passing (rounds 4–7 + pipeline).
+**Last updated:** 2026-05-01 (round 8 closed)
+**Status:** Live on Azure. Phase 1 MVP + Phase 2 (Personal Dictionary + Shadow Reader) deployed. **Eight rounds** of user-reported UX bug-bashes closed. Round 8 (latest): mobile recording silent-failure (iOS MediaRecorder needs `start(timeslice)` to emit chunks mid-stream; mobile UI no longer shows degraded toast and mirrors response into Dexie correctly) + cross-browser audio playback (iOS Safari has zero WebM support — backend now transcodes all uploaded audio to MP4/AAC at upload time via existing ffmpeg; one-time migration script converts existing webm blobs). 131 backend regression tests passing (rounds 4–8 + pipeline + auth).
 
 ---
 

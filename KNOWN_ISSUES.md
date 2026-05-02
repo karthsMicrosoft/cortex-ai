@@ -2,9 +2,18 @@
 
 > **Open work, bugs not fixed, gaps from "fully done."** Anything tagged P0/P1/P2 here is meant to be picked up by the next agent.
 
-**Last updated:** 2026-05-01 (round 6 closed)
+**Last updated:** 2026-05-01 (round 8 closed)
 
 ---
+
+## ✅ Round 8 closed (2026-05-01) — see PROGRESS.md "Round 8"
+
+User confirmed Round-7 fixed Bug 22 (refresh logout). Bug 23 progressed (no more "Network issue" toast) but exposed two new mobile-specific issues. 13 regression tests added.
+
+| # | Bug | Status |
+|---|---|---|
+| 26 | Mobile recording produces no note (record + stop = silence) | ✅ `start(isMobile ? 1000 : 250)` so iOS Safari MediaRecorder emits chunks mid-stream; mobile branch in VoiceCapture.tsx now mirrors the response into Dexie + sets `syncStatus='synced'`; no degraded toast on mobile (file upload IS primary, not fallback); visible error on upload failure |
+| 27 | Mobile can't play audio recorded by Chrome/Edge (iOS Safari has zero WebM support) | ✅ Backend transcodes incoming audio to MP4/AAC at upload time (`_transcode_to_m4a` in services/speech.py — `ffmpeg -c:a aac -b:a 128k -ar 44100`); blob stored as `.m4a` with content-type `audio/mp4`. One-time migration `backend/scripts/migrate_audio_to_m4a.py` converts existing webm/ogg blobs and updates `notes.audio_url` (idempotent) |
 
 ## ✅ Round 7 closed (2026-05-01) — see PROGRESS.md "Round 7"
 

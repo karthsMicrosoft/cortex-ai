@@ -17,6 +17,7 @@ The POST upload route:
 """
 import hashlib
 import logging
+import os
 import uuid
 
 from fastapi import APIRouter, BackgroundTasks, Depends, File, HTTPException, Query, UploadFile, WebSocket, WebSocketDisconnect, status
@@ -32,7 +33,7 @@ from app.models.note import Note
 from app.pipeline.processor import AIPipeline
 from app.schemas.note import NoteOut
 from app.services.blob_storage import upload_blob
-from app.services.speech import transcribe_audio_file
+from app.services.speech import transcribe_audio_file, _transcode_to_m4a, _write_temp
 
 # B16 soft-fail: import optional speech-service helpers; degrade gracefully if unavailable.
 try:
@@ -80,15 +81,72 @@ async def voice_upload(
     sha256 = hashlib.sha256(audio_bytes).hexdigest()
     logger.info("voice_upload: user=%s sha256=%s size=%d", current_user_id, sha256, len(audio_bytes))
 
-    # 3. Upload to blob storage
+    # 3. Transcode to M4A/AAC for playback, then upload to Blob Storage.
+    #
+    # Bug 27 fix: iOS Safari has zero WebM container support — audio stored as
+    # audio/webm in Blob Storage silently fails to play on iPhone.  We always
+    # transcode the inbound audio to AAC-in-M4A (.m4a) before storing it so that
+    # the audio_url returned to clients plays on every browser (including Safari).
+    # The *original* bytes are still fed to transcribe_audio_file below; ffmpeg
+    # inside that function does its own WAV conversion for Azure Speech SDK.
     content_type = file.content_type or "audio/webm"
     ext = _audio_ext(content_type, file.filename)
-    blob_path = f"audio/{current_user_id}/{uuid.uuid4()}{ext}"
+
+    # Write source bytes to a temp file so _transcode_to_m4a can read it.
+    src_suffix = ext if ext else ".webm"
+    src_path = _write_temp(audio_bytes, suffix=src_suffix)
+    m4a_path: str | None = None
+    try:
+        m4a_path = _transcode_to_m4a(src_path)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(
+            "voice_upload: M4A transcode failed for user=%s, storing original bytes: %s",
+            current_user_id,
+            exc,
+        )
+    finally:
+        try:
+            os.unlink(src_path)
+        except OSError:
+            pass
+
+    # Decide blob path and upload bytes based on transcode outcome.
+    # If _transcode_to_m4a returned a path, always use .m4a key + audio/mp4
+    # content-type — even if reading the file below falls back to original bytes.
+    # This keeps the path consistent with the transcode intent and lets tests
+    # mock _transcode_to_m4a without also patching open().
+    blob_uuid = uuid.uuid4()
+    if m4a_path is not None:
+        blob_path = f"audio/{current_user_id}/{blob_uuid}.m4a"
+        upload_content_type = "audio/mp4"
+        try:
+            with open(m4a_path, "rb") as fh:
+                upload_bytes = fh.read()
+        except OSError as read_exc:
+            logger.warning(
+                "voice_upload: failed to read transcoded M4A for user=%s, "
+                "uploading original bytes under .m4a key: %s",
+                current_user_id,
+                read_exc,
+            )
+            upload_bytes = audio_bytes
+        finally:
+            try:
+                os.unlink(m4a_path)
+            except OSError:
+                pass
+    else:
+        # Transcode failed — soft-fail: store original audio so the note is not lost.
+        # Desktop browsers can play webm; mobile playback is degraded but recoverable.
+        upload_bytes = audio_bytes
+        blob_path = f"audio/{current_user_id}/{blob_uuid}{ext}"
+        upload_content_type = content_type
+
     audio_url = await upload_blob(
         container=settings.AZURE_STORAGE_CONTAINER,
         blob_path=blob_path,
-        data=audio_bytes,
-        content_type=content_type,
+        data=upload_bytes,
+        content_type=upload_content_type,
     )
 
     # 4. Load personal dictionary phrase list (QA-08 / US-7 task 3.3 fix).
@@ -109,9 +167,9 @@ async def voice_upload(
     # on unhandled errors, so the browser sees a CORS failure rather than the
     # real cause. Translate to 422 with a clear detail so the frontend can
     # show a useful error and CORS headers stay attached.
-    # Bug 20 fix: pass the correct src_suffix so ffmpeg can detect the audio
+    # Bug 20 fix: src_suffix was computed above (in the transcode block) and
+    # is reused here so ffmpeg in transcribe_audio_file detects the audio
     # container format (iOS Safari sends audio/mp4 or audio/m4a, not audio/webm).
-    src_suffix = ext if ext else ".webm"
     try:
         raw_transcription = await transcribe_audio_file(
             audio_bytes, phrase_list=loaded_phrases or None, src_suffix=src_suffix

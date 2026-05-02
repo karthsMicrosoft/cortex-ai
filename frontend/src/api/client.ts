@@ -107,9 +107,23 @@ async function fetchWithAuth(
   const isRefreshEndpoint = resolveUrl(url).includes('/api/auth/refresh');
   if (res.status === 401 && !_isRetry && !isRefreshEndpoint) {
     try {
-      const refreshRes = await fetch(resolveUrl('/api/auth/refresh'), { method: 'POST', credentials: 'include' });
+      // Round-7: include refresh_token from localStorage in the request body so
+      // the backend can rotate even when Edge tracking-prevention blocks the
+      // third-party httpOnly cookie.  credentials:'include' is kept so the
+      // cookie path still works for browsers that honour SameSite=None+Secure.
+      const storedRefresh = localStorage.getItem('cortex_refresh');
+      const refreshBody = storedRefresh ? JSON.stringify({ refresh_token: storedRefresh }) : undefined;
+      const refreshRes = await fetch(resolveUrl('/api/auth/refresh'), {
+        method: 'POST',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: refreshBody,
+      });
       if (refreshRes.ok) {
-        const data = (await refreshRes.json()) as { access_token: string };
+        const data = (await refreshRes.json()) as { access_token: string; refresh_token?: string };
+        if (data.refresh_token) {
+          localStorage.setItem('cortex_refresh', data.refresh_token);
+        }
         useAuthStore.getState().setAccessToken(data.access_token);
         // Retry the original request with the new token
         return fetchWithAuth(url, options, true);

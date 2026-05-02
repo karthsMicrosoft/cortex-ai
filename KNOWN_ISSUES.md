@@ -6,6 +6,27 @@
 
 ---
 
+## ✅ Round 7 closed (2026-05-01) — see PROGRESS.md "Round 7"
+
+Two persistent bugs fixed after Rounds 5 and 6 failed to resolve them due to environment-level cookie blocking.
+
+| # | Bug | Status |
+|---|---|---|
+| 22 | Hard reload still logs out (Edge blocks third-party cookie) | ✅ Moved refresh token to localStorage+JSON body (Round-7 architectural decision). Backend /login, /register, /refresh all return `refresh_token` in the response body. Frontend stores it in localStorage on login/register, sends it in body on refresh, clears it on logout. Cookie delivery kept as defense-in-depth. |
+| 23 | Mobile voice still shows "Network issue — using file upload fallback" | ✅ `IS_MOBILE` flag added to `useVoiceRecorder.ts`. WS is skipped entirely on mobile (iOS Safari throttling + mobile network instability make it unreliable). File upload is the primary path on mobile; DegradedToast is suppressed when `isMobileFallback=true`. |
+
+**SEC-02 trade-off (accepted, track as P1):** localStorage is XSS-readable. Acceptable for single-user MVP without a CSP. Migrate to first-party cookies when a custom domain is set up or SWA Standard SKU is approved.
+
+## P1 — Migrate refresh token to first-party cookies
+
+**Why deferred:** Free-tier SWA + Container Apps = third-party cookie context. Edge "Balanced" tracking prevention blocks the httpOnly cookie even with SameSite=None+Secure. localStorage fallback added as Round-7 workaround.
+
+**Right fix (P1):** Use a custom domain (e.g. `cortex.karths.dev`) that points both the SWA and the backend under the same eTLD+1, making the cookie first-party. Alternatively, upgrade to SWA Standard SKU ($9/mo) which provides a linked-backend reverse-proxy — the frontend and API share the same origin and the cookie is same-site.
+
+**When ready:** Remove `localStorage.setItem/getItem('cortex_refresh')` calls from `frontend/src/api/auth.ts` and `client.ts`. The cookie path already works — just remove the localStorage augmentation.
+
+---
+
 ## ✅ Round 6 closed (2026-05-01) — see PROGRESS.md "Round 6"
 
 User filed 4 issues after Round 5 deploy. Two were Round-5 regressions where the static fix landed but the symptom persisted (22, 23). Two were new (24, 25). 26 regression tests added.

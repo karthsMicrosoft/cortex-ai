@@ -349,6 +349,31 @@ Library/sidebar tag filters needed a uniform way to find image notes. Decision: 
 
 ### 22q — Shadow Reader auto-render restored, positioned above BottomNav (Round 4 / Bug 16)
 
+### 22v — Refresh token in localStorage + JSON body (Round 7 / Bug 22 — reverses SEC-02)
+
+**Original SEC-02 design:** the refresh token was delivered only via the httpOnly cookie. Rationale: keep it out of JavaScript reach so an XSS payload can't read and exfiltrate it.
+
+**Why reversed:** Free-tier SWA + Container Apps are on different eTLD+1 domains (`.azurestaticapps.net` vs `.azurecontainerapps.io`). The refresh cookie is therefore third-party from the browser's perspective. Edge / Chromium "Balanced" tracking-prevention drops third-party cookies on every cross-origin fetch even when SameSite=None+Secure is set. HAR file (`Downloads/cortex-ai-har-consolelog/`) captured by the user shows zero cookies sent on `POST /api/auth/refresh` despite correct CORS headers and `credentials: 'include'`.
+
+**Round-7 decision:** the refresh token is now ALSO returned in the JSON body of `/api/auth/login`, `/api/auth/register`, `/api/auth/refresh`. The frontend stores it in `localStorage('cortex_refresh')` and sends it in the JSON body of the rotation call. The httpOnly cookie continues to be set as defense-in-depth for browsers that do accept third-party cookies.
+
+**Trade-off accepted:** localStorage is XSS-readable. For a single-user MVP without a CSP, the threat model is acceptable. Mitigations:
+- The refresh token alone is not enough to take over an account — it must be combined with a working access-token to call protected endpoints. An XSS payload would need to perform the rotation itself.
+- The JTI denylist on the backend invalidates a token after one use; an attacker who copies it must race the legitimate user.
+- We log every refresh; out-of-pattern usage can be detected.
+
+**P1 follow-up:** track in `KNOWN_ISSUES.md` "Migrate refresh token to first-party cookies" — once a custom domain is set up (both SWA and Container App under the same eTLD+1) or SWA Standard SKU is approved ($9/month, gives a linked-backend reverse-proxy), revert to cookie-only delivery.
+
+**Test contract change:** `backend/tests/test_auth.py` `TestRefreshTokenInBody` (renamed from `TestRefreshTokenNotInBody`) now asserts the Round-7 contract.
+
+### 22w — Skip WebSocket streaming on mobile UA (Round 7 / Bug 23)
+
+WebSocket streaming for live STT was unreliable on mobile (iOS Safari background-tab throttling + mobile-network instability cause WS code-1006 abnormal closes on virtually every recording). The fallback to file upload always worked, but the toast "Network issue — using file-upload fallback" was visible on every recording and confused users.
+
+**Decision:** detect mobile UA in `frontend/src/hooks/useVoiceRecorder.ts` (`/iPhone|iPad|iPod|Android/i.test(navigator.userAgent)`) and skip WebSocket entirely on mobile. The recorder accumulates audio chunks and uploads via the file path at stop-time. The "Network issue" toast is gated behind `!isMobile` since file upload IS the primary path on mobile, not a fallback.
+
+The desktop WebSocket path is preserved for non-mobile UAs where it works reliably.
+
 ### 22u — `recognize_once_async` → `start_continuous_recognition_async` (Bug 25)
 
 `recognize_once_async()` is documented to return after the FIRST recognition result — i.e. the first segment of silence ends the session. A 20-second voice note with three natural pauses was returning only the first ~5 seconds of transcribed text. Users saw obviously-truncated content.

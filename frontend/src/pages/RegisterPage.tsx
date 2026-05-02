@@ -1,6 +1,6 @@
 import { useState, type FormEvent } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
-import { register as registerApi, login as loginApi, me } from '../api/auth';
+import { register as registerApi, me } from '../api/auth';
 import { useAuthStore } from '../store/authStore';
 
 export default function RegisterPage(): React.ReactElement {
@@ -20,14 +20,15 @@ export default function RegisterPage(): React.ReactElement {
     setIsSubmitting(true);
 
     try {
-      // Register the account (pass displayName even if empty so callers can detect it)
-      await registerApi(email, password, displayName);
-      // Auto-login after successful registration
-      const data = await loginApi(email, password);
+      // Register the account — response now includes access_token + refresh_token
+      // (Round-7: localStorage path so Edge tracking-prevention doesn't block).
+      const regData = await registerApi(email, password, displayName);
       // Store the access token BEFORE calling me() so the Bearer header is attached
-      useAuthStore.getState().setAccessToken(data.access_token);
+      useAuthStore.getState().setAccessToken(regData.access_token);
+      // Fetch canonical user profile (register response includes user but
+      // we call me() to keep the same downstream shape as the login flow).
       const user = await me();
-      login(data.access_token, user);
+      login(regData.access_token, user);
       navigate('/', { replace: true });
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : 'Registration failed. Please try again.';

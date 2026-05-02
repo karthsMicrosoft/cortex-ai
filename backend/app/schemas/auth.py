@@ -21,19 +21,48 @@ class LoginRequest(BaseModel):
 
 
 class TokenPair(BaseModel):
-    """Response for /api/auth/login.
+    """Response for /api/auth/login and /api/auth/refresh.
 
-    The refresh token is delivered exclusively via an httpOnly cookie and is
-    intentionally omitted from the JSON body to prevent JavaScript access
-    (SEC-02 — XSS token-theft mitigation).
+    SEC-02 NOTE: refresh_token is also delivered via httpOnly cookie (defense
+    in depth for browsers that honour SameSite=None+Secure).  The JSON body
+    field is added for Round-7 localStorage fallback because Edge's "Balanced"
+    tracking-prevention blocks third-party cookies on the Free-tier SWA →
+    Container Apps cross-origin path.  Trade-off accepted: localStorage is
+    XSS-readable; acceptable for single-user MVP without CSP.  Migrate to
+    first-party cookies (custom domain / SWA Standard) as P1.
     """
     access_token: str
     token_type: str = "bearer"
+    refresh_token: str = ""
 
 
 class AccessTokenResponse(BaseModel):
+    """Kept for backward-compat imports; /refresh now returns TokenPair."""
     access_token: str
     token_type: str = "bearer"
+    refresh_token: str = ""
+
+
+class RegisterResponse(BaseModel):
+    """Response for /api/auth/register — flat UserOut fields + tokens.
+
+    Round-7: access_token + refresh_token added so the frontend can authenticate
+    without a separate /login call even when cookies are blocked.
+    Fields are deliberately kept flat (not nested under 'user') so existing
+    tests checking for top-level 'id'/'email'/'display_name' continue to work.
+    """
+    # UserOut-equivalent fields (flat)
+    id: uuid.UUID
+    email: str
+    display_name: Optional[str] = None
+    shadow_reader_enabled: bool = True
+    shadow_reader_disabled_categories: list[str] = []
+    # Tokens (Round-7 addition)
+    access_token: str
+    token_type: str = "bearer"
+    refresh_token: str = ""
+
+    model_config = {"from_attributes": True}
 
 
 class RefreshRequest(BaseModel):

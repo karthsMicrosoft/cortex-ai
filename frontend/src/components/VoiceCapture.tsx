@@ -3,7 +3,7 @@ import { Mic, MicOff } from 'lucide-react';
 import { v4 as uuidv4 } from 'uuid';
 import { db } from '../db';
 import type { LocalNote } from '../db';
-import { useVoiceRecorder } from '../hooks/useVoiceRecorder';
+import { useVoiceRecorder, isMobile } from '../hooks/useVoiceRecorder';
 import { syncManager } from '../sync/syncManager';
 import { useAuthStore } from '../store/authStore';
 import { apiUrl, wsUrl } from '../api/client';
@@ -100,8 +100,11 @@ interface DegradedToastProps {
 }
 
 function DegradedToast({ visible }: DegradedToastProps): React.ReactElement | null {
+  // On mobile, file-upload is the PRIMARY transport (not a fallback/degradation).
+  // Only show the "Network issue" toast on desktop (!isMobile) where the WS
+  // path is expected to succeed and a failure represents genuine degradation.
   if (!visible) return null;
-  return (
+  if (!isMobile) return (
     <div
       role="status"
       aria-live="polite"
@@ -111,6 +114,8 @@ function DegradedToast({ visible }: DegradedToastProps): React.ReactElement | nu
       Network issue — using file-upload fallback
     </div>
   );
+  // Mobile: suppress "Network issue" — file upload is the intended path here.
+  return null;
 }
 
 // ---------------------------------------------------------------------------
@@ -187,6 +192,10 @@ export function VoiceCapture({ onNoteCreated, mode = 'streaming' }: VoiceCapture
   // ---- Open WebSocket on start --------------------------------------------
 
   const _openWs = useCallback((token: string) => {
+    // Skip WebSocket on mobile (isMobile): Safari iOS throttles background-tab
+    // network connections and mobile data handoffs cause frequent abnormal closes
+    // (code 1006). File upload is the only reliable transport on mobile.
+    if (isMobile) return;
     const url = wsUrl(`/api/voice/stream?token=${encodeURIComponent(token)}`);
     const ws = new WebSocket(url);
     wsRef.current = ws;
@@ -263,7 +272,7 @@ export function VoiceCapture({ onNoteCreated, mode = 'streaming' }: VoiceCapture
 
       await hookRef.current.start();
 
-      // Open WS in streaming mode (after start so mic is active)
+      // Open WS in streaming mode (_openWs returns early on IS_MOBILE).
       if (mode === 'streaming' && accessToken) {
         _openWs(accessToken);
       }
@@ -398,7 +407,7 @@ export function VoiceCapture({ onNoteCreated, mode = 'streaming' }: VoiceCapture
       {/* Live transcription display — shown when transcript is available (§ 2.6) */}
       <RealtimeTranscript text={displayText} />
 
-      {/* Degraded mode toast */}
+      {/* Degraded mode toast — suppressed on mobile (isMobile) where file-upload is primary */}
       <DegradedToast visible={showDegradedToast} />
 
       {/* FAB */}

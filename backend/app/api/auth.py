@@ -33,6 +33,7 @@ from app.schemas.auth import (
     ProfileUpdateRequest,
     RefreshRequest,
     RegisterRequest,
+    RegisterResponse,
     TokenPair,
     UserOut,
 )
@@ -48,12 +49,15 @@ _REFRESH_COOKIE_NAME = "refresh_token"
 # POST /api/auth/register
 # ---------------------------------------------------------------------------
 
-@router.post("/register", response_model=UserOut, status_code=status.HTTP_201_CREATED)
+@router.post("/register", response_model=RegisterResponse, status_code=status.HTTP_201_CREATED)
 @limiter.limit("10/minute")  # SEC-03 — brute-force / account-enumeration protection
-async def register(request: Request, payload: RegisterRequest, response: Response, db: AsyncSession = Depends(get_db)) -> UserOut:
-    """Register a new user. Returns UserOut. Also plants a refresh cookie so a
-    hard reload after sign-up doesn't log the user out (Bug 18 fix).
+async def register(request: Request, payload: RegisterRequest, response: Response, db: AsyncSession = Depends(get_db)) -> RegisterResponse:
+    """Register a new user. Returns RegisterResponse (user + tokens).
+    Also plants a refresh httpOnly cookie (defense-in-depth).
     Raises 409 on duplicate email.
+    Round-7: access_token + refresh_token now included in the JSON body so
+    the frontend can authenticate without a separate /login call even when
+    Edge tracking-prevention blocks the cookie.
     """
     # Check for existing user
     result = await db.execute(select(User).where(User.email == payload.email))
@@ -73,9 +77,11 @@ async def register(request: Request, payload: RegisterRequest, response: Respons
     await db.flush()
     await db.refresh(user)
 
-    # Plant the refresh cookie immediately so the frontend can restore the
-    # session on hard reload without requiring a separate /login call.
+    access_token = create_access_token(user.id)
     refresh_token = create_refresh_token(user.id)
+
+    # Plant the refresh cookie (defense-in-depth for browsers that allow
+    # third-party cookies).
     response.set_cookie(
         key=_REFRESH_COOKIE_NAME,
         value=refresh_token,
@@ -86,7 +92,16 @@ async def register(request: Request, payload: RegisterRequest, response: Respons
         path="/api/auth",
     )
 
-    return UserOut.model_validate(user)
+    return RegisterResponse(
+        id=user.id,
+        email=user.email,
+        display_name=user.display_name,
+        shadow_reader_enabled=user.shadow_reader_enabled,
+        shadow_reader_disabled_categories=user.shadow_reader_disabled_categories,
+        access_token=access_token,
+        token_type="bearer",
+        refresh_token=refresh_token,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -131,10 +146,12 @@ async def login(
         path="/api/auth",
     )
 
-    # SEC-02: refresh token is delivered via httpOnly cookie only — not in the JSON body.
+    # Round-7: refresh_token now also in the JSON body for localStorage fallback.
+    # Cookie path preserved as defense-in-depth for browsers that accept it.
     return TokenPair(
         access_token=access_token,
         token_type="bearer",
+        refresh_token=refresh_token,
     )
 
 
@@ -142,7 +159,7 @@ async def login(
 # POST /api/auth/refresh
 # ---------------------------------------------------------------------------
 
-@router.post("/refresh", response_model=AccessTokenResponse)
+@router.post("/refresh", response_model=TokenPair)
 # SEC-03: rate limit, but high enough to allow normal usage. Bumped 5→60/min
 # on 2026-05-01 because the original 5/min broke legitimate flows: SessionGate
 # calls /refresh on every page reload, opening 2–3 tabs hits the limit, and
@@ -155,7 +172,7 @@ async def refresh_token(
     refresh_body: Optional[RefreshRequest] = None,
     refresh_cookie: Optional[str] = Cookie(default=None, alias=_REFRESH_COOKIE_NAME),
     db: AsyncSession = Depends(get_db),
-) -> AccessTokenResponse:
+) -> TokenPair:
     """
     Rotate refresh token. Accepts token from:
     1. JSON body field `refresh_token`
@@ -225,7 +242,8 @@ async def refresh_token(
         path="/api/auth",
     )
 
-    return AccessTokenResponse(access_token=new_access, token_type="bearer")
+    # Round-7: new_refresh also returned in JSON body for localStorage fallback.
+    return TokenPair(access_token=new_access, token_type="bearer", refresh_token=new_refresh)
 
 
 # ---------------------------------------------------------------------------

@@ -1,6 +1,32 @@
 import { useCallback, useRef, useState } from 'react';
 
 // ---------------------------------------------------------------------------
+// Mobile detection
+// ---------------------------------------------------------------------------
+
+/**
+ * True when running on a mobile device (iPhone, iPad, iPod, Android).
+ *
+ * WebSocket streaming is unreliable on mobile for two reasons:
+ *  1. Safari iOS throttles background-tab timers/network, which breaks the
+ *     persistent WS connection mid-recording.
+ *  2. Mobile data networks (LTE/5G handoffs, weak signal) cause frequent
+ *     abnormal WebSocket closes (code 1006) that desktop connections tolerate.
+ * The file-upload path is the only reliably transport on mobile, so we skip
+ * the WS entirely and go straight to file upload.
+ */
+export const IS_MOBILE = /iPhone|iPad|iPod|Android/i.test(
+  typeof navigator !== 'undefined' ? navigator.userAgent : '',
+);
+
+/**
+ * Camel-case alias for IS_MOBILE — both names refer to the same boolean.
+ * The camelCase form (isMobile) is used for readability in conditional
+ * expressions; IS_MOBILE is the canonical export for external callers.
+ */
+export const isMobile = IS_MOBILE;
+
+// ---------------------------------------------------------------------------
 // Types
 // ---------------------------------------------------------------------------
 

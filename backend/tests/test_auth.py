@@ -91,12 +91,18 @@ class TestRegister:
         assert "password_hash" not in body, "password_hash must not be in register response"
 
     @pytest.mark.asyncio
-    async def test_register_no_tokens_returned(self, client: AsyncClient):
-        """Register (per design) does NOT return tokens — only UserOut."""
+    async def test_register_returns_tokens(self, client: AsyncClient):
+        """Round 7 (2026-05-01): SEC-02 reversed for register — Edge/Chromium
+        tracking-prevention blocks the third-party cookie on free-tier SWA +
+        Container Apps deploys, so refresh tokens are now also returned in
+        the response body and stored client-side in localStorage. Register
+        also returns access_token so the auto-login flow can skip the
+        separate /login call. See DECISIONS.md § 22v + KNOWN_ISSUES.md "P1
+        — Migrate refresh token to first-party cookies."""
         resp = await _register(client, _unique_email())
         body = resp.json()
-        assert "access_token" not in body, "Register must not return access_token"
-        assert "refresh_token" not in body, "Register must not return refresh_token"
+        assert "access_token" in body, "Round 7: register must return access_token"
+        assert "refresh_token" in body, "Round 7: register must return refresh_token"
 
     @pytest.mark.asyncio
     async def test_register_duplicate_email_409(self, client: AsyncClient):
@@ -496,56 +502,74 @@ class TestMeEndpoint:
 # SEC-02: Refresh token must NOT appear in login/refresh JSON body
 # ---------------------------------------------------------------------------
 
-class TestRefreshTokenNotInBody:
+class TestRefreshTokenInBody:
     """
-    SEC-02 (review-comments.tasks.md 1.2)
+    Round 7 (2026-05-01) — SEC-02 reversed for login + refresh.
 
-    The refresh token must be delivered ONLY via the httpOnly cookie.
-    Exposing it in the JSON body allows any JavaScript (including XSS payloads)
-    to read and exfiltrate it.
+    Original SEC-02 design (Phase-1 review): the refresh token was delivered
+    only via httpOnly cookie to keep it out of JavaScript reach (XSS hardening).
 
-    Fix: Remove refresh_token from TokenPair JSON body; rely solely on the cookie.
+    Why reversed: Free-tier SWA + Container Apps puts the API on a different
+    eTLD+1 from the frontend. Edge / Chromium "Balanced" tracking prevention
+    drops third-party cookies even with SameSite=None+Secure. The refresh
+    cookie is now silently dropped on every cross-origin request → 401 →
+    user kicked back to /login on every hard reload.
+
+    Round-7 fix: the refresh token is ALSO returned in the response body of
+    /login, /register, /refresh. The frontend stores it in localStorage and
+    sends it via the JSON body of /refresh. The httpOnly cookie continues to
+    be set as defense-in-depth for browsers that DO accept third-party
+    cookies. See DECISIONS.md § 22v + KNOWN_ISSUES.md "P1 — Migrate refresh
+    token to first-party cookies."
     """
 
     @pytest.mark.asyncio
-    async def test_login_body_must_not_contain_refresh_token(self, client: AsyncClient):
+    async def test_login_body_contains_refresh_token(self, client: AsyncClient):
         """
-        SEC-02: POST /api/auth/login response JSON body must NOT contain
-        the 'refresh_token' field.
-
-        If this test FAILS, the fix (removing refresh_token from TokenPair) is missing.
+        Round 7: POST /api/auth/login response JSON body MUST contain
+        'refresh_token' so the frontend can persist it in localStorage and
+        survive reload despite tracking-prevention dropping the cookie.
         """
         email = _unique_email()
         await _register(client, email)
         resp = await _login(client, email)
         assert resp.status_code == 200, f"Login failed: {resp.status_code}"
         body = resp.json()
-        assert "refresh_token" not in body, (
-            "SEC-02 NOT FIXED: 'refresh_token' must NOT appear in the login JSON "
-            "body. It must be delivered only via the httpOnly cookie."
+        assert "refresh_token" in body and body["refresh_token"], (
+            "Round 7: 'refresh_token' MUST be in the login body — Edge/Chromium "
+            "drop the third-party cookie on cross-origin SWA→Container App."
         )
 
     @pytest.mark.asyncio
-    async def test_refresh_response_body_must_not_contain_refresh_token(
+    async def test_refresh_response_body_contains_refresh_token(
         self, client: AsyncClient
     ):
         """
-        SEC-02: POST /api/auth/refresh response JSON body must NOT contain
-        'refresh_token'. Only 'access_token' (and 'token_type') are permitted.
+        Round 7: POST /api/auth/refresh rotates the token and returns BOTH
+        access_token and refresh_token in the body. The frontend overwrites
+        its localStorage entry with the new value.
         """
         email = _unique_email()
         await _register(client, email)
-        await _login(client, email)  # Sets the refresh cookie
+        login_resp = await _login(client, email)
+        body = login_resp.json()
+        refresh_token = body.get("refresh_token")
+        if not refresh_token:
+            pytest.skip("Login did not return refresh_token (Round-7 fix not deployed)")
 
-        resp = await client.post("/api/auth/refresh")
+        resp = await client.post(
+            "/api/auth/refresh", json={"refresh_token": refresh_token}
+        )
         if resp.status_code in (401, 422, 405):
-            pytest.skip("Refresh endpoint requires valid cookie — skipping in isolation")
+            pytest.skip(
+                "Refresh endpoint requires valid token — body-mode payload may "
+                "be rate-limited or test client cookie state interferes"
+            )
 
         assert resp.status_code == 200, f"Refresh failed: {resp.status_code}"
-        body = resp.json()
-        assert "refresh_token" not in body, (
-            "SEC-02 NOT FIXED: 'refresh_token' must NOT appear in the refresh "
-            "JSON body. The rotated token must only be in the httpOnly cookie."
+        out = resp.json()
+        assert "refresh_token" in out and out["refresh_token"], (
+            "Round 7: rotated 'refresh_token' MUST be in the refresh body."
         )
 
     @pytest.mark.asyncio

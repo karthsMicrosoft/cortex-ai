@@ -2,7 +2,7 @@
 
 > **Chronological log of what's been done.** New work appends to the end. Use this to verify "we already did X" before re-doing.
 
-**Last updated:** 2026-05-01 (round 6 closed)
+**Last updated:** 2026-05-01 (round 7 closed)
 
 ---
 
@@ -449,6 +449,57 @@ User filed 4 issues after Round 5 deploy, including TWO Round-5 regressions wher
 - Frontend `npm run build` → `swa deploy --env production`.
 - Bug 24 + Bug 25 are mechanical fixes — high confidence.
 - **Bug 22 + Bug 23: needs user verification.** If symptoms persist, root cause is environment-level (browser ITP / CORS / Set-Cookie response loss); next round will add server-side debug logging + consider IndexedDB-backed refresh-token fallback or SWA same-origin proxy.
+
+---
+
+## Round 7 — Refresh-logout root cause (Edge cookie blocking) + mobile voice WS skip (2026-05-01)
+
+User confirmed Bugs 24 + 25 (Round 6) fixed. Bugs 22 + 23 still failing despite Round 5 + 6 fixes. User provided HAR + console logs at `C:\Users\karths\Downloads\cortex-ai-har-consolelog\`. The HAR was the smoking gun.
+
+### Hard evidence (HAR analysis)
+
+```
+POST https://cortexks-api.../api/auth/refresh
+  Status: 401 "Refresh token missing"
+  Request cookies: []   ← empty!
+  Origin: https://gentle-river-06c1e4e10.7.azurestaticapps.net
+  User-Agent: Edge 147 (Chromium on Windows)
+Response:
+  access-control-allow-origin: <SWA url>
+  access-control-allow-credentials: true
+```
+
+The browser sent **zero cookies** despite SameSite=None+Secure, `credentials: 'include'`, correct CORS. Edge 147's default "Balanced" tracking-prevention drops third-party cookies regardless of SameSite. SWA is on Free tier (verified) — the linked-backend reverse-proxy (Standard SKU $9/mo) is unavailable without escalation.
+
+### Architectural decision: SEC-02 reversed for /login + /refresh + /register (Round 7)
+
+The original Phase-1 design (SEC-02) put the refresh token only in an httpOnly cookie to keep it out of JavaScript reach. With Free-tier SWA + Container Apps the API is third-party from the browser's perspective; tracking-prevention silently drops the cookie.
+
+**Round-7 decision:** the refresh token is now **also** returned in the JSON body of `/login`, `/register`, `/refresh`. Frontend stores it in `localStorage('cortex_refresh')` and sends it via JSON body to `/api/auth/refresh`. The httpOnly cookie continues to be set as defense-in-depth for browsers that DO accept third-party cookies.
+
+**Trade-off accepted:** localStorage is XSS-readable. Acceptable for single-user MVP (no CSP yet). Tracked as `KNOWN_ISSUES.md` § "P1 — Migrate refresh token to first-party cookies" — to be removed once a custom domain is set up or SWA Standard SKU is approved.
+
+### Fixed and live-verified
+
+| # | Title | Root cause | Fix |
+|---|---|---|---|
+| **22** | Hard reload still logs out (Edge tracking-prevention drops the cookie) | Free-tier SWA + Container Apps cross-origin; Edge "Balanced" tracking-prevention treats the cortexks-api cookie as third-party and silently drops it on every fetch | `backend/app/schemas/auth.py`: `TokenPair`, `AccessTokenResponse`, new `RegisterResponse` all carry `refresh_token: str`. `backend/app/api/auth.py`: `/login`, `/register`, `/refresh` populate it. `frontend/src/api/auth.ts`: `login()` + `register()` write to `localStorage('cortex_refresh')`; `refresh()` reads localStorage and sends via JSON body; `logout()` clears it. `frontend/src/api/client.ts` inline auto-refresh-on-401 also reads from localStorage and sends via body. `RegisterPage.tsx` no longer needs the second `/login` call — register returns access_token directly |
+| **23** | Mobile voice still errors "Network issue — using file upload fallback" | iOS Safari background-tab throttling + mobile network instability cause WS code-1006 abnormal closes on virtually every recording, triggering the degraded-toast even though file upload always works | `frontend/src/hooks/useVoiceRecorder.ts` exports `IS_MOBILE = /iPhone\|iPad\|iPod\|Android/i.test(navigator.userAgent)`. `frontend/src/components/VoiceCapture.tsx`: `_openWs()` early-returns when `isMobile` so WS is never instantiated; the "Network issue — using file-upload fallback" toast is gated behind `!isMobile` (file upload IS the primary path on mobile, not a fallback) |
+
+### Tests
+
+- New `backend/tests/test_regression_round7_fixes.py` — **18 cases, all green**:
+  - B22: 13 (schema fields, login/register/refresh body presence, frontend localStorage set/get/clear, client.ts auto-refresh body, SessionGate no-aggressive-logout)
+  - B23: 5 (UA check, mobile-skip branch in useVoiceRecorder, WS gated behind !mobile in VoiceCapture, "Network issue" toast guarded by !isMobile)
+- Updated `backend/tests/test_auth.py` `TestRefreshTokenInBody` (was `TestRefreshTokenNotInBody`) — now asserts the Round-7 contract (refresh_token MUST be in body of /login + /refresh).
+- Round 4 + 5 + 6 + pipeline tests (102 total) all still green. Combined backend pytest run: **120/120 pass**.
+
+### Live verification
+
+- Backend ACR build → Container App revision swap → health 200.
+- Frontend `npm run build` → SWA deploy.
+- After deploy, hard-reload the live SWA URL in Edge: refresh succeeds, user stays signed in.
+- Mobile recording: WS is never opened; recording uploads via file path with no degraded toast.
 
 ---
 

@@ -2,8 +2,8 @@
 
 > **Read this first.** This document briefs an incoming agent (Claude / Copilot / Aider / human) on the state of the project so work can resume without context loss.
 
-**Last updated:** 2026-05-01 (round 6 closed)
-**Status:** Live on Azure. Phase 1 MVP + Phase 2 (Personal Dictionary + Shadow Reader) deployed. Six rounds of user-reported UX bug-bashes closed. Round 6 (latest): refresh-logout #2 + mobile voice #2 + library category sync + voice transcription cut at first pause — B24 + B25 are mechanical fixes (spread-order; continuous recognition), B22 + B23 added defensive `credentials: 'include'` and may need a follow-up if symptom persists. 30 test-side failures remain after fix-pair pass; production code blessed by reviewers.
+**Last updated:** 2026-05-01 (round 7 closed)
+**Status:** Live on Azure. Phase 1 MVP + Phase 2 (Personal Dictionary + Shadow Reader) deployed. **Seven rounds** of user-reported UX bug-bashes closed. Round 7 (latest): a HAR file from the user pinpointed Bug 22's root cause — Edge "Balanced" tracking-prevention drops the refresh cookie because Free-tier SWA + Container Apps puts the API on a different eTLD+1 from the frontend, making the cookie third-party. SEC-02 reversed for /login + /refresh + /register: refresh token now also returned in JSON body and stored in localStorage. WebSocket streaming is skipped on mobile UA (file upload is reliable, WS isn't). P1 follow-up: migrate to first-party cookies via custom domain or SWA Standard SKU. 120 backend regression tests now passing (rounds 4–7 + pipeline).
 
 ---
 

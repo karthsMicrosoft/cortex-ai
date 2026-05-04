@@ -2,7 +2,7 @@
 
 > **Living document.** Captures what we're building, what's done, what's next. Update as work progresses.
 
-**Last updated:** 2026-05-01 (round 8 closed)
+**Last updated:** 2026-05-04 (rounds 1–8 closed; user-confirmed working through bug 27)
 
 ---
 

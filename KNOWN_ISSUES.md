@@ -2,7 +2,7 @@
 
 > **Open work, bugs not fixed, gaps from "fully done."** Anything tagged P0/P1/P2 here is meant to be picked up by the next agent.
 
-**Last updated:** 2026-05-01 (round 8 closed)
+**Last updated:** 2026-05-04 (rounds 1–8 closed; user-confirmed bugs 26 + 27 fixed live)
 
 ---
 

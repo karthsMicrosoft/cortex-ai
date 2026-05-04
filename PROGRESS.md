@@ -2,7 +2,7 @@
 
 > **Chronological log of what's been done.** New work appends to the end. Use this to verify "we already did X" before re-doing.
 
-**Last updated:** 2026-05-01 (round 8 closed)
+**Last updated:** 2026-05-04 (rounds 1–8 closed; user-confirmed bugs 26 + 27 working live)
 
 ---
 

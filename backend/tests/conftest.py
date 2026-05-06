@@ -106,12 +106,27 @@ async def client(db_session: AsyncSession):
     """
     AsyncClient wired to the FastAPI app with the test DB session injected.
     Skips if the app is not yet implemented.
+
+    2026-05-06 fix: Reset the slowapi rate-limiter storage on every fixture
+    setup. Without this, the per-IP rate limits on /api/auth/register (10/min)
+    and /api/auth/login (5/min) accumulate across all tests in the session
+    (ASGITransport reports a single client IP), causing every fixture-built
+    test from ~the 11th onward to fail with HTTP 429. This was the root
+    cause of the long-standing "30 backend test-side failures" called out
+    in KNOWN_ISSUES.
     """
     try:
         app = _import_app()
         get_db = _import_get_db()
     except ImportError as exc:
         pytest.skip(f"App not yet implemented: {exc}")
+
+    # Reset slowapi limiter storage between tests
+    try:
+        from app.limiter import limiter
+        limiter.reset()
+    except (ImportError, AttributeError):
+        pass  # Limiter not yet available — skip silently
 
     async def override_get_db():
         yield db_session

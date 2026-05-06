@@ -88,14 +88,10 @@ describe('MusicPlayer (Task 6.1)', () => {
 
   it('renders a waveform container element', () => {
     renderMusicPlayer();
-    // WaveSurfer attaches to a div container; we check for a waveform region
-    const waveContainer = screen.getByRole('region', { name: /waveform|audio player/i })
-      ?? document.querySelector('[data-testid="waveform"]');
+    // Production renders a div with aria-label="Audio waveform" inside the
+    // outer aria-label="Music player" region. Either is a valid handle.
     expect(
-      document.querySelector('[data-testid="waveform"]') ??
-      document.querySelector('.waveform') ??
-      document.querySelector('[aria-label*="waveform" i]') ??
-      screen.queryByTestId('waveform')
+      document.querySelector('[aria-label="Audio waveform"]')
     ).toBeInTheDocument();
   });
 
@@ -103,19 +99,27 @@ describe('MusicPlayer (Task 6.1)', () => {
     const WaveSurfer = (await import('wavesurfer.js')).default;
     renderMusicPlayer();
 
-    expect(WaveSurfer.create).toHaveBeenCalledWith(
-      expect.objectContaining({
-        waveColor: '#6366F1',
-        progressColor: '#4F46E5',
-      }),
-    );
+    // The dynamic import + WaveSurfer.create runs in an async useEffect chain.
+    await waitFor(() => {
+      expect(WaveSurfer.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          waveColor: '#6366F1',
+          progressColor: '#4F46E5',
+        }),
+      );
+    });
   });
 
-  it('loads the audio URL into WaveSurfer', async () => {
+  it('passes audioUrl to WaveSurfer.create as the url config arg', async () => {
+    // Production uses WaveSurfer.create({ ..., url: audioUrl }) — there is no
+    // separate ws.load(url) call. Assert against the create config.
+    const WaveSurfer = (await import('wavesurfer.js')).default;
     renderMusicPlayer({ audioUrl: AUDIO_URL });
 
     await waitFor(() => {
-      expect(mockWaveSurferInstance.load).toHaveBeenCalledWith(AUDIO_URL);
+      expect(WaveSurfer.create).toHaveBeenCalledWith(
+        expect.objectContaining({ url: AUDIO_URL }),
+      );
     });
   });
 
@@ -129,7 +133,19 @@ describe('MusicPlayer (Task 6.1)', () => {
 
   it('calls wavesurfer play/pause when play button is clicked', async () => {
     renderMusicPlayer();
-    const playBtn = screen.getByRole('button', { name: /play|pause/i });
+
+    // Wait for the async dynamic-import + WaveSurfer.create to complete and
+    // for the component to register its event handlers, then fire the 'ready'
+    // event so the play button becomes enabled (production gates clicks on
+    // isReady, set in the 'ready' handler).
+    await waitFor(() => {
+      expect(mockWaveSurferInstance.on).toHaveBeenCalled();
+    });
+    const onCalls = mockWaveSurferInstance.on.mock.calls;
+    const readyCallback = onCalls.find(([event]: [string]) => event === 'ready');
+    if (readyCallback) readyCallback[1]();
+
+    const playBtn = await screen.findByRole('button', { name: /play|pause/i });
     fireEvent.click(playBtn);
 
     expect(
@@ -209,8 +225,13 @@ describe('MusicPlayer (Task 6.1)', () => {
 
   // --- Cleanup ---
 
-  it('destroys WaveSurfer on unmount', () => {
+  it('destroys WaveSurfer on unmount', async () => {
     const { unmount } = renderMusicPlayer();
+    // Wait for async dynamic-import + WaveSurfer.create to actually wire the
+    // instance into the component before unmount, otherwise destroy() is a no-op.
+    await waitFor(() => {
+      expect(mockWaveSurferInstance.on).toHaveBeenCalled();
+    });
     unmount();
     expect(mockWaveSurferInstance.destroy).toHaveBeenCalled();
   });
@@ -295,31 +316,30 @@ describe('PERF-11 — MusicPlayer must dynamically import wavesurfer.js', () => 
    * not a static top-level import.
    */
 
-  it('MusicPlayer must not have a static top-level import of wavesurfer.js', () => {
-    // Inspect the component function source for dynamic import pattern
-    const componentStr = MusicPlayer.toString();
+  it('MusicPlayer must not have a static top-level import of wavesurfer.js', async () => {
+    // Read the source file directly. MusicPlayer.toString() returns only the
+    // exported function body, not module-top imports or sibling helpers, so
+    // `componentStr.includes('import(')` was a false negative even when the
+    // dynamic import lives in a helper like createWaveSurfer().
+    const fs = await import('node:fs');
+    const path = await import('node:path');
+    const srcPath = path.resolve(__dirname, '..', 'components', 'MusicPlayer.tsx');
+    const src = fs.readFileSync(srcPath, 'utf-8');
 
-    // If the component uses dynamic import, 'import(' will appear in the function body
-    const usesDynamicImport = componentStr.includes('import(');
-
-    expect(usesDynamicImport).toBe(true);
-    // If this fails: the static `import WaveSurfer from 'wavesurfer.js'` must be
-    // replaced with: const WaveSurfer = (await import('wavesurfer.js')).default
-    // inside a useEffect or createWaveSurfer helper function.
+    const hasStaticImport =
+      /^\s*import\s+[^'"\n]+from\s+['"]wavesurfer\.js['"]/m.test(src);
+    expect(hasStaticImport).toBe(false);
   });
 
-  it('MusicPlayer function body contains dynamic import for wavesurfer.js', () => {
-    const componentStr = MusicPlayer.toString();
+  it('MusicPlayer function body contains dynamic import for wavesurfer.js', async () => {
+    const fs = await import('node:fs');
+    const path = await import('node:path');
+    const srcPath = path.resolve(__dirname, '..', 'components', 'MusicPlayer.tsx');
+    const src = fs.readFileSync(srcPath, 'utf-8');
 
-    // Verify the dynamic import references wavesurfer
-    const hasDynamicWavesurfer = (
-      componentStr.includes("import('wavesurfer.js')") ||
-      componentStr.includes('import("wavesurfer.js")') ||
-      // May be in a helper function called by the component
-      componentStr.includes('wavesurfer')
-    );
-
-    expect(hasDynamicWavesurfer).toBe(true);
+    const hasDynamicImport =
+      /import\(\s*['"]wavesurfer\.js['"]\s*\)/.test(src);
+    expect(hasDynamicImport).toBe(true);
   });
 
   it('wavesurfer.js import does not execute synchronously at component mount without audio', async () => {

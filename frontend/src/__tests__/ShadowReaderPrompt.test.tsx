@@ -154,68 +154,58 @@ describe('ShadowReaderPrompt — rendering when status=asked', () => {
 
   it('shows bottom-sheet with questions after polling returns asked', async () => {
     await renderPrompt();
-    // Advance time to trigger first poll (2s)
-    await act(async () => { vi.advanceTimersByTime(2100); });
-    await waitFor(() => {
-      expect(
-        screen.queryByText(/What emotion does this melody evoke/i) !== null ||
-        document.body.textContent?.includes('What emotion')
-      ).toBe(true);
-    });
+    // Advance time to trigger first poll (2s); waitFor cannot use the mocked
+    // timers, so just check the DOM synchronously after the timer + microtask
+    // queue has fully drained.
+    await act(async () => { await vi.advanceTimersByTimeAsync(2100); });
+    expect(
+      screen.queryByText(/What emotion does this melody evoke/i) !== null ||
+      document.body.textContent?.includes('What emotion')
+    ).toBe(true);
   });
 
   it('renders Sparkles header text in bottom-sheet', async () => {
     await renderPrompt();
-    await act(async () => { vi.advanceTimersByTime(2100); });
-    await waitFor(() => {
-      const body = document.body.textContent?.toLowerCase() ?? '';
-      expect(body).toMatch(/deeper|reflect|shadow/i);
-    });
+    await act(async () => { await vi.advanceTimersByTimeAsync(2100); });
+          const body = document.body.textContent?.toLowerCase() ?? '';
+      expect(body).toMatch(/deeper|reflect|shadow/i);;
   });
 
   it('renders a dismiss (X) button in the bottom-sheet', async () => {
     await renderPrompt();
-    await act(async () => { vi.advanceTimersByTime(2100); });
-    await waitFor(() => {
-      const buttons = screen.getAllByRole('button');
-      expect(buttons.length).toBeGreaterThan(0);
-    });
+    await act(async () => { await vi.advanceTimersByTimeAsync(2100); });
+          const buttons = screen.getAllByRole('button');
+      expect(buttons.length).toBeGreaterThan(0);;
   });
 
   it('renders a textarea for text answer', async () => {
     await renderPrompt();
-    await act(async () => { vi.advanceTimersByTime(2100); });
-    await waitFor(() => {
-      const textarea = document.querySelector('textarea');
-      expect(textarea).toBeTruthy();
-    });
+    await act(async () => { await vi.advanceTimersByTimeAsync(2100); });
+          const textarea = document.querySelector('textarea');
+      expect(textarea).toBeTruthy();;
   });
 
   it('renders a send button for submitting the answer', async () => {
     await renderPrompt();
-    await act(async () => { vi.advanceTimersByTime(2100); });
-    await waitFor(() => {
-      // Send button should be present — identified by role or aria-label
+    await act(async () => { await vi.advanceTimersByTimeAsync(2100); });
+          // Send button should be present — identified by role or aria-label
       const buttons = screen.getAllByRole('button');
-      expect(buttons.length).toBeGreaterThanOrEqual(2); // at least dismiss + send
-    });
+      expect(buttons.length).toBeGreaterThanOrEqual(2); // at least dismiss + send;
   });
 
   it('renders a voice mic button alongside text answer', async () => {
     await renderPrompt();
-    await act(async () => { vi.advanceTimersByTime(2100); });
-    await waitFor(() => {
-      // At least 3 buttons: dismiss, send, mic
+    await act(async () => { await vi.advanceTimersByTimeAsync(2100); });
+          // At least 3 buttons: dismiss, send, mic
       const buttons = screen.getAllByRole('button');
-      expect(buttons.length).toBeGreaterThanOrEqual(2);
-    });
+      expect(buttons.length).toBeGreaterThanOrEqual(2);;
   });
 
   it('does NOT render the bottom-sheet when status=pending (UI non-blocking)', async () => {
     mockGetQuestions.mockResolvedValue(PENDING_RESPONSE);
     await renderPrompt();
     // After first poll still pending — sheet must not show
-    await act(async () => { vi.advanceTimersByTime(2100); });
+    await act(async () => { await vi.advanceTimersByTimeAsync(2100); });
     // Check that the textarea or "Want to go deeper" text is NOT visible
     const body = document.body.textContent?.toLowerCase() ?? '';
     const textarea = document.querySelector('textarea');
@@ -229,7 +219,7 @@ describe('ShadowReaderPrompt — rendering when status=asked', () => {
   it('does NOT render the bottom-sheet when status=skipped', async () => {
     mockGetQuestions.mockResolvedValue(SKIPPED_RESPONSE);
     await renderPrompt();
-    await act(async () => { vi.advanceTimersByTime(2100); });
+    await act(async () => { await vi.advanceTimersByTimeAsync(2100); });
     const textarea = document.querySelector('textarea');
     expect(textarea).toBeNull();
   });
@@ -248,7 +238,7 @@ describe('ShadowReaderPrompt — B17 polling schedule', () => {
   it('polls at least once within 2s (first tier starts immediately)', async () => {
     mockGetQuestions.mockResolvedValue(PENDING_RESPONSE);
     await renderPrompt();
-    await act(async () => { vi.advanceTimersByTime(2100); });
+    await act(async () => { await vi.advanceTimersByTimeAsync(2100); });
     expect(mockGetQuestions).toHaveBeenCalledTimes(1);
   });
 
@@ -257,7 +247,7 @@ describe('ShadowReaderPrompt — B17 polling schedule', () => {
     await renderPrompt();
     // Advance 20 seconds — should fire ~10 polls at 2s each
     for (let i = 0; i < 10; i++) {
-      await act(async () => { vi.advanceTimersByTime(2000); });
+      await act(async () => { await vi.advanceTimersByTimeAsync(2000); });
     }
     // Allow for ±1 poll due to timing
     expect(mockGetQuestions.mock.calls.length).toBeGreaterThanOrEqual(9);
@@ -270,12 +260,12 @@ describe('ShadowReaderPrompt — B17 polling schedule', () => {
 
     // Exhaust first 10 polls (2s × 10 = 20s)
     for (let i = 0; i < 10; i++) {
-      await act(async () => { vi.advanceTimersByTime(2000); });
+      await act(async () => { await vi.advanceTimersByTimeAsync(2000); });
     }
     const after10 = mockGetQuestions.mock.calls.length;
 
     // Advance another 5s — should fire one more poll in second tier
-    await act(async () => { vi.advanceTimersByTime(5100); });
+    await act(async () => { await vi.advanceTimersByTimeAsync(5100); });
     const after11 = mockGetQuestions.mock.calls.length;
 
     expect(after11).toBeGreaterThan(after10);
@@ -287,21 +277,21 @@ describe('ShadowReaderPrompt — B17 polling schedule', () => {
       .mockResolvedValueOnce(ASKED_RESPONSE); // terminal on 2nd poll
 
     await renderPrompt();
-    await act(async () => { vi.advanceTimersByTime(2100); }); // poll 1: pending
-    await act(async () => { vi.advanceTimersByTime(2100); }); // poll 2: asked → stop
+    await act(async () => { await vi.advanceTimersByTimeAsync(2100); }); // poll 1: pending
+    await act(async () => { await vi.advanceTimersByTimeAsync(2100); }); // poll 2: asked → stop
     const countAfterTerminal = mockGetQuestions.mock.calls.length;
 
     // Advance more time — should NOT poll again
-    await act(async () => { vi.advanceTimersByTime(10000); });
+    await act(async () => { await vi.advanceTimersByTimeAsync(10000); });
     expect(mockGetQuestions.mock.calls.length).toBe(countAfterTerminal);
   });
 
   it('stops polling after terminal status=skipped is received', async () => {
     mockGetQuestions.mockResolvedValue(SKIPPED_RESPONSE);
     await renderPrompt();
-    await act(async () => { vi.advanceTimersByTime(2100); });
+    await act(async () => { await vi.advanceTimersByTimeAsync(2100); });
     const countAfterSkip = mockGetQuestions.mock.calls.length;
-    await act(async () => { vi.advanceTimersByTime(10000); });
+    await act(async () => { await vi.advanceTimersByTimeAsync(10000); });
     expect(mockGetQuestions.mock.calls.length).toBe(countAfterSkip);
   });
 
@@ -311,15 +301,15 @@ describe('ShadowReaderPrompt — B17 polling schedule', () => {
 
     // Advance 45s: first 20s (10×2s) + next 25s (5×5s)
     for (let i = 0; i < 10; i++) {
-      await act(async () => { vi.advanceTimersByTime(2000); });
+      await act(async () => { await vi.advanceTimersByTimeAsync(2000); });
     }
     for (let i = 0; i < 5; i++) {
-      await act(async () => { vi.advanceTimersByTime(5000); });
+      await act(async () => { await vi.advanceTimersByTimeAsync(5000); });
     }
     const totalAtEnd = mockGetQuestions.mock.calls.length;
 
     // Advance another 10s — window exhausted, no more polls
-    await act(async () => { vi.advanceTimersByTime(10000); });
+    await act(async () => { await vi.advanceTimersByTimeAsync(10000); });
     expect(mockGetQuestions.mock.calls.length).toBe(totalAtEnd);
   });
 
@@ -328,7 +318,7 @@ describe('ShadowReaderPrompt — B17 polling schedule', () => {
     await renderPrompt();
     // Advance 60s to ensure window is fully exhausted
     for (let i = 0; i < 60; i++) {
-      await act(async () => { vi.advanceTimersByTime(1000); });
+      await act(async () => { await vi.advanceTimersByTimeAsync(1000); });
     }
     expect(mockGetQuestions.mock.calls.length).toBeLessThanOrEqual(15);
   });
@@ -348,49 +338,47 @@ describe('ShadowReaderPrompt — dismiss interaction', () => {
 
   it('clicking dismiss button calls dismiss API', async () => {
     await renderPrompt();
-    await act(async () => { vi.advanceTimersByTime(2100); });
+    await act(async () => { await vi.advanceTimersByTimeAsync(2100); });
 
-    await waitFor(() => {
-      const buttons = screen.getAllByRole('button');
-      expect(buttons.length).toBeGreaterThan(0);
-    });
+          const buttons = screen.getAllByRole('button');
+      expect(buttons.length).toBeGreaterThan(0);;
 
     // Click the first button (assumed to be dismiss X)
     const dismissBtn = screen.getAllByRole('button')[0];
     fireEvent.click(dismissBtn);
 
-    await waitFor(() => {
-      expect(mockDismiss).toHaveBeenCalledWith(NOTE_ID);
-    });
+          expect(mockDismiss).toHaveBeenCalledWith(NOTE_ID);;
   });
 
   it('dismissing hides the bottom-sheet', async () => {
     await renderPrompt();
-    await act(async () => { vi.advanceTimersByTime(2100); });
+    await act(async () => { await vi.advanceTimersByTimeAsync(2100); });
 
-    await waitFor(() => screen.getAllByRole('button').length > 0);
+    /* state settled by fake-timer drain */
 
     const dismissBtn = screen.getAllByRole('button')[0];
-    fireEvent.click(dismissBtn);
-
-    await waitFor(() => {
-      const textarea = document.querySelector('textarea');
-      expect(textarea).toBeNull();
+    await act(async () => {
+      fireEvent.click(dismissBtn);
+      await vi.advanceTimersByTimeAsync(0);
     });
+
+          const textarea = document.querySelector('textarea');
+      expect(textarea).toBeNull();;
   });
 
   it('calling onComplete callback after dismiss', async () => {
     const onComplete = vi.fn();
     await renderPrompt(NOTE_ID, onComplete);
-    await act(async () => { vi.advanceTimersByTime(2100); });
-    await waitFor(() => screen.getAllByRole('button').length > 0);
+    await act(async () => { await vi.advanceTimersByTimeAsync(2100); });
+    /* state settled by fake-timer drain */
 
     const dismissBtn = screen.getAllByRole('button')[0];
-    fireEvent.click(dismissBtn);
-
-    await waitFor(() => {
-      expect(onComplete).toHaveBeenCalled();
+    await act(async () => {
+      fireEvent.click(dismissBtn);
+      await vi.advanceTimersByTimeAsync(0);
     });
+
+          expect(onComplete).toHaveBeenCalled();;
   });
 });
 
@@ -408,8 +396,8 @@ describe('ShadowReaderPrompt — answer interaction', () => {
 
   it('typing in textarea and clicking send calls answer API', async () => {
     await renderPrompt();
-    await act(async () => { vi.advanceTimersByTime(2100); });
-    await waitFor(() => document.querySelector('textarea') !== null);
+    await act(async () => { await vi.advanceTimersByTimeAsync(2100); });
+    /* state settled by fake-timer drain */
 
     const textarea = document.querySelector('textarea')!;
     fireEvent.change(textarea, { target: { value: 'It feels melancholy, like rain on glass.' } });
@@ -426,36 +414,35 @@ describe('ShadowReaderPrompt — answer interaction', () => {
 
     fireEvent.click(sendBtn);
 
-    await waitFor(() => {
-      expect(mockAnswer).toHaveBeenCalledWith(
+          expect(mockAnswer).toHaveBeenCalledWith(
         NOTE_ID,
         'It feels melancholy, like rain on glass.',
-      );
-    });
+      );;
   });
 
   it('submitting answer hides the bottom-sheet', async () => {
     await renderPrompt();
-    await act(async () => { vi.advanceTimersByTime(2100); });
-    await waitFor(() => document.querySelector('textarea') !== null);
+    await act(async () => { await vi.advanceTimersByTimeAsync(2100); });
+    /* state settled by fake-timer drain */
 
     const textarea = document.querySelector('textarea')!;
     fireEvent.change(textarea, { target: { value: 'My reflection answer.' } });
 
     const buttons = screen.getAllByRole('button');
     const sendBtn = buttons[buttons.length - 1];
-    fireEvent.click(sendBtn);
-
-    await waitFor(() => {
-      const ta = document.querySelector('textarea');
-      expect(ta).toBeNull();
+    await act(async () => {
+      fireEvent.click(sendBtn);
+      await vi.advanceTimersByTimeAsync(0);
     });
+
+          const ta = document.querySelector('textarea');
+      expect(ta).toBeNull();;
   });
 
   it('does not call answer API when textarea is empty', async () => {
     await renderPrompt();
-    await act(async () => { vi.advanceTimersByTime(2100); });
-    await waitFor(() => document.querySelector('textarea') !== null);
+    await act(async () => { await vi.advanceTimersByTimeAsync(2100); });
+    /* state settled by fake-timer drain */
 
     // Do NOT type anything
     const buttons = screen.getAllByRole('button');
@@ -463,7 +450,7 @@ describe('ShadowReaderPrompt — answer interaction', () => {
     fireEvent.click(sendBtn);
 
     // Give it time to process
-    await act(async () => { vi.advanceTimersByTime(500); });
+    await act(async () => { await vi.advanceTimersByTimeAsync(500); });
     expect(mockAnswer).not.toHaveBeenCalled();
   });
 });
@@ -481,7 +468,7 @@ describe('ShadowReaderPrompt — UI non-blocking guarantee', () => {
   it('component does not render a modal overlay (blocks page interaction)', async () => {
     mockGetQuestions.mockResolvedValue(ASKED_RESPONSE);
     await renderPrompt();
-    await act(async () => { vi.advanceTimersByTime(2100); });
+    await act(async () => { await vi.advanceTimersByTimeAsync(2100); });
 
     // The component must NOT render an element with role='dialog' (modal)
     const dialog = document.querySelector('[role="dialog"]');
@@ -491,12 +478,10 @@ describe('ShadowReaderPrompt — UI non-blocking guarantee', () => {
   it('bottom-sheet has fixed bottom position (slide-up, not modal)', async () => {
     mockGetQuestions.mockResolvedValue(ASKED_RESPONSE);
     await renderPrompt();
-    await act(async () => { vi.advanceTimersByTime(2100); });
+    await act(async () => { await vi.advanceTimersByTimeAsync(2100); });
 
-    await waitFor(() => {
-      const body = document.body.textContent?.toLowerCase() ?? '';
-      return body.length > 0;
-    });
+          const body = document.body.textContent?.toLowerCase() ?? '';
+      return body.length > 0;;
 
     // The sheet container should have a fixed or absolute class suggesting bottom placement
     // (not a full-screen modal)
@@ -513,7 +498,7 @@ describe('ShadowReaderPrompt — UI non-blocking guarantee', () => {
   it('returns null (nothing rendered) when status is not asked', async () => {
     mockGetQuestions.mockResolvedValue(PENDING_RESPONSE);
     const { container } = await renderPrompt();
-    await act(async () => { vi.advanceTimersByTime(2100); });
+    await act(async () => { await vi.advanceTimersByTimeAsync(2100); });
     // Container should be empty or have minimal content (no bottom-sheet DOM)
     const textarea = container.querySelector('textarea');
     expect(textarea).toBeNull();
@@ -524,7 +509,7 @@ describe('ShadowReaderPrompt — UI non-blocking guarantee', () => {
     const { unmount } = await renderPrompt();
     const callsBeforeUnmount = mockGetQuestions.mock.calls.length;
     unmount();
-    await act(async () => { vi.advanceTimersByTime(10000); });
+    await act(async () => { await vi.advanceTimersByTimeAsync(10000); });
     // After unmount, no more polls should fire
     expect(mockGetQuestions.mock.calls.length).toBe(callsBeforeUnmount);
   });

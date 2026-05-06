@@ -1,0 +1,63 @@
+{
+  "requirements": {
+    "identityExtension": "You translate the existing comprehensive build spec at C:\\Users\\karths\\dev\\Projects\\cortex\\SECOND_BRAIN_BUILD_SPEC.md (Section 1) and SECOND_BRAIN_BUILD_SPEC_ADDENDUM.md (Section F1.1, F2.1) into the standard workforce requirements.md format. Do not re-interview the user — the spec is the source of truth.",
+    "whatYouDoExtensions": [
+      "Read both spec files entirely. Translate Section 1 (Requirements) of the main spec verbatim into the requirements template. Then merge in F1.1 (Personal Dictionary) and F2.1 (Shadow Reader) from the addendum into a Phase 2 enhancements section.",
+      "All file paths must be absolute under C:\\Users\\karths\\dev\\Projects\\cortex\\ (write requirements.md to features/cortex-second-brain/requirements/requirements.md inside that root)."
+    ]
+  },
+  "design": {
+    "identityExtension": "You translate the existing comprehensive design from SECOND_BRAIN_BUILD_SPEC.md (Sections 2, 4.1, 4.3, 4.4, 5.2) and SECOND_BRAIN_BUILD_SPEC_ADDENDUM.md (Sections F1.2, F2.2) into the standard workforce design.md format and produce User Story task files for items 1-21 (Phase 1 MVP) and items 22-34 (Phase 2 with Personal Dictionary + Shadow Reader integrated).",
+    "whatYouDoExtensions": [
+      "Use exact folder structure from spec section 4.1, exact dependencies from section 4.3, exact Bicep template from section 5.2, exact env vars from section 4.4 — do not deviate.",
+      "Architecture must match section 2.1 diagram (FastAPI backend + PWA frontend + PostgreSQL/pgvector + Azure Blob/Speech/OpenAI/Vision).",
+      "Produce task files at C:\\Users\\karths\\dev\\Projects\\cortex\\features\\cortex-second-brain\\tasks\\: one per User Story per the spec's MVP item groupings (group items 1-6 as US-1 Foundation, 7-11 as US-2 AI Pipeline, 12-14 as US-3 Frontend Setup, 15-19 as US-4 Voice UX + Offline, 20-21 as US-5 Deployment for Phase 1; then items 22-28 as US-6 Insights, 29-30 as US-7 Personal Dictionary, 31-32 as US-8 Shadow Reader, 33-34 as US-9 Real-time STT for Phase 2).",
+      "Include TDD hooks: each story file must start with the Tester writing failing tests before the Coder implements. Follow the standard tester-coder protocol from rules/testing.md."
+    ]
+  },
+  "research": {
+    "identityExtension": "Focus research on Azure best practices for the exact services in the spec (Container Apps, PostgreSQL Flexible Server with pgvector, Blob Storage, Speech Service, OpenAI, AI Vision) and the latest stable versions of the libraries pinned in section 4.3 of the main spec.",
+    "whatYouDoExtensions": [
+      "Verify the dependency versions in section 4.3 are current and free of CVEs. Note any version pin that needs an update.",
+      "Find Azure deployment patterns for FastAPI + PWA on Container Apps + Static Web Apps with cost ≤ $150/mo.",
+      "Surface any Azure resource constraints that affect the architecture (e.g., Speech regions, OpenAI model availability in westus2)."
+    ]
+  },
+  "critique": {},
+  "coding": {
+    "codePaths": ["frontend/", "backend/", "infra/", "docs/", ".github/"],
+    "identityExtension": "Implementation lives at C:\\Users\\karths\\dev\\Projects\\cortex\\ — use the folder structure exactly as specified in section 4.1 of SECOND_BRAIN_BUILD_SPEC.md.",
+    "whatYouDoExtensions": [
+      "Follow Test-Driven Development: never start implementation until the Tester has written failing tests for the current task. Wait for the failing-tests signal from the Tester before coding.",
+      "Use the exact dependencies from section 4.3 of the main spec — do not substitute libraries. Match the file layout from section 4.1 exactly.",
+      "All AI calls must use the Azure OpenAI endpoint pattern from section 4.4 env vars. All audio uploads go to Azure Blob Storage via the connection-string pattern."
+    ]
+  },
+  "testing": {
+    "codePaths": ["backend/tests/", "frontend/tests/", "frontend/src/__tests__/"],
+    "identityExtension": "Test stack: pytest + httpx + pytest-asyncio for backend; Vitest + React Testing Library for frontend. Write tests BEFORE the Coder implements — strict TDD.",
+    "whatYouDoExtensions": [
+      "For each task in a User Story, write the failing tests FIRST, then signal the Coder. Tests must cover the acceptance criteria from the spec's section 5.3 final checklist plus the addendum's F1.5 and F2.5 acceptance criteria where applicable.",
+      "Backend tests use the in-process FastAPI TestClient or httpx AsyncClient. Mock Azure services (Speech, OpenAI, Blob, Vision) using respx or unittest.mock — do not hit live Azure in tests.",
+      "Frontend tests use Vitest with @testing-library/react and jsdom. Mock fetch/axios for API calls."
+    ]
+  },
+  "review": [
+    {
+      "agentName": "reviewer-security",
+      "autofixThreshold": ["BLOCKING", "HIGH", "MEDIUM"]
+    },
+    {
+      "agentName": "reviewer-performance",
+      "autofixThreshold": ["BLOCKING", "HIGH", "MEDIUM"]
+    },
+    {
+      "agentName": "reviewer-quality",
+      "autofixThreshold": ["BLOCKING", "HIGH", "MEDIUM"]
+    },
+    {
+      "agentName": "reviewer-spec-auditor",
+      "autofixThreshold": ["BLOCKING", "HIGH", "MEDIUM"]
+    }
+  ]
+}

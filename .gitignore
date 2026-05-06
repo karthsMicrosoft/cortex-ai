@@ -1,0 +1,20 @@
+node_modules/
+.env
+__pycache__/
+*.pyc
+.venv/
+venv/
+dist/
+build/
+.vite/
+*.log
+.DS_Store
+
+# Playwright e2e
+e2e/node_modules/
+e2e/.auth/
+e2e/test-results/
+e2e/playwright-report/
+
+# pytest-cov artifact
+.coverage

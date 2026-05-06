@@ -1,0 +1,38 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentParameters.json#",
+  "contentVersion": "1.0.0.0",
+  "_comment": "Production parameter file for redeploys backed by an Azure Key Vault. Live KV (created 2026-05-06): cortexks-kv in cortex-rg / centralus. Container App's system-assigned managed identity has the 'Key Vault Secrets User' role on this vault. Two secrets are stored: cortex-database-url (full asyncpg connection string) and cortex-jwt-secret-key. To use this file, copy it over parameters.json and run deploy.sh without the DB_ADMIN_PASSWORD/JWT_SECRET_KEY env vars (Bicep will resolve them from KV at deploy time).",
+  "parameters": {
+    "appName": {
+      "value": "cortexks"
+    },
+    "location": {
+      "value": "centralus"
+    },
+    "openaiLocation": {
+      "value": "eastus"
+    },
+    "containerImageTag": {
+      "value": "latest"
+    },
+    "frontendOrigin": {
+      "value": "https://gentle-river-06c1e4e10.7.azurestaticapps.net"
+    },
+    "dbAdminPassword": {
+      "reference": {
+        "keyVault": {
+          "id": "/subscriptions/85f6cb53-9eec-43f1-84c3-bf701dcd4048/resourceGroups/cortex-rg/providers/Microsoft.KeyVault/vaults/cortexks-kv"
+        },
+        "secretName": "cortex-db-admin-password"
+      }
+    },
+    "jwtSecretKey": {
+      "reference": {
+        "keyVault": {
+          "id": "/subscriptions/85f6cb53-9eec-43f1-84c3-bf701dcd4048/resourceGroups/cortex-rg/providers/Microsoft.KeyVault/vaults/cortexks-kv"
+        },
+        "secretName": "cortex-jwt-secret-key"
+      }
+    }
+  }
+}

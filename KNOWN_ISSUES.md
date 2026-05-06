@@ -2,7 +2,7 @@
 
 > **Open work, bugs not fixed, gaps from "fully done."** Anything tagged P0/P1/P2 here is meant to be picked up by the next agent.
 
-**Last updated:** 2026-05-06 (Round 9: cron functionality removed entirely + Azure Key Vault bootstrapped + P0 smoke test passed)
+**Last updated:** 2026-05-06 (Round 11: GitHub Actions deploys wired with OIDC + 8 test-triage PRs landed)
 
 ---
 
@@ -195,21 +195,38 @@ For each cluster:
 
 ---
 
-## P1 — GitHub Actions deploys aren't wired to secrets
+## ✅ P1 — GitHub Actions deploys wired (resolved 2026-05-06)
 
-**Status:** `.github/workflows/deploy-backend.yml` and `deploy-frontend.yml` exist and reference these secrets:
+**Status:** Both `.github/workflows/deploy-backend.yml` and `.github/workflows/deploy-frontend.yml` are live, OIDC-federated against `cortex-github-actions` AAD app, and verified green on push-to-main + on `workflow_dispatch`. Closes the long-standing P1 from this section.
 
-| Secret | Where to get it |
+**OIDC + RBAC (operational, not in repo):**
+
+| Item | Value |
 |---|---|
-| `AZURE_CLIENT_ID` | Output of `az ad sp create-for-rbac` for an OIDC-federated app registration |
-| `AZURE_TENANT_ID` | `az account show --query tenantId -o tsv` |
-| `AZURE_SUBSCRIPTION_ID` | `85f6cb53-9eec-43f1-84c3-bf701dcd4048` |
-| `ACR_NAME` | `cortexksacr` |
-| `RESOURCE_GROUP` | `cortex-rg` |
-| `APP_NAME` | `cortexks` |
-| `AZURE_STATIC_WEB_APPS_API_TOKEN` | `az staticwebapp secrets list --name cortexks-app --resource-group cortex-rg --query properties.apiKey -o tsv` |
+| AAD app | `cortex-github-actions` (clientId `976b4653-b915-412f-bc05-28036fd6e5e5`) |
+| Federated credential | issuer `https://token.actions.githubusercontent.com`, subject `repo:karthsMicrosoft/cortex-ai:ref:refs/heads/main` |
+| RBAC | `Contributor` on `cortex-rg` + `AcrPush` on `cortexksacr` |
+| GitHub repo secrets | `AZURE_CLIENT_ID`, `AZURE_TENANT_ID`, `AZURE_SUBSCRIPTION_ID`, `ACR_NAME`, `CONTAINER_APP_NAME`, `RESOURCE_GROUP`, `AZURE_STATIC_WEB_APPS_API_TOKEN` (7 total) |
 
-**Action:** Set these in the GitHub repo (Settings → Secrets and variables → Actions). Until they're set, push-to-main won't deploy. The current live deploy was from a local shell.
+**What CI does now per push:**
+- Frontend (on changes under `frontend/**` or the workflow yaml itself): npm ci + `npm run build` + copy SWA config into `dist/` + upload via `Azure/static-web-apps-deploy@v1`. ~1 min runtime.
+- Backend (on changes under `backend/**` or the workflow yaml): Azure login (OIDC) + `az acr build` (image tagged with `${{ github.sha }}` + `latest`) + `az containerapp update --revision-suffix ci<ts>` + 60 s health-check loop on `/api/health`. ~3 min runtime.
+- `workflow_dispatch` trigger added to both for manual re-fires.
+
+### Caveat — alembic migrations stay manual
+
+`az containerapp exec` requires a TTY (`tty.setcbreak(sys.stdin.fileno())`) which a GitHub Actions runner cannot provide. The CI workflow does NOT run `alembic upgrade head`. When schema changes ship as part of a deploy, run from a developer shell after the workflow goes green:
+
+```bash
+az containerapp exec --name cortexks-api --resource-group cortex-rg \
+  --command "alembic upgrade head"
+```
+
+Future automation options:
+1. Embed `alembic upgrade head` into the container's CMD/ENTRYPOINT (single-replica race safe since `minReplicas=1`).
+2. Run migrations as a separate Container Apps Job triggered by the workflow.
+
+Either is a P3 follow-up.
 
 ---
 

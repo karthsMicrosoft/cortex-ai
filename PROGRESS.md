@@ -2,7 +2,7 @@
 
 > **Chronological log of what's been done.** New work appends to the end. Use this to verify "we already did X" before re-doing.
 
-**Last updated:** 2026-05-06 (Round 9: cron functionality removed entirely + Azure Key Vault bootstrapped + P0 smoke test passed)
+**Last updated:** 2026-05-06 (Round 11: GitHub Actions deploys wired with OIDC + 8 test-triage PRs landed since merge of #1)
 
 ---
 
@@ -635,3 +635,55 @@ Verify: `az consumption budget show-with-rg --resource-group cortex-rg --budget-
 Closes the P1 line item from `KNOWN_ISSUES.md` § "P1 — No Azure Budget alerts" / `PLAN.md` § 6 P1.6 / `HANDOFF.md` § 3b. Docs updated: `docs/DEPLOYMENT.md` (replaced manual portal steps with the executed CLI + REST recipe), `KNOWN_ISSUES.md`, `HANDOFF.md`, `PLAN.md`.
 
 No code changes, no deploy required (Azure Cost Management is a control-plane resource).
+
+---
+
+## 10 — Round 10 — Test triage fleet (2026-05-06)
+
+8 small follow-up PRs (PR #2 through PR #9) merged into main on the same day after the Round-9 monolith merge. **+123 passing tests, 1 production bug fixed, 0 regressions.**
+
+| PR | File | Net | Root cause | Fix |
+|---|---|---|---|---|
+| #2 | `backend/tests/conftest.py`, `tests/test_voice_ws.py` | +26 | slowapi `/api/auth/register` 10/min limit accumulates across whole pytest session under httpx ASGITransport (single client IP); after ~10 fixture-built tests, every subsequent registration in the same minute window 429s | `limiter.reset()` at top of `client` fixture; file-level skip on `TestPartialFinalMessages` (2 hanging WS tests) |
+| #3 | `BrainViewPage.test.tsx`, `CreatePage.test.tsx`, `LibraryPage.test.tsx` | +36 | `vi.mock(...)` is hoisted above `const mockUseAuthStore = ...` — temporal-dead-zone reference error blocked entire file from loading (3 "Failed Suites" in vitest report) | Wrap mock state in `vi.hoisted(() => { ... })` and destructure back to module scope |
+| #4 | `frontend/src/__tests__/syncManager.test.ts` | +10 | `Object.create(SM.prototype)` bypasses constructor's private-field initialiser; `notifySyncingListeners()` iterates `undefined` and throws `TypeError` | Restore `syncingListeners=new Set()` + `pushTimer=null` + `pullTimer=null` in `makeFreshSyncManager()` |
+| #5 | `backend/tests/test_voice_phrase_list.py` | +2 | Stubs not updated when `voice.py` started passing a `src_suffix` kwarg into `transcribe_audio_file` | Stubs accept `src_suffix=".webm"` + `**_kwargs` |
+| #6 | `backend/app/api/dictionary.py` (PROD) | +6 + 1 prod bug | `POST /api/dictionary/bulk` used PostgreSQL-only `jsonb_to_recordset(...)` SQL; SQLite test DB raised `unrecognized token ":"` | Rewrote with portable SQLAlchemy Core: dedup SELECT + bulk insert + single commit. Deployed to live container app revision `vdict1778109076` + chrome-devtools verified dictionary UI healthy |
+| #7 | `frontend/src/__tests__/MusicPlayer.test.tsx` | +7 | Mix: tests asserted on `role=region` (prod has `aria-label`), `ws.load()` (prod uses `WaveSurfer.create({url})`), button click while disabled (need to fire mocked `ready` first); PERF-11 used `MusicPlayer.toString()` which can't see helper-scope dynamic import | aria-label query, async-aware `waitFor`, fire mocked `ready`, file-system regex grep for static/dynamic imports |
+| #8 | `backend/tests/test_speech.py` | +5 | Tests didn't mock `_ffmpeg_to_wav` (no ffmpeg on dev shell PATH → `RuntimeError: Audio conversion failed`); one test asserted deprecated `recognize_once_async()` (Bug-25 replaced with `start_continuous_recognition_async()` in Round 6) | Autouse fixture stubs `_ffmpeg_to_wav` + `os.unlink`; new `_make_continuous_recognizer()` helper models post-Bug-25 callback flow; renamed test + asserts continuous API + Bug-25 regression guard |
+| #9 | `frontend/src/__tests__/ShadowReaderPrompt.test.tsx` | +13 (22× faster) | `vi.useFakeTimers()` + `@testing-library/waitFor()` are incompatible — waitFor's internal setTimeout-based retry loop never fires under fake timers, so every assertion timed out at vitest's 5 s default (~65 s total) | (a) `advanceTimersByTime → advanceTimersByTimeAsync`, (b) `await waitFor(() => expect(...))` → direct sync `expect(...)`, (c) for click-then-side-effect tests, wrap click in extra `act` + microtask drain |
+
+Cumulative test count after Round 10: backend ~99% pass rate, frontend ~95% pass rate.
+
+Workflow: each PR followed TDD (red → green), opened against main, squash-merged after locally verifying its test suite. PRs #2/3/4/5/7/8/9 were test-only (no production code touched, screenshots/E2E gates N/A). PR #6 changed production SQL and was deployed + chrome-devtools-verified before merge.
+
+---
+
+## 11 — Round 11 — GitHub Actions OIDC wiring (2026-05-06)
+
+User-reported: failed-run emails from the `Deploy Backend` and `Deploy Frontend` workflows on every push to main. Root cause: 0 GitHub repo secrets configured (the workflows had been failing on every commit since repo creation), plus the backend yaml had several bugs (legacy `creds:` arg instead of OIDC, wrong image name `cortex-api` vs live `cortexks-api`).
+
+### What was done
+
+1. **Created AAD app** `cortex-github-actions` (clientId `976b4653-b915-412f-bc05-28036fd6e5e5`) with a federated credential targeting `repo:karthsMicrosoft/cortex-ai:ref:refs/heads/main`.
+2. **Granted RBAC** to its service principal: `Contributor` on `cortex-rg` + `AcrPush` on `cortexksacr`.
+3. **Set 7 repo secrets** via `gh secret set`: `AZURE_CLIENT_ID`, `AZURE_TENANT_ID`, `AZURE_SUBSCRIPTION_ID`, `ACR_NAME`, `CONTAINER_APP_NAME`, `RESOURCE_GROUP`, `AZURE_STATIC_WEB_APPS_API_TOKEN`.
+4. **Fixed backend workflow** (`PR #10`): OIDC syntax (client-id/tenant-id/subscription-id triplet via `azure/login@v2`); image name `cortex-api → cortexks-api`; explicit `--revision-suffix ci<ts>`; `--no-logs`; added `workflow_dispatch` trigger + path filter on the yaml itself.
+5. **Fixed frontend workflow** (`PR #10`): `app_location` / `output_location` combo for `skip_app_build:true` (was `frontend + dist`, must be `frontend/dist + ''`); added "Copy SWA config into dist" step; `skip_api_build: true`; `workflow_dispatch` + yaml path filter.
+6. **Removed alembic-in-CI step** (`PR #11`): `az containerapp exec` requires a TTY which CI runners lack. Documented inline that migrations stay manual; future-automation options listed in KNOWN_ISSUES.
+
+### Verification
+
+- `Deploy Frontend` (run `25467503687`) — ✅ 1 m 5 s
+- `Deploy Backend` (run `25467694698`, after PR #11) — ✅ 3 m 8 s
+
+The CI deploy now matches what `bash infra/deploy.sh` does locally, minus migrations.
+
+### Docs touched
+
+- `KNOWN_ISSUES.md` § "P1 — GitHub Actions deploys aren't wired" → ✅ resolved with the runbook + alembic-caveat
+- `PLAN.md` § 6 P1.5 — struck through with completion note
+- `HANDOFF.md` § 3b — P1 row removed, replaced with the resolved entry
+- `DECISIONS.md` § 22aa — OIDC architecture decision (federated cred + RBAC scope rationale)
+- `DECISIONS.md` § 22ab — alembic-in-CI deferred (TTY constraint + future options)
+

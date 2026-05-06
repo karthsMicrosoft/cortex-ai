@@ -194,9 +194,18 @@ async def bulk_import(
     """Bulk import up to 500 terms.  Returns 400 if list exceeds 500 entries.
     Duplicate terms are skipped (not treated as errors).
 
-    PERF-06 fix: replaced per-row commit loop with a single batch INSERT …
-    ON CONFLICT (user_id, term) DO NOTHING, then one commit at the end.
-    For 500 terms this reduces 500 sequential commits to 1.
+    PERF-06 fix: replaced per-row commit loop with one dedup SELECT + one
+    bulk INSERT + one commit. For 500 terms this reduces 500 sequential
+    commits to 1.
+
+    2026-05-06 fix: rewritten to be database-portable. The previous
+    implementation used PostgreSQL-only ``jsonb_to_recordset(...)`` and a
+    raw ``CAST(... AS uuid)``, which crashed on the SQLite test database
+    with ``unrecognized token ":"``. This caused 6 test failures in
+    test_dictionary.py to either error out or hit the test's "500 ->
+    pytest.skip" escape hatch (so the bulk-import path went effectively
+    untested on SQLite). The new implementation uses SQLAlchemy Core
+    `insert(...)`, which works identically on Postgres and SQLite.
     """
     if len(terms) > MAX_BULK_TERMS:
         raise HTTPException(
@@ -207,51 +216,39 @@ async def bulk_import(
     if not terms:
         return BulkImportResponse(inserted=0, total=0)
 
-    # Build rows list for batch insert
-    rows = [
-        {
-            "user_id": str(current_user_id),
-            "term": t.term,
-            "term_type": t.term_type or "general",
-            "pronunciation_hint": t.pronunciation_hint,
-            "boost_weight": t.boost_weight if t.boost_weight is not None else 1.0,
-        }
-        for t in terms
-    ]
-
-    # Single INSERT … ON CONFLICT (user_id, term) DO NOTHING — one round-trip
-    result = await db.execute(
-        text(
-            """
-            INSERT INTO user_vocabulary (user_id, term, term_type, pronunciation_hint, boost_weight)
-            SELECT
-                CAST(:user_id AS uuid),
-                t.term,
-                t.term_type,
-                t.pronunciation_hint,
-                t.boost_weight::float
-            FROM jsonb_to_recordset(:rows::jsonb)
-                AS t(term text, term_type text, pronunciation_hint text, boost_weight text)
-            ON CONFLICT (user_id, term) DO NOTHING
-            """
-        ),
-        {
-            "user_id": str(current_user_id),
-            "rows": __import__("json").dumps(
-                [
-                    {
-                        "term": r["term"],
-                        "term_type": r["term_type"],
-                        "pronunciation_hint": r["pronunciation_hint"],
-                        "boost_weight": str(r["boost_weight"]),
-                    }
-                    for r in rows
-                ]
-            ),
-        },
+    # Dedup against existing rows for this user. We only need to check the
+    # exact terms in the request, not the user's whole vocabulary.
+    requested_terms = [t.term for t in terms]
+    existing_result = await db.execute(
+        select(UserVocabulary.term).where(
+            UserVocabulary.user_id == current_user_id,
+            UserVocabulary.term.in_(requested_terms),
+        )
     )
+    existing_terms = set(existing_result.scalars().all())
+
+    # Also dedup *within* the request payload itself — first occurrence wins.
+    seen: set[str] = set()
+    new_rows: list[dict] = []
+    for t in terms:
+        if t.term in existing_terms or t.term in seen:
+            continue
+        seen.add(t.term)
+        new_rows.append(
+            {
+                "user_id": current_user_id,
+                "term": t.term,
+                "term_type": t.term_type or "general",
+                "pronunciation_hint": t.pronunciation_hint,
+                "boost_weight": t.boost_weight if t.boost_weight is not None else 1.0,
+            }
+        )
+
+    if new_rows:
+        from sqlalchemy import insert as sa_insert
+        await db.execute(sa_insert(UserVocabulary), new_rows)
     await db.commit()
-    inserted = result.rowcount if result.rowcount >= 0 else 0
+    inserted = len(new_rows)
 
     logger.info(
         "dictionary bulk_import: user=%s inserted=%d total=%d",

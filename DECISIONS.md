@@ -530,3 +530,43 @@ The voice mic button stays out (Round 3 / Bug 10) — text answers only; voice a
 **RBAC:** Container App's system-assigned managed identity = `5d6d721c-6a0a-48f9-b542-2b9e8f0e80c1`, granted `Key Vault Secrets User` on `cortexks-kv`. My user (`357b3db4-21b0-4e24-834c-1a0925c67ee5`) granted `Key Vault Secrets Officer` for write access.
 
 **Future deploys:** `infra/parameters.keyvault-template.json` is pre-populated with the live KV ID + Bicep references for `dbAdminPassword` + `jwtSecretKey`. Use it instead of `parameters.json` for from-scratch redeploys (and skip the `DB_ADMIN_PASSWORD` / `JWT_SECRET_KEY` env vars when invoking `deploy.sh`).
+
+## § 22aa — GitHub Actions OIDC federation (2026-05-06, Round 11)
+
+**Decision:** CI deploys to Azure use OpenID Connect federation against a dedicated AAD app `cortex-github-actions`, not a long-lived service-principal client secret.
+
+**Why:**
+- No client secret to rotate (the Azure side trusts GitHub's OIDC issuer for tokens with subject `repo:karthsMicrosoft/cortex-ai:ref:refs/heads/main`)
+- Tokens are scoped to one branch — leaked CI logs can't authorize anything
+- Aligns with current Microsoft guidance for GitHub Actions → Azure
+
+**RBAC scope:**
+- `Contributor` on `cortex-rg` (so Container App can be updated, secrets refreshed, etc.)
+- `AcrPush` on `cortexksacr` (so `az acr build` can push tagged images)
+- Notably NOT subscription-level Owner — the SP cannot create/destroy resource groups, set up KV beyond cortex-rg, or assign roles
+
+**Repo secrets stored:** `AZURE_CLIENT_ID`, `AZURE_TENANT_ID`, `AZURE_SUBSCRIPTION_ID`, `ACR_NAME`, `CONTAINER_APP_NAME`, `RESOURCE_GROUP`, `AZURE_STATIC_WEB_APPS_API_TOKEN`.
+
+**What this supersedes:**
+- The old "P1 GitHub Actions secrets not wired" KNOWN_ISSUES line — now resolved.
+- The expectation in earlier docs that deploys would always come from a local shell — both push-to-main on `frontend/**` or `backend/**` paths AND `workflow_dispatch` now produce live deploys.
+
+---
+
+## § 22ab — Alembic migrations stay manual after CI deploys (2026-05-06, Round 11)
+
+**Decision:** The CI backend-deploy workflow does NOT run `alembic upgrade head`. Migrations are run manually from a developer shell after the workflow goes green.
+
+**Why:** `az containerapp exec` requires a TTY — it calls `tty.setcbreak(sys.stdin.fileno())` which raises `Inappropriate ioctl for device` on a non-interactive GitHub Actions runner. The exec WebSocket also fails its 101 handshake on non-TTY clients.
+
+**Manual recipe (now in the workflow yaml as a comment):**
+```bash
+az containerapp exec --name cortexks-api --resource-group cortex-rg \
+  --command "alembic upgrade head"
+```
+
+**Future automation options (P3):**
+1. Embed `alembic upgrade head` into the container's CMD/ENTRYPOINT — fail-closed on schema mismatch, single-replica race safe since `minReplicas=1`.
+2. Run migrations as a separate Container Apps Job triggered by the workflow — cleanest separation, slightly more infra.
+
+For now: schema changes are infrequent enough (7 alembic versions over the entire project history) that the manual step is acceptable.

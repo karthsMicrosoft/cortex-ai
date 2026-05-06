@@ -104,11 +104,15 @@ vi.mock('../sync/syncManager', () => ({
 // Mock authStore (Zustand hook)
 // ---------------------------------------------------------------------------
 
-const mockAuthState = { accessToken: 'test-token', user: null };
-const mockUseAuthStore = Object.assign(
-  (selector: (s: typeof mockAuthState) => unknown) => selector(mockAuthState),
-  { getState: () => mockAuthState, subscribe: vi.fn(), setState: vi.fn() },
-);
+// Fix vitest hoisting (see BrainViewPage.test.tsx for full explanation).
+const { mockAuthState, mockUseAuthStore } = vi.hoisted(() => {
+  const mockAuthState = { accessToken: 'test-token', user: null };
+  const mockUseAuthStore = Object.assign(
+    (selector: (s: typeof mockAuthState) => unknown) => selector(mockAuthState),
+    { getState: () => mockAuthState, subscribe: () => () => {}, setState: () => {} },
+  );
+  return { mockAuthState, mockUseAuthStore };
+});
 vi.mock('../store/authStore', () => ({ useAuthStore: mockUseAuthStore }));
 
 // ---------------------------------------------------------------------------

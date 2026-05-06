@@ -61,14 +61,21 @@ vi.mock('react-force-graph-2d', () => ({
 // Mock authStore
 // ---------------------------------------------------------------------------
 
-const mockAuthState = {
-  accessToken: 'test-token',
-  user: { id: 'user-1', email: 'test@example.com', display_name: 'Test User' },
-};
-const mockUseAuthStore = Object.assign(
-  (selector: (s: typeof mockAuthState) => unknown) => selector(mockAuthState),
-  { getState: () => mockAuthState, subscribe: vi.fn(), setState: vi.fn() },
-);
+// Fix vitest hoisting: vi.mock(...) is hoisted ABOVE these const declarations,
+// so referencing mockUseAuthStore directly in the factory threw
+// "Cannot access 'mockUseAuthStore' before initialization". vi.hoisted runs
+// before vi.mock and exposes the values back to module scope.
+const { mockAuthState, mockUseAuthStore } = vi.hoisted(() => {
+  const mockAuthState = {
+    accessToken: 'test-token',
+    user: { id: 'user-1', email: 'test@example.com', display_name: 'Test User' },
+  };
+  const mockUseAuthStore = Object.assign(
+    (selector: (s: typeof mockAuthState) => unknown) => selector(mockAuthState),
+    { getState: () => mockAuthState, subscribe: () => () => {}, setState: () => {} },
+  );
+  return { mockAuthState, mockUseAuthStore };
+});
 vi.mock('../store/authStore', () => ({ useAuthStore: mockUseAuthStore }));
 
 // ---------------------------------------------------------------------------

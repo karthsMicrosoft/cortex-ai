@@ -190,8 +190,19 @@ async function makeFreshSyncManager() {
     pushChanges: () => Promise<void>;
     pullChanges: () => Promise<void>;
     isSyncing: boolean;
+    syncingListeners: Set<unknown>;
+    pushTimer: ReturnType<typeof setInterval> | null;
+    pullTimer: ReturnType<typeof setInterval> | null;
   };
+  // Bypassing the SyncManager constructor via Object.create skips its
+  // private-field initialisers, so we must restore the same starting state
+  // the real constructor produces. Without this, notifySyncingListeners()
+  // throws "this.syncingListeners is not iterable" the first time
+  // pushChanges() is called.
   instance.isSyncing = false;
+  instance.syncingListeners = new Set();
+  instance.pushTimer = null;
+  instance.pullTimer = null;
   return instance;
 }
 

@@ -1,7 +1,8 @@
 // infra/modules/container-app.bicep
 // Container App Environment + Container App (OQ-7 resolved)
-// Includes: system-assigned identity, WebSocket ingress, CPU scaling rule,
-// minReplicas=1 (B14 — keeps APScheduler distill alive), liveness + readiness probes
+// minReplicas=1 (cold-start avoidance — Container App scale-from-zero takes
+// 5–10 s on free tier, painful for voice-capture latency NFR-1)
+// (Previously this was justified by APScheduler nightly distill, removed 2026-05-06.)
 targetScope = 'resourceGroup'
 
 @description('Base name prefix for resources')
@@ -148,7 +149,7 @@ resource containerApp 'Microsoft.App/containerApps@2024-03-01' = {
         }
       ]
       scale: {
-        minReplicas: 1                          // B14: keep APScheduler alive for nightly distill
+        minReplicas: 1                          // Cold-start avoidance (no background-job dep; scheduler removed 2026-05-06)
         maxReplicas: 3
         rules: [
           {

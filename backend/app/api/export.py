@@ -1,8 +1,12 @@
 """
 Export API — GET /api/export
 
-Returns a JSON dump of all user notes (with SAS-signed media URLs) +
-tags + daily summaries. Streams the response if the payload is large.
+Returns a JSON dump of all user notes (with SAS-signed media URLs) + tags.
+Streams the response if the payload is large.
+
+2026-05-06: Daily summaries removed from export (cron + table dropped).
+The export shape now contains an empty `summaries` array preserved for
+backward-compat with any client that expects the key.
 
 Spec § 4.2 item 28.
 """
@@ -23,7 +27,6 @@ from sqlalchemy.orm import selectinload
 from app.auth.jwt import get_current_user
 from app.config import settings
 from app.database import get_db
-from app.models.daily_summary import DailySummary
 from app.models.note import Note
 from app.models.tag import Tag
 
@@ -125,18 +128,6 @@ def _serialise_note(note: Note) -> dict:
     }
 
 
-def _serialise_summary(ds: DailySummary) -> dict:
-    return {
-        "id": str(ds.id),
-        "summary_date": str(ds.summary_date),
-        "summary_text": ds.summary_text,
-        "key_themes": ds.key_themes or [],
-        "note_count": ds.note_count,
-        "mood_summary": ds.mood_summary,
-        "created_at": ds.created_at.isoformat() if ds.created_at else None,
-    }
-
-
 # ---------------------------------------------------------------------------
 # GET /api/export
 # ---------------------------------------------------------------------------
@@ -153,7 +144,7 @@ async def export_data(
     {
       "exported_at": "<ISO datetime>",
       "notes": [...],
-      "summaries": [...]
+      "summaries": []   // always empty as of 2026-05-06; kept for back-compat
     }
 
     Uses streaming so large exports (thousands of notes) don't OOM the
@@ -167,13 +158,6 @@ async def export_data(
     )
     notes = list(notes_result.scalars().all())
 
-    summaries_result = await db.execute(
-        select(DailySummary)
-        .where(DailySummary.user_id == current_user_id)
-        .order_by(DailySummary.summary_date.asc())
-    )
-    summaries = list(summaries_result.scalars().all())
-
     exported_at = _dt.datetime.now(_dt.timezone.utc).isoformat().replace("+00:00", "Z")
 
     async def _stream() -> AsyncGenerator[bytes, None]:
@@ -185,18 +169,13 @@ async def export_data(
                 yield b"," + chunk.encode("utf-8")
             else:
                 yield chunk.encode("utf-8")
-        yield b'],"summaries":['
-        for i, ds in enumerate(summaries):
-            chunk = _json.dumps(_serialise_summary(ds), ensure_ascii=False)
-            if i > 0:
-                yield b"," + chunk.encode("utf-8")
-            else:
-                yield chunk.encode("utf-8")
-        yield b"]}"
+        # summaries[] retained as an empty array for back-compat; the
+        # daily/weekly summary feature was removed 2026-05-06.
+        yield b'],"summaries":[]}'
 
     logger.info(
-        "export: user_id=%s notes=%d summaries=%d",
-        current_user_id, len(notes), len(summaries),
+        "export: user_id=%s notes=%d",
+        current_user_id, len(notes),
     )
 
     return StreamingResponse(

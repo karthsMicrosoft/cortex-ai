@@ -57,8 +57,8 @@ class TestExpressModuleImport:
         has_generate = False
 
         try:
-            from app.api.insights import ai_summary_router
-            routes = [r.path for r in ai_summary_router.routes]
+            from app.api.insights import ai_router
+            routes = [r.path for r in ai_router.routes]
             has_generate = any("generate" in p for p in routes)
         except ImportError:
             pass
@@ -71,7 +71,7 @@ class TestExpressModuleImport:
             except ImportError:
                 pass
 
-        assert has_generate, "POST /api/ai/generate route not found in ai_summary_router or express.py"
+        assert has_generate, "POST /api/ai/generate route not found in ai_router or express.py"
 
 
 # ---------------------------------------------------------------------------

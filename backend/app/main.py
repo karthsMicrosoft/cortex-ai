@@ -2,11 +2,9 @@
 FastAPI application entry point.
 """
 import logging
-import os
 import re
-from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, Request, Response
+from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from slowapi import _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
@@ -56,73 +54,20 @@ logging.getLogger("uvicorn.access").addFilter(_scrub_filter)
 
 
 # ---------------------------------------------------------------------------
-# Application lifespan (APScheduler nightly distill — B14)
-# ---------------------------------------------------------------------------
-
-@asynccontextmanager
-async def lifespan(app: FastAPI):
-    """
-    Start APScheduler background scheduler at startup so the nightly distill
-    cron job fires even with minReplicas=1 (no scale-to-zero).
-
-    Gated on SCHEDULER_ENABLED (default "false") because BackgroundScheduler
-    runs jobs in a thread that creates a fresh asyncio event loop each tick,
-    which conflicts with the asyncpg connection pool shared with the FastAPI
-    event loop and causes "another operation is in progress" InterfaceError on
-    concurrent request traffic. For production, run the distill cron as a
-    Container Apps Job instead of in-process.
-    """
-    if os.getenv("SCHEDULER_ENABLED", "false").lower() not in ("true", "1", "yes"):
-        yield
-        return
-
-    try:
-        from apscheduler.schedulers.background import BackgroundScheduler
-
-        scheduler = BackgroundScheduler()
-
-        # Nightly distill at 23:59 local time (single-user MVP — UTC approximate)
-        try:
-            from app.pipeline.distill import run_daily_distill, run_weekly_distill
-            scheduler.add_job(run_daily_distill, "cron", hour=23, minute=59, id="daily_distill")
-            scheduler.add_job(
-                run_weekly_distill, "cron", day_of_week="sun", hour=23, minute=59, id="weekly_distill"
-            )
-        except ImportError:
-            # distill module not yet implemented — skip gracefully
-            pass
-
-        # QA-04 recovery sweep: retry notes stuck in 'answer_pending' for > 1 minute.
-        try:
-            from app.pipeline.shadow_reader import retry_stale_answer_pending
-            scheduler.add_job(
-                retry_stale_answer_pending,
-                "interval",
-                minutes=2,
-                id="answer_pending_sweep",
-            )
-        except (ImportError, AttributeError):
-            # Shadow reader not yet available — skip gracefully
-            pass
-
-        scheduler.start()
-        app.state.scheduler = scheduler
-        yield
-        scheduler.shutdown(wait=False)
-    except ImportError:
-        # APScheduler not installed — skip gracefully (e.g. during unit-test runs)
-        yield
-
-
-# ---------------------------------------------------------------------------
 # FastAPI app
+#
+# 2026-05-06: Daily/weekly distill cron removed entirely (user feature
+# decision). Previously the app lifespan started a background job runner
+# under an env-gated flag to fire daily/weekly summary tasks; both that
+# scheduling block and the distill module are gone. minReplicas=1 in Bicep
+# is now justified by cold-start avoidance only (no background-job
+# dependency).
 # ---------------------------------------------------------------------------
 
 app = FastAPI(
     title="Cortex Second Brain API",
     description="Voice-first personal second brain API",
     version="1.0.0",
-    lifespan=lifespan,
 )
 
 # Attach slowapi limiter to the app state so the middleware can find it.
@@ -163,7 +108,7 @@ from app.api.search import router as search_router
 from app.api.tags import router as tags_router       # B6 — dedicated tags module
 from app.api.sync import router as sync_router
 from app.api.dictionary import router as dictionary_router  # US-7 — personal dictionary
-from app.api.insights import ai_summary_router, insights_router  # US-6 — insights
+from app.api.insights import ai_router as ai_generate_router, insights_router  # US-6 — insights (daily/weekly summaries removed 2026-05-06)
 from app.api.export import router as export_router               # US-6 — export
 from app.api.shadow_reader import router as shadow_reader_router  # US-8 — shadow reader
 from app.api.users import router as users_router                  # US-8 — user settings
@@ -171,7 +116,7 @@ from app.api.users import router as users_router                  # US-8 — use
 app.include_router(auth_router,           prefix="/api/auth",          tags=["auth"])
 app.include_router(notes_router,          prefix="/api/notes",         tags=["notes"])
 app.include_router(ai_router,             prefix="/api/ai",            tags=["ai"])
-app.include_router(ai_summary_router,     prefix="/api/ai",            tags=["ai"])
+app.include_router(ai_generate_router,    prefix="/api/ai",            tags=["ai"])
 app.include_router(upload_router,         prefix="/api",               tags=["upload"])
 app.include_router(voice_router,          prefix="/api/voice",         tags=["voice"])
 app.include_router(search_router,         prefix="/api/search",        tags=["search"])

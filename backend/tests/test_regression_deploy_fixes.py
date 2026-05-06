@@ -8,9 +8,10 @@ Bugs covered:
       but a guard test prevents an accidental router-deregistration regression)
   R2. WebSocket route /api/voice/stream is registered on the voice router
       (prevents accidental removal of the streaming STT endpoint)
-  R3. APScheduler is GATED on SCHEDULER_ENABLED env var (default False)
-      so the BackgroundScheduler thread cannot conflict with the asyncpg
-      connection pool on production traffic.
+  R3. APScheduler removed entirely 2026-05-06 (cron functionality dropped).
+      The `lifespan` block is gone; `apscheduler` is removed from
+      requirements; `app/pipeline/distill.py` is deleted. This guard ensures
+      it does not get re-introduced.
   R4. JWT_SECRET_KEY validators reject the dev placeholder + short keys
       when ENVIRONMENT='production' (SEC-01)
   R5. CORS middleware is configured with allow_credentials=True so the
@@ -94,46 +95,62 @@ class TestVoiceStreamWebSocketRegistered:
 
 
 # ---------------------------------------------------------------------------
-# R3 — APScheduler is GATED on SCHEDULER_ENABLED env var
+# R3 — APScheduler removed entirely (cron removal 2026-05-06)
 # ---------------------------------------------------------------------------
 
 
-class TestSchedulerGatedOnEnvVar:
-    """The 500 on register was caused by APScheduler BackgroundScheduler
-    thread + the FastAPI event loop fighting over the shared asyncpg
-    connection pool. The fix gates the scheduler on a SCHEDULER_ENABLED
-    env var (default False). For production, the spec's nightly distill
-    cron should run as a Container Apps Job instead."""
+class TestSchedulerRemoved:
+    """The APScheduler nightly distill cron was removed entirely on 2026-05-06
+    per a user product decision (no daily/weekly summary feature). Guard against
+    accidental re-introduction of the scheduler, the distill module, or the
+    apscheduler dependency.
+    """
 
-    def test_main_lifespan_references_scheduler_enabled_env_var(self):
+    def test_main_does_not_reference_apscheduler(self):
         from app import main
 
-        src = inspect.getsource(main.lifespan)
-        assert "SCHEDULER_ENABLED" in src, (
-            "main.lifespan must check SCHEDULER_ENABLED env var. "
-            "Removing this check re-introduces the 'cannot perform operation: "
-            "another operation is in progress' asyncpg conflict on register."
+        src = inspect.getsource(main)
+        assert "apscheduler" not in src.lower(), (
+            "app.main must not import or reference apscheduler — "
+            "the nightly distill cron was removed 2026-05-06."
+        )
+        assert "BackgroundScheduler" not in src, (
+            "app.main must not reference BackgroundScheduler — cron removed."
+        )
+        assert "SCHEDULER_ENABLED" not in src, (
+            "app.main must not gate on SCHEDULER_ENABLED — flag removed with cron."
         )
 
-    def test_default_off_means_scheduler_does_not_start(self, monkeypatch):
-        """When SCHEDULER_ENABLED is unset, the scheduler must NOT start.
-        We verify by introspecting that the env-check returns early before
-        importing BackgroundScheduler."""
-        import os
+    def test_distill_module_deleted(self):
+        try:
+            import app.pipeline.distill  # noqa: F401
+        except ImportError:
+            return  # expected — module was deleted
+        else:
+            raise AssertionError(
+                "app.pipeline.distill must NOT exist — the distill cron was "
+                "removed 2026-05-06; importing it should raise ImportError."
+            )
 
-        # Default off
-        monkeypatch.delenv("SCHEDULER_ENABLED", raising=False)
-        assert (
-            os.getenv("SCHEDULER_ENABLED", "false").lower()
-            not in ("true", "1", "yes")
-        ), "Default value of SCHEDULER_ENABLED must be falsy"
+    def test_daily_summary_model_deleted(self):
+        try:
+            import app.models.daily_summary  # noqa: F401
+        except ImportError:
+            return  # expected
+        else:
+            raise AssertionError(
+                "app.models.daily_summary must NOT exist — the daily_summaries "
+                "table is dropped in alembic 007."
+            )
 
-    def test_explicit_true_enables(self, monkeypatch):
-        import os
+    def test_apscheduler_not_in_requirements(self):
+        import pathlib
 
-        monkeypatch.setenv("SCHEDULER_ENABLED", "true")
-        assert (
-            os.getenv("SCHEDULER_ENABLED", "false").lower() in ("true", "1", "yes")
+        req_path = pathlib.Path(__file__).resolve().parent.parent / "requirements.txt"
+        text = req_path.read_text(encoding="utf-8").lower()
+        assert "apscheduler" not in text, (
+            "apscheduler must be removed from requirements.txt — "
+            "the nightly cron functionality was removed 2026-05-06."
         )
 
 
@@ -199,17 +216,16 @@ class TestCORSAllowsCredentials:
 
 
 # ---------------------------------------------------------------------------
-# R6 — Smoke: app boots without scheduler
+# R6 — Smoke: app boots cleanly (no scheduler dependency)
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
-async def test_app_starts_without_scheduler_enabled(monkeypatch):
+async def test_app_starts_and_responds_to_health():
     """End-to-end-ish smoke: the FastAPI app must boot and respond to
-    /api/health when SCHEDULER_ENABLED is unset (the production default).
+    /api/health. Previously gated on SCHEDULER_ENABLED env var; the
+    scheduler was removed entirely 2026-05-06 so no env-var dance is needed.
     """
-    monkeypatch.delenv("SCHEDULER_ENABLED", raising=False)
-
     from httpx import ASGITransport, AsyncClient
 
     from app.main import app

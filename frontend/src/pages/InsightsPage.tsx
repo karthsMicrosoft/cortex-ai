@@ -1,28 +1,16 @@
 import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { BarChart2, Brain, Lightbulb, RefreshCw } from 'lucide-react';
+import { Brain, Lightbulb, RefreshCw } from 'lucide-react';
 import { apiGet } from '../api/client';
 
 // ---------------------------------------------------------------------------
 // Types (mirrors backend schemas)
+//
+// 2026-05-06: Daily/weekly summary cards removed entirely. The cron that
+// generated those summaries was dropped per a user product decision (see
+// DECISIONS.md S 22y, KNOWN_ISSUES.md, alembic migration 007). The Insights
+// page now shows only AI-detected recurring patterns.
 // ---------------------------------------------------------------------------
-
-interface DailySummary {
-  id: string;
-  summary_date: string;
-  summary_text: string;
-  key_themes: string[];
-  note_count: number;
-  mood_summary?: string;
-  created_at: string;
-}
-
-interface WeeklySummary {
-  week: string;
-  summary_text: string;
-  daily_summaries: Array<{ date: string; summary_text: string; note_count: number }>;
-  note_count: number;
-}
 
 interface PatternItem {
   theme: string;
@@ -34,152 +22,21 @@ interface PatternsResponse {
 }
 
 // ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
-
-function todayISO(): string {
-  return new Date().toISOString().slice(0, 10);
-}
-
-function currentISOWeek(): string {
-  const now = new Date();
-  const jan4 = new Date(now.getFullYear(), 0, 4);
-  const dayOfYear = Math.floor((now.getTime() - new Date(now.getFullYear(), 0, 0).getTime()) / 86400000);
-  const weekNum = Math.ceil((dayOfYear + jan4.getDay()) / 7);
-  return `${now.getFullYear()}-W${String(weekNum).padStart(2, '0')}`;
-}
-
-// ---------------------------------------------------------------------------
-// Sub-components
-// ---------------------------------------------------------------------------
-
-interface SummaryCardProps {
-  title: string;
-  icon: React.ReactElement;
-  text: string | null;
-  themes?: string[];
-  noteCount?: number;
-  isLoading: boolean;
-  error: string | null;
-}
-
-function SummaryCard({
-  title,
-  icon,
-  text,
-  themes,
-  noteCount,
-  isLoading,
-  error,
-}: SummaryCardProps): React.ReactElement {
-  if (isLoading) {
-    return (
-      <div className="rounded-xl border border-slate-700 bg-slate-800/60 p-4">
-        <div className="mb-3 flex items-center gap-2 text-slate-300">
-          {icon}
-          <span className="text-sm font-semibold">{title}</span>
-        </div>
-        <div className="flex items-center gap-2 text-xs text-slate-500">
-          <RefreshCw className="h-3 w-3 animate-spin" aria-hidden="true" />
-          Loading…
-        </div>
-      </div>
-    );
-  }
-
-  if (error) {
-    return (
-      <div className="rounded-xl border border-slate-700 bg-slate-800/60 p-4">
-        <div className="mb-3 flex items-center gap-2 text-slate-300">
-          {icon}
-          <span className="text-sm font-semibold">{title}</span>
-        </div>
-        <p className="text-xs text-slate-500">{error}</p>
-      </div>
-    );
-  }
-
-  return (
-    <div className="rounded-xl border border-slate-700 bg-slate-800/60 p-4">
-      <div className="mb-3 flex items-center justify-between gap-2">
-        <div className="flex items-center gap-2 text-slate-300">
-          {icon}
-          <span className="text-sm font-semibold">{title}</span>
-        </div>
-        {noteCount !== undefined && (
-          <span className="rounded-full bg-slate-700 px-2 py-0.5 text-xs text-slate-400">
-            {noteCount} notes
-          </span>
-        )}
-      </div>
-      {text ? (
-        <p className="text-sm leading-relaxed text-slate-200">{text}</p>
-      ) : (
-        <p className="text-xs text-slate-500">No summary available yet.</p>
-      )}
-      {themes && themes.length > 0 && (
-        <div className="mt-3 flex flex-wrap gap-1">
-          {themes.map((t) => (
-            <span
-              key={t}
-              className="rounded-full bg-indigo-900/50 px-2 py-0.5 text-xs text-indigo-300"
-            >
-              {t}
-            </span>
-          ))}
-        </div>
-      )}
-    </div>
-  );
-}
-
-// ---------------------------------------------------------------------------
 // InsightsPage
 // ---------------------------------------------------------------------------
 
 /**
- * InsightsPage — daily/weekly summaries + AI-detected patterns.
+ * InsightsPage - AI-detected recurring patterns across the last 14 days.
  * US-6 Task 5.1.
  */
 export default function InsightsPage(): React.ReactElement {
   const navigate = useNavigate();
 
-  // Daily summary
-  const [daily, setDaily] = useState<DailySummary | null>(null);
-  const [dailyLoading, setDailyLoading] = useState(true);
-  const [dailyError, setDailyError] = useState<string | null>(null);
-
-  // Weekly summary
-  const [weekly, setWeekly] = useState<WeeklySummary | null>(null);
-  const [weeklyLoading, setWeeklyLoading] = useState(true);
-  const [weeklyError, setWeeklyError] = useState<string | null>(null);
-
-  // Patterns
   const [patterns, setPatterns] = useState<PatternItem[]>([]);
   const [patternsLoading, setPatternsLoading] = useState(true);
   const [patternsError, setPatternsError] = useState<string | null>(null);
 
   useEffect(() => {
-    // Daily
-    void apiGet<DailySummary>(`/api/ai/summary/daily?date=${todayISO()}`)
-      .then((data) => setDaily(data))
-      .catch((err: Error) => {
-        // 404 means no summary yet for today — not a real error
-        if ('status' in err && (err as { status: number }).status === 404) {
-          setDailyError('No summary for today yet. It generates nightly.');
-        } else {
-          setDailyError(err.message);
-        }
-      })
-      .finally(() => setDailyLoading(false));
-
-    // Weekly
-    void apiGet<WeeklySummary>(`/api/ai/summary/weekly?week=${currentISOWeek()}`)
-      .then((data) => setWeekly(data))
-      .catch((err: Error) => setWeeklyError(err.message))
-      .finally(() => setWeeklyLoading(false));
-
-    // Patterns
     void apiGet<PatternsResponse>('/api/insights/patterns')
       .then((data) => setPatterns(data.patterns))
       .catch((err: Error) => setPatternsError(err.message))
@@ -205,27 +62,6 @@ export default function InsightsPage(): React.ReactElement {
       </header>
 
       <main className="flex flex-1 flex-col gap-4 px-4 py-4">
-        {/* Daily Summary */}
-        <SummaryCard
-          title="Today's Summary"
-          icon={<BarChart2 className="h-4 w-4 text-indigo-400" aria-hidden="true" />}
-          text={daily?.summary_text ?? null}
-          themes={daily?.key_themes}
-          noteCount={daily?.note_count}
-          isLoading={dailyLoading}
-          error={dailyError}
-        />
-
-        {/* Weekly Summary */}
-        <SummaryCard
-          title="This Week"
-          icon={<BarChart2 className="h-4 w-4 text-purple-400" aria-hidden="true" />}
-          text={weekly?.summary_text ?? null}
-          noteCount={weekly?.note_count}
-          isLoading={weeklyLoading}
-          error={weeklyError}
-        />
-
         {/* Patterns */}
         <section className="rounded-xl border border-slate-700 bg-slate-800/60 p-4">
           <div className="mb-3 flex items-center gap-2 text-slate-300">
@@ -236,7 +72,7 @@ export default function InsightsPage(): React.ReactElement {
           {patternsLoading && (
             <div className="flex items-center gap-2 text-xs text-slate-500">
               <RefreshCw className="h-3 w-3 animate-spin" aria-hidden="true" />
-              Detecting patterns…
+              Detecting patterns...
             </div>
           )}
 

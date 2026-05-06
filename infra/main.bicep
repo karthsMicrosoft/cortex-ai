@@ -186,7 +186,7 @@ resource containerApp 'Microsoft.App/containerApps@2024-03-01' = {
         }
       ]
       scale: {
-        minReplicas: 1                          // B14: keep APScheduler alive for nightly distill
+        minReplicas: 1                          // Cold-start avoidance (no background-job dep; scheduler removed 2026-05-06)
         maxReplicas: 3
         rules: [
           {

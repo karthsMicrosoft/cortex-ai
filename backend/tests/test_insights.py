@@ -3,14 +3,6 @@ test_insights.py — Task 2 (Insights endpoints)
 TDD red-phase tests for backend/app/api/insights.py
 
 Covers:
-  Task 2.1 — GET /api/ai/summary/daily?date=YYYY-MM-DD
-    - Returns daily summary row or 404
-    - Requires auth
-
-  Task 2.1 — GET /api/ai/summary/weekly?week=YYYY-W##
-    - Returns weekly summary composed from 7 dailies or 404
-    - Requires auth
-
   Task 2.2 — GET /api/insights/graph
     - Returns {nodes: [{id, label, category}], links: [{source, target, score}]}
     - Capped at 200 nodes
@@ -22,6 +14,10 @@ Covers:
     - Requires auth
 
   Task 2.4 — Router wired into main.py
+
+NOTE — 2026-05-06: Daily/weekly summary endpoints removed entirely
+(see migration 007 + DECISIONS § 22y). Tests for /api/ai/summary/daily
+and /api/ai/summary/weekly were deleted with that change.
 
 Mock strategy: respx for OpenAI HTTP calls; use conftest client fixture.
 """
@@ -46,23 +42,11 @@ class TestInsightsModuleImport:
         import app.api.insights  # noqa: F401
 
     def test_insights_router_exists(self):
-        """insights module must expose a FastAPI router."""
-        # insights.py exposes two routers: ai_summary_router and insights_router
-        from app.api.insights import ai_summary_router, insights_router
-        assert ai_summary_router is not None
+        """insights module must expose two FastAPI routers."""
+        # insights.py exposes two routers: ai_router (Express /generate) and insights_router (graph, patterns)
+        from app.api.insights import ai_router, insights_router
+        assert ai_router is not None
         assert insights_router is not None
-
-    def test_router_has_daily_summary_route(self):
-        """ai_summary_router must include GET /summary/daily route."""
-        from app.api.insights import ai_summary_router
-        routes = [r.path for r in ai_summary_router.routes]
-        assert any("summary/daily" in p or "daily" in p for p in routes)
-
-    def test_router_has_weekly_summary_route(self):
-        """ai_summary_router must include GET /summary/weekly route."""
-        from app.api.insights import ai_summary_router
-        routes = [r.path for r in ai_summary_router.routes]
-        assert any("summary/weekly" in p or "weekly" in p for p in routes)
 
     def test_router_has_graph_route(self):
         """insights_router must include GET /graph route."""
@@ -76,185 +60,29 @@ class TestInsightsModuleImport:
         routes = [r.path for r in insights_router.routes]
         assert any("patterns" in p for p in routes)
 
-
-# ---------------------------------------------------------------------------
-# Task 2.1 — GET /api/ai/summary/daily
-# ---------------------------------------------------------------------------
-
-class TestDailySummaryEndpoint:
-    async def test_daily_summary_requires_auth(self, client: AsyncClient):
-        """GET /api/ai/summary/daily must return 401 without auth."""
-        resp = await client.get("/api/ai/summary/daily", params={"date": "2026-04-29"})
-        assert resp.status_code == 401
-
-    async def test_daily_summary_404_when_not_found(self, client: AsyncClient, auth_headers: dict):
-        """GET /api/ai/summary/daily returns 404 when no summary exists for date."""
-        resp = await client.get(
-            "/api/ai/summary/daily",
-            params={"date": "2000-01-01"},
-            headers=auth_headers,
+    def test_daily_and_weekly_summary_routes_removed(self):
+        """2026-05-06: daily/weekly summary endpoints must NOT be registered."""
+        from app.api.insights import ai_router, insights_router
+        all_routes = [r.path for r in ai_router.routes] + [r.path for r in insights_router.routes]
+        assert not any("summary/daily" in p for p in all_routes), (
+            f"summary/daily route still registered: {all_routes}"
         )
-        assert resp.status_code == 404
-
-    async def test_daily_summary_returns_summary_text(self, client: AsyncClient, auth_headers: dict, db_session):
-        """GET /api/ai/summary/daily returns summary_text when record exists."""
-        from app.models.daily_summary import DailySummary
-        import uuid as _uuid
-
-        # Get current user id
-        me_resp = await client.get("/api/auth/me", headers=auth_headers)
-        if me_resp.status_code != 200:
-            pytest.skip("Auth/me not available")
-        user_id = _uuid.UUID(me_resp.json()["id"])
-
-        summary = DailySummary(
-            user_id=user_id,
-            summary_date=date(2026, 4, 20),
-            summary_text="Great day of music practice.",
-            note_count=3,
+        assert not any("summary/weekly" in p for p in all_routes), (
+            f"summary/weekly route still registered: {all_routes}"
         )
-        db_session.add(summary)
-        await db_session.flush()
-
-        resp = await client.get(
-            "/api/ai/summary/daily",
-            params={"date": "2026-04-20"},
-            headers=auth_headers,
-        )
-        assert resp.status_code == 200
-        body = resp.json()
-        assert "summary_text" in body or "summary" in body
-        text = body.get("summary_text") or body.get("summary", "")
-        assert "music" in text.lower() or len(text) > 0
-
-    async def test_daily_summary_returns_correct_schema(self, client: AsyncClient, auth_headers: dict, db_session):
-        """Daily summary response must include summary_date and note_count."""
-        from app.models.daily_summary import DailySummary
-        import uuid as _uuid
-
-        me_resp = await client.get("/api/auth/me", headers=auth_headers)
-        if me_resp.status_code != 200:
-            pytest.skip("Auth/me not available")
-        user_id = _uuid.UUID(me_resp.json()["id"])
-
-        target_date = date(2026, 4, 21)
-        summary = DailySummary(
-            user_id=user_id,
-            summary_date=target_date,
-            summary_text="Fitness and learning day.",
-            note_count=5,
-        )
-        db_session.add(summary)
-        await db_session.flush()
-
-        resp = await client.get(
-            "/api/ai/summary/daily",
-            params={"date": "2026-04-21"},
-            headers=auth_headers,
-        )
-        assert resp.status_code == 200
-        body = resp.json()
-        # Must have some date field
-        assert any(k in body for k in ("summary_date", "date"))
-        # Must have note count
-        assert any(k in body for k in ("note_count", "count"))
-
-    async def test_daily_summary_isolates_by_user(self, client: AsyncClient, auth_headers: dict, second_user_headers: dict, db_session):
-        """User A cannot see User B's daily summary."""
-        from app.models.daily_summary import DailySummary
-        import uuid as _uuid
-
-        me_resp = await client.get("/api/auth/me", headers=second_user_headers)
-        if me_resp.status_code != 200:
-            pytest.skip("Auth/me not available")
-        other_user_id = _uuid.UUID(me_resp.json()["id"])
-
-        target_date = date(2026, 4, 22)
-        summary = DailySummary(
-            user_id=other_user_id,
-            summary_date=target_date,
-            summary_text="Secret summary for other user.",
-            note_count=2,
-        )
-        db_session.add(summary)
-        await db_session.flush()
-
-        # Requesting user should get 404
-        resp = await client.get(
-            "/api/ai/summary/daily",
-            params={"date": "2026-04-22"},
-            headers=auth_headers,
-        )
-        assert resp.status_code == 404
 
 
 # ---------------------------------------------------------------------------
-# Task 2.1 — GET /api/ai/summary/weekly
+# Daily/weekly summary endpoint tests REMOVED 2026-05-06.
+# The endpoints were dropped along with the cron and the daily_summaries table
+# (see alembic migration 007). The tests that previously lived here covered
+# routes that no longer exist:
+#   - TestDailySummaryEndpoint (5 tests)
+#   - TestWeeklySummaryEndpoint (3 tests)
+# Only the route-removal regression test in TestInsightsModuleImport remains
+# to guard against accidental re-introduction.
 # ---------------------------------------------------------------------------
 
-class TestWeeklySummaryEndpoint:
-    async def test_weekly_summary_requires_auth(self, client: AsyncClient):
-        """GET /api/ai/summary/weekly must return 401 without auth."""
-        resp = await client.get("/api/ai/summary/weekly", params={"week": "2026-W17"})
-        assert resp.status_code == 401
-
-    async def test_weekly_summary_returns_text(self, client: AsyncClient, auth_headers: dict, db_session):
-        """GET /api/ai/summary/weekly returns WeeklySummaryOut with summary_text."""
-        from app.models.daily_summary import DailySummary
-        from app.services.openai_client import get_openai
-        from app.main import app
-        import uuid as _uuid
-
-        me_resp = await client.get("/api/auth/me", headers=auth_headers)
-        if me_resp.status_code != 200:
-            pytest.skip("Auth/me not available")
-        user_id = _uuid.UUID(me_resp.json()["id"])
-
-        # Week 2026-W16 = April 13–19
-        for i, day in enumerate(range(13, 20)):
-            s = DailySummary(
-                user_id=user_id,
-                summary_date=date(2026, 4, day),
-                summary_text=f"Day {i+1} summary: worked on projects.",
-                note_count=2,
-            )
-            db_session.add(s)
-        await db_session.flush()
-
-        mock_openai = AsyncMock()
-        mock_response = MagicMock()
-        mock_response.choices = [MagicMock()]
-        mock_response.choices[0].message.content = "This was a productive week with music and learning."
-        mock_openai.chat.completions.create = AsyncMock(return_value=mock_response)
-        app.dependency_overrides[get_openai] = lambda: mock_openai
-
-        resp = await client.get(
-            "/api/ai/summary/weekly",
-            params={"week": "2026-W16"},
-            headers=auth_headers,
-        )
-        app.dependency_overrides.pop(get_openai, None)
-
-        assert resp.status_code == 200
-        body = resp.json()
-        assert "summary_text" in body
-
-    async def test_weekly_summary_week_param_format(self, client: AsyncClient, auth_headers: dict):
-        """Weekly summary must reject invalid week format with 400 or 422."""
-        from app.services.openai_client import get_openai
-        from app.main import app
-
-        mock_openai = AsyncMock()
-        app.dependency_overrides[get_openai] = lambda: mock_openai
-
-        resp = await client.get(
-            "/api/ai/summary/weekly",
-            params={"week": "not-a-week"},
-            headers=auth_headers,
-        )
-        app.dependency_overrides.pop(get_openai, None)
-
-        assert resp.status_code in (400, 404, 422)
 
 
 # ---------------------------------------------------------------------------
@@ -473,18 +301,6 @@ class TestInsightsPatternsEndpoint:
 # ---------------------------------------------------------------------------
 
 class TestInsightsRouterWired:
-    async def test_daily_summary_endpoint_reachable(self, client: AsyncClient, auth_headers: dict):
-        """GET /api/ai/summary/daily must be reachable (not 405 from routing)."""
-        resp = await client.get(
-            "/api/ai/summary/daily",
-            params={"date": "2026-04-01"},
-            headers=auth_headers,
-        )
-        # 404 = route exists but no data; 200 = found; 401 = not authed
-        # 405 = route NOT registered — this is the failure case
-        assert resp.status_code not in (405,), f"Route not registered: {resp.status_code}"
-        assert resp.status_code in (200, 404)
-
     async def test_graph_endpoint_reachable(self, client: AsyncClient, auth_headers: dict):
         """GET /api/insights/graph must be reachable."""
         resp = await client.get("/api/insights/graph", headers=auth_headers)
@@ -574,44 +390,6 @@ class TestOpenAIDepInjection:
         finally:
             app.dependency_overrides.pop(get_openai, None)
 
-    async def test_weekly_summary_dependency_overridable(
-        self, client: AsyncClient, auth_headers: dict, db_session
-    ):
-        """QA-10: The weekly summary endpoint must accept get_openai override via dependency_overrides.
-
-        If OpenAIDep is incorrectly defined, the endpoint would fail when the real
-        Azure OpenAI client is not configured (which is the case in tests).
-        """
-        from app.services.openai_client import get_openai
-        from app.main import app
-
-        mock_openai = AsyncMock()
-        mock_response = MagicMock()
-        mock_response.choices = [MagicMock()]
-        mock_response.choices[0].message.content = "This week was productive."
-        mock_openai.chat.completions.create = AsyncMock(return_value=mock_response)
-
-        app.dependency_overrides[get_openai] = lambda: mock_openai
-
-        try:
-            resp = await client.get(
-                "/api/ai/summary/weekly",
-                params={"week": "2026-W17"},
-                headers=auth_headers,
-            )
-            # 404 = no data; 200 = data found; both acceptable
-            # 422 = dependency injection failed (bad OpenAIDep definition) — NOT acceptable
-            assert resp.status_code != 422, (
-                f"QA-10 FAIL: weekly summary returned 422 — the OpenAIDep dependency "
-                f"injection is broken. Verify OpenAIDep = Annotated[AsyncAzureOpenAI, Depends(get_openai)]. "
-                f"Response body: {resp.text}"
-            )
-            assert resp.status_code in (200, 404, 400), (
-                f"QA-10: Unexpected status {resp.status_code}: {resp.text}"
-            )
-        finally:
-            app.dependency_overrides.pop(get_openai, None)
-
     def test_insights_py_uses_openai_dep_type_alias(self):
         """QA-10: insights.py must declare openai parameters using OpenAIDep type alias
         (or the equivalent get_openai dependency) — not access the client inline without DI.
@@ -622,7 +400,7 @@ class TestOpenAIDepInjection:
         injection must be testable via dependency_overrides.
         """
         from app.services.openai_client import get_openai, OpenAIDep
-        from app.api.insights import ai_summary_router, insights_router
+        from app.api.insights import ai_router, insights_router
         import inspect
 
         # The insight module should reference OpenAIDep or get_openai in its route handlers

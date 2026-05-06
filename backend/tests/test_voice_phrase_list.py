@@ -377,7 +377,7 @@ class TestVoiceUploadPhraseListIntegration:
         call_order = []
         captured_phrase_list = []
 
-        async def fake_transcribe(audio_bytes, language="en-US", phrase_list=None):
+        async def fake_transcribe(audio_bytes, language="en-US", phrase_list=None, src_suffix=".webm", **_kwargs):
             call_order.append("transcribe")
             if phrase_list is not None:
                 captured_phrase_list.extend(phrase_list)
@@ -596,7 +596,7 @@ class TestVoiceUploadFileModePhraseListOrder:
             call_order.append("load_phrase_list")
             return 5
 
-        async def fake_transcribe(audio_bytes, language="en-US", phrase_list=None):
+        async def fake_transcribe(audio_bytes, language="en-US", phrase_list=None, src_suffix=".webm", **_kwargs):
             call_order.append("transcribe")
             return FAKE_TRANSCRIPT
 

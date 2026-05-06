@@ -5,10 +5,15 @@ on:
     branches: [main]
     paths:
       - 'backend/**'
+      - '.github/workflows/deploy-backend.yml'
+  workflow_dispatch:
 
 permissions:
   id-token: write   # required for OIDC login
   contents: read
+
+env:
+  IMAGE_NAME: cortexks-api
 
 jobs:
   build-and-deploy:
@@ -20,22 +25,35 @@ jobs:
       - name: Azure login (OIDC)
         uses: azure/login@v2
         with:
-          creds: ${{ secrets.AZURE_CREDENTIALS }}
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
 
       - name: Build and push image to ACR
         run: |
           az acr build \
             --registry ${{ secrets.ACR_NAME }} \
-            --image cortex-api:${{ github.sha }} \
-            --image cortex-api:latest \
+            --image ${IMAGE_NAME}:${{ github.sha }} \
+            --image ${IMAGE_NAME}:latest \
+            --no-logs \
             ./backend
 
       - name: Update Container App with new revision
         run: |
+          REV_SUFFIX="ci$(date +%s)"
           az containerapp update \
             --name ${{ secrets.CONTAINER_APP_NAME }} \
             --resource-group ${{ secrets.RESOURCE_GROUP }} \
-            --image ${{ secrets.ACR_NAME }}.azurecr.io/cortex-api:${{ github.sha }}
+            --image ${{ secrets.ACR_NAME }}.azurecr.io/${IMAGE_NAME}:${{ github.sha }} \
+            --revision-suffix "${REV_SUFFIX}"
+
+      - name: Run alembic migrations against live DB
+        run: |
+          # `az containerapp exec` runs inside the new revision's primary replica
+          az containerapp exec \
+            --name ${{ secrets.CONTAINER_APP_NAME }} \
+            --resource-group ${{ secrets.RESOURCE_GROUP }} \
+            --command "alembic upgrade head"
 
       - name: Verify health endpoint
         run: |

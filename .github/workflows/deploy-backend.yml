@@ -47,13 +47,21 @@ jobs:
             --image ${{ secrets.ACR_NAME }}.azurecr.io/${IMAGE_NAME}:${{ github.sha }} \
             --revision-suffix "${REV_SUFFIX}"
 
-      - name: Run alembic migrations against live DB
-        run: |
-          # `az containerapp exec` runs inside the new revision's primary replica
-          az containerapp exec \
-            --name ${{ secrets.CONTAINER_APP_NAME }} \
-            --resource-group ${{ secrets.RESOURCE_GROUP }} \
-            --command "alembic upgrade head"
+      # NOTE — alembic migrations are intentionally NOT run from CI.
+      # `az containerapp exec` requires a TTY (calls tty.setcbreak on stdin),
+      # which a GitHub Actions runner cannot provide. Migrations are rare and
+      # are run manually from a developer shell using the same command:
+      #
+      #   az containerapp exec --name <CONTAINER_APP_NAME> \
+      #       --resource-group <RESOURCE_GROUP> \
+      #       --command "alembic upgrade head"
+      #
+      # When schema changes ship as part of a deploy, run that command from a
+      # local terminal AFTER this workflow goes green. (KNOWN_ISSUES § Auto-
+      # migrate-on-deploy.) For an automated path in the future, consider
+      # either (a) embedding `alembic upgrade head` into the container
+      # startup CMD/ENTRYPOINT, or (b) running migrations as a separate
+      # Container Apps Job triggered after this workflow.
 
       - name: Verify health endpoint
         run: |

@@ -1,27 +1,27 @@
 {
   "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentParameters.json#",
   "contentVersion": "1.0.0.0",
-  "_comment": "Production parameter file for deployments backed by an Azure Key Vault. After bootstrapping a KV, replace the __PLACEHOLDERS__ and rename this file to parameters.json. For first-time deploys, parameters.json passes secrets inline via deploy.sh --parameters and dbAdminPassword/jwtSecretKey are not declared here.",
+  "_comment": "Production parameter file for redeploys backed by an Azure Key Vault. Live KV (created 2026-05-06): cortexks-kv in cortex-rg / centralus. Container App's system-assigned managed identity has the 'Key Vault Secrets User' role on this vault. Two secrets are stored: cortex-database-url (full asyncpg connection string) and cortex-jwt-secret-key. To use this file, copy it over parameters.json and run deploy.sh without the DB_ADMIN_PASSWORD/JWT_SECRET_KEY env vars (Bicep will resolve them from KV at deploy time).",
   "parameters": {
     "appName": {
-      "value": "cortex"
+      "value": "cortexks"
     },
     "location": {
-      "value": "westus2"
+      "value": "centralus"
     },
     "openaiLocation": {
-      "value": "westus"
+      "value": "eastus"
     },
     "containerImageTag": {
       "value": "latest"
     },
     "frontendOrigin": {
-      "value": "https://cortex-app.azurestaticapps.net"
+      "value": "https://gentle-river-06c1e4e10.7.azurestaticapps.net"
     },
     "dbAdminPassword": {
       "reference": {
         "keyVault": {
-          "id": "/subscriptions/__SUBSCRIPTION_ID__/resourceGroups/__KV_RESOURCE_GROUP__/providers/Microsoft.KeyVault/vaults/__KEY_VAULT_NAME__"
+          "id": "/subscriptions/85f6cb53-9eec-43f1-84c3-bf701dcd4048/resourceGroups/cortex-rg/providers/Microsoft.KeyVault/vaults/cortexks-kv"
         },
         "secretName": "cortex-db-admin-password"
       }
@@ -29,7 +29,7 @@
     "jwtSecretKey": {
       "reference": {
         "keyVault": {
-          "id": "/subscriptions/__SUBSCRIPTION_ID__/resourceGroups/__KV_RESOURCE_GROUP__/providers/Microsoft.KeyVault/vaults/__KEY_VAULT_NAME__"
+          "id": "/subscriptions/85f6cb53-9eec-43f1-84c3-bf701dcd4048/resourceGroups/cortex-rg/providers/Microsoft.KeyVault/vaults/cortexks-kv"
         },
         "secretName": "cortex-jwt-secret-key"
       }

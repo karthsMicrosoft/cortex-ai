@@ -2,7 +2,7 @@
 
 > **Chronological log of what's been done.** New work appends to the end. Use this to verify "we already did X" before re-doing.
 
-**Last updated:** 2026-05-04 (rounds 1–8 closed; user-confirmed bugs 26 + 27 working live)
+**Last updated:** 2026-05-06 (Round 9: cron functionality removed entirely + Azure Key Vault bootstrapped + P0 smoke test passed)
 
 ---
 
@@ -535,3 +535,103 @@ User confirmed Round-7 fixed Bug 22 (refresh logout). Bug 23 progressed (no more
 **If continuing here in this session:** Smoke test the live deployment in a browser (see `PLAN.md` § 5). Then triage the 30 backend test failures (see `KNOWN_ISSUES.md`).
 
 **If picking up in a new session / new agent:** Read `HANDOFF.md` first. Then this file. Then `PLAN.md` § 5 + `KNOWN_ISSUES.md`.
+
+---
+
+## 9 — Round 9 (2026-05-06): cron removal + Key Vault bootstrap + P0 smoke test
+
+User direction: **"Do both the tasks in P0 production blocker. Remove the daily cron job, I dont want that functionality at all. Ensure to remove it from UX as well."**
+
+### Cron removal — backend
+
+| File | Change |
+|---|---|
+| `backend/app/main.py` | Removed entire `lifespan(app)` async context manager (APScheduler init + `SCHEDULER_ENABLED` env-gate); FastAPI app no longer takes a `lifespan` arg. Removed `os` + `asynccontextmanager` imports. Renamed router import to `ai_router as ai_generate_router` to match the renamed Express router in insights.py. |
+| `backend/app/pipeline/distill.py` | **DELETED** (323 lines — `generate_daily_summary`, `generate_weekly_summary`, `run_daily_distill`, `run_weekly_distill`) |
+| `backend/app/models/daily_summary.py` | **DELETED** |
+| `backend/app/models/__init__.py` | Removed `from app.models.daily_summary import DailySummary` |
+| `backend/app/models/user.py` | Removed `daily_summaries` relationship |
+| `backend/app/api/insights.py` | Removed `DailySummaryOut`, `WeeklySummaryOut` schemas + `GET /summary/daily`, `GET /summary/weekly` handlers; renamed `ai_summary_router` → `ai_router`; module size dropped from 463 → 348 lines |
+| `backend/app/api/export.py` | Removed `DailySummary` import + `_serialise_summary` helper + `summaries_result` query; export response keeps `"summaries": []` for back-compat |
+| `backend/requirements.txt` | Removed `apscheduler==3.10.*` |
+| `backend/alembic/versions/007_drop_daily_summaries.py` | **NEW** — drops the `daily_summaries` table (was empty in production since `SCHEDULER_ENABLED=false` had been the default since deploy) |
+| `backend/tests/test_scheduler.py`, `test_distill.py` | **DELETED** |
+| `backend/tests/test_insights.py` | Deleted `TestDailySummaryEndpoint` + `TestWeeklySummaryEndpoint` classes + their router-import assertions; added `test_daily_and_weekly_summary_routes_removed` regression guard; updated `ai_summary_router` references → `ai_router` |
+| `backend/tests/test_express.py` | Updated `ai_summary_router` references → `ai_router` |
+| `backend/tests/test_regression_deploy_fixes.py` | Replaced `TestSchedulerGatedOnEnvVar` with `TestSchedulerRemoved` (asserts `apscheduler` not in main.py source, `app.pipeline.distill` raises ImportError, `app.models.daily_summary` raises ImportError, `apscheduler` not in requirements.txt). Replaced R6 smoke test with a SCHEDULER-free version. |
+
+### Cron removal — frontend
+
+| File | Change |
+|---|---|
+| `frontend/src/pages/InsightsPage.tsx` | Removed daily summary state/fetch/JSX card + weekly summary state/fetch/JSX card + `BarChart2` icon + `SummaryCard` sub-component + `todayISO`/`currentISOWeek` helpers + `DailySummary`/`WeeklySummary` interfaces. Page is now ~100 lines (was 275) and shows only the Recurring Patterns section. |
+| `frontend/src/__tests__/InsightsPage.test.tsx` | Rewritten — removed all daily/weekly summary cases; added a regression guard test that fails if InsightsPage ever fetches `/api/ai/summary/daily` or `/api/ai/summary/weekly` again. |
+
+### Bicep
+
+| File | Change |
+|---|---|
+| `infra/main.bicep`, `infra/modules/container-app.bicep` | Updated B14 minReplicas comment — justification changed from "keep APScheduler alive" to "cold-start avoidance (5–10 s scale-from-zero on free tier is bad for voice-capture latency NFR-1)". Floor stays at 1. |
+
+### Key Vault bootstrap
+
+Created `cortexks-kv` (centralus, RBAC mode, 90-day soft-delete retention). Granted RBAC: my user as `Key Vault Secrets Officer` (write), Container App's system-assigned managed identity (`5d6d721c-6a0a-48f9-b542-2b9e8f0e80c1`) as `Key Vault Secrets User` (read). Copied current `database-url` and `jwt-secret-key` values from the Container App secret store into KV as `cortex-database-url` + `cortex-jwt-secret-key`. Switched the Container App secrets to `keyVaultUrl` + `identity: system` references and rolled a new revision.
+
+| File | Change |
+|---|---|
+| `infra/parameters.keyvault-template.json` | Pre-populated with the live `cortexks-kv` ID + correct `cortexks` / `centralus` / `eastus` / SWA frontend origin so a fresh from-scratch `bash infra/deploy.sh` can use it directly without env-var secrets. |
+| `docs/DEPLOYMENT.md` | New section "Key Vault — secret rotation" with the JWT/DB rotation runbook, how-the-bootstrap-was-done recipe, and the `az containerapp secret list` verification command. |
+
+### Deploy
+
+1. ACR build (`cortexks-api:latest`) succeeded
+2. Container App secrets switched to KV references
+3. New revision `cortexks-api--v1778095829` rolled with the new image AND the KV-backed secrets
+4. `alembic upgrade head` ran `007_drop_daily_summaries.py` against live DB
+5. Frontend build + SWA deploy to https://gentle-river-06c1e4e10.7.azurestaticapps.net
+
+### Live verification (chrome-devtools P0 smoke test)
+
+| Surface | Result |
+|---|---|
+| `/api/health` | `{"status":"ok"}` ✅ |
+| `/api/ai/summary/daily`, `/api/ai/summary/weekly` | `{"detail":"Not Found"}` (routes unregistered) ✅ |
+| Auth (cached refresh-token round-trip) | `POST /api/auth/refresh` 200 + `GET /api/auth/me` 200 — confirms KV-backed JWT signing key is being resolved and the KV-backed DB connection works ✅ |
+| Capture text note | `POST /api/notes` 201, note appears in Library at top with status `Raw` (AI pipeline running) ✅ |
+| Insights page | Shows ONLY "Recurring Patterns" section (5 patterns rendered from cache); zero requests to the removed `/summary/daily` or `/summary/weekly` endpoints ✅ |
+| Library | 30+ existing notes render correctly, categories + tags + processing status badges all green ✅ |
+| Sync | `GET /api/sync/pull` 200 polls successfully; pulls reflect the new note ✅ |
+| Console errors | Zero ✅ |
+
+### Tests
+
+- `backend/tests/test_regression_deploy_fixes.py` — 16/16 passing (new `TestSchedulerRemoved` class added: 4 guards)
+- `backend/tests/test_insights.py::TestInsightsModuleImport` — 5/5 passing (including new `test_daily_and_weekly_summary_routes_removed`)
+- `backend/tests/test_express.py::TestExpressModuleImport` — 1/1 passing (router rename works)
+- `frontend/src/__tests__/InsightsPage.test.tsx` — 6/6 passing
+- Frontend `tsc --noEmit` clean
+
+The pre-existing 26 fixture errors in `test_insights.py` / `test_express.py` / `test_export.py` (the "30 backend test-side failures" from KNOWN_ISSUES) are unchanged — same baseline as before Round 9.
+
+---
+
+## 8 — Operational housekeeping (2026-05-05)
+
+### P1 — Azure Budget alerts wired
+
+Created `cortex-monthly` budget on the `cortex-rg` resource group via `az consumption budget create-with-rg` (preview API), then PUT-upgraded via REST API to add a Forecasted threshold (the CLI doesn't expose `thresholdType` so it can only set Actual thresholds).
+
+| Setting | Value |
+|---|---|
+| Scope | RG `cortex-rg` |
+| Amount | $150 / month |
+| Period | 2026-05-01 → 2027-05-01 (monthly reset) |
+| Notification 1 | 67% Actual (~$100, warning) → karths@microsoft.com |
+| Notification 2 | 93% Actual (~$140, critical) → karths@microsoft.com |
+| Notification 3 | 100% Forecasted (leading indicator) → karths@microsoft.com |
+
+Verify: `az consumption budget show-with-rg --resource-group cortex-rg --budget-name cortex-monthly`.
+
+Closes the P1 line item from `KNOWN_ISSUES.md` § "P1 — No Azure Budget alerts" / `PLAN.md` § 6 P1.6 / `HANDOFF.md` § 3b. Docs updated: `docs/DEPLOYMENT.md` (replaced manual portal steps with the executed CLI + REST recipe), `KNOWN_ISSUES.md`, `HANDOFF.md`, `PLAN.md`.
+
+No code changes, no deploy required (Azure Cost Management is a control-plane resource).

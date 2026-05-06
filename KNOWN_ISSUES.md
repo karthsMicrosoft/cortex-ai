@@ -2,7 +2,7 @@
 
 > **Open work, bugs not fixed, gaps from "fully done."** Anything tagged P0/P1/P2 here is meant to be picked up by the next agent.
 
-**Last updated:** 2026-05-04 (rounds 1–8 closed; user-confirmed bugs 26 + 27 fixed live)
+**Last updated:** 2026-05-06 (Round 9: cron functionality removed entirely + Azure Key Vault bootstrapped + P0 smoke test passed)
 
 ---
 
@@ -98,7 +98,7 @@ User-reported bug-bash with **11 functional issues** + P0 polish. Fixed 10/11 pl
 | bonus | `/api/sync/pull` 500 with `answer_pending` | ✅ Pydantic Literal updated |
 
 **Deferred:**
-- **P1.1** Move APScheduler distill cron to Container Apps Job (still gated on `SCHEDULER_ENABLED=false`; on-demand weekly summary works without it)
+- **P1.1** ~~Move APScheduler distill cron to Container Apps Job~~ ✅ **Removed entirely 2026-05-06** — daily/weekly summary functionality dropped per user product decision; `daily_summaries` table dropped (alembic 007), UI cards removed, `apscheduler` dependency gone
 
 ## ✅ Round 2 closed (2026-05-01) — see PROGRESS.md "Round 2"
 
@@ -169,41 +169,29 @@ For each cluster:
 
 ---
 
-## P1 — APScheduler is disabled on the live Container App
+## ✅ P1 — APScheduler removed entirely (resolved 2026-05-06)
 
-**Status:** `SCHEDULER_ENABLED` env var defaults to `false`. The nightly distill cron + the answer_pending sweep job DO NOT run.
+**Status:** Daily/weekly distill cron, the `app/pipeline/distill.py` module, the `daily_summaries` model and table, the APScheduler dependency, and the `/api/ai/summary/daily` + `/api/ai/summary/weekly` HTTP endpoints + their UI cards in `InsightsPage.tsx` were ALL removed entirely per a user product decision (2026-05-06). The Insights page now shows only AI-detected Recurring Patterns.
 
-**Why disabled:** APScheduler's `BackgroundScheduler` runs each job in a separate thread. Each tick creates a fresh `asyncio.run(...)` event loop. The asyncpg connection pool is shared with the FastAPI event loop — asyncpg refuses to multiplex a connection across loops, causing `cannot perform operation: another operation is in progress` on concurrent request traffic. This was the root cause of the 500 the user saw on register.
+**What was deleted:**
+- `backend/app/pipeline/distill.py`
+- `backend/app/models/daily_summary.py`
+- `backend/tests/test_scheduler.py`, `backend/tests/test_distill.py`
+- The `lifespan` block + `SCHEDULER_ENABLED` env-gate in `backend/app/main.py`
+- `apscheduler==3.10.*` from `backend/requirements.txt`
+- `User.daily_summaries` relationship in `backend/app/models/user.py`
+- The two summary endpoints + their schemas from `backend/app/api/insights.py`
+- DailySummary import + `_serialise_summary` from `backend/app/api/export.py` (export still emits `summaries: []` for back-compat)
+- "Today's Summary" + "This Week" cards from `frontend/src/pages/InsightsPage.tsx`
+- Daily/weekly test cases from `backend/tests/test_insights.py` + `frontend/src/__tests__/InsightsPage.test.tsx`
 
-**The right fix (P1):** Move the cron jobs OUT of in-process scheduling and into a dedicated **Container Apps Job** that triggers on cron schedule. Sketch:
-```bicep
-resource distillJob 'Microsoft.App/jobs@2024-03-01' = {
-  name: '${appName}-distill-job'
-  location: location
-  properties: {
-    environmentId: containerEnv.id
-    configuration: {
-      triggerType: 'Schedule'
-      scheduleTriggerConfig: { cronExpression: '59 23 * * *' }
-      replicaTimeout: 600
-    }
-    template: {
-      containers: [{ name: 'distill', image: '<same image>', command: ['python', '-m', 'app.pipeline.distill'] }]
-    }
-  }
-}
-```
-And expose `python -m app.pipeline.distill` as a CLI entry that calls `run_daily_distill()` synchronously (or a fresh asyncio loop).
+**What was added:**
+- `backend/alembic/versions/007_drop_daily_summaries.py` — drops the table (was empty in prod since `SCHEDULER_ENABLED=false` had been the default since deploy)
+- `TestSchedulerRemoved` regression class in `backend/tests/test_regression_deploy_fixes.py` — guards against re-introduction (asserts `apscheduler` not in main, `app.pipeline.distill` raises ImportError, `app.models.daily_summary` raises ImportError, `apscheduler` not in requirements.txt)
+- Regression assertion in frontend test that the page does not call the removed endpoints
+- B14 comment update in `infra/main.bicep` + `infra/modules/container-app.bicep` — minReplicas=1 is now justified by cold-start avoidance only (no scheduler dep)
 
-**Workaround if you need the scheduler in-process for now:** Add a separate engine with `poolclass=NullPool` for scheduler-side sessions:
-```python
-from sqlalchemy.pool import NullPool
-scheduler_engine = create_async_engine(DATABASE_URL, poolclass=NullPool)
-SchedulerSessionLocal = async_sessionmaker(scheduler_engine, expire_on_commit=False)
-```
-Use `SchedulerSessionLocal()` in `_retry_stale_answer_pending_async` instead of the shared `SessionLocal`. Each tick gets its own raw connection that closes when done — no pool sharing. Set `SCHEDULER_ENABLED=true` once tested.
-
-**Side effect of disable:** The Shadow Reader QA-04 retry sweep doesn't run. If a `merge_answer_into_note` background task fails, the note stays in `answer_pending` forever. Workaround: a manual SQL fix or a manual API trigger. P1 fix above resolves this.
+**Side effect:** The Shadow Reader QA-04 retry sweep (`retry_stale_answer_pending`) is no longer scheduled. The function still exists in `app/pipeline/shadow_reader.py` — if a `merge_answer_into_note` background task fails and a note gets stuck in `answer_pending`, you can invoke it manually. This was already not running in production (scheduler was off), so behaviour is unchanged.
 
 ---
 
@@ -225,21 +213,39 @@ Use `SchedulerSessionLocal()` in `_retry_stale_answer_pending_async` instead of 
 
 ---
 
-## P1 — No Azure Budget alerts
+## ✅ P1 — Azure Budget alerts (resolved 2026-05-05)
 
-**Status:** `docs/DEPLOYMENT.md` references budget alerts at $100 (warning) and $140 (critical). They are NOT yet created.
+**Status:** Created `cortex-monthly` budget on the `cortex-rg` resource group, $150/month, with three notification thresholds emailing `karths@microsoft.com`:
+- **67% Actual (~$100)** — warning
+- **93% Actual (~$140)** — critical
+- **100% Forecasted** — leading-indicator (catches projected overspend before actual hits)
 
-**Action:**
+Period: 2026-05-01 → 2027-05-01 (monthly reset).
+
+**Verify / inspect:**
 ```bash
-az consumption budget create \
-  --budget-name cortex-monthly \
-  --amount 150 \
-  --time-grain Monthly \
-  --start-date 2026-04-01 \
-  --end-date 2027-04-01 \
-  --notifications '{"Actual_GreaterThan_67_Percent":{"enabled":true,"operator":"GreaterThan","threshold":67,"contactEmails":["karths@microsoft.com"],"thresholdType":"Actual"},"Actual_GreaterThan_93_Percent":{"enabled":true,"operator":"GreaterThan","threshold":93,"contactEmails":["karths@microsoft.com"],"thresholdType":"Actual"}}'
+az consumption budget show-with-rg --resource-group cortex-rg --budget-name cortex-monthly
 ```
-(Run with caution — `az consumption budget` is preview; consult docs for current syntax.)
+
+**How it was created** (Azure CLI for the two Actual thresholds + REST PUT for the Forecasted threshold, since the CLI doesn't expose `thresholdType`):
+```bash
+# Step 1: create with two Actual thresholds (CLI defaults thresholdType=Actual)
+cat > /tmp/notif.json <<'JSON'
+{
+  "Actual_GreaterThan_67_Percent": {"enabled": true, "operator": "GreaterThan", "threshold": 67, "contact-emails": ["karths@microsoft.com"]},
+  "Actual_GreaterThan_93_Percent": {"enabled": true, "operator": "GreaterThan", "threshold": 93, "contact-emails": ["karths@microsoft.com"]}
+}
+JSON
+echo '{"startDate":"2026-05-01T00:00:00Z","endDate":"2027-05-01T00:00:00Z"}' > /tmp/tp.json
+az consumption budget create-with-rg \
+  --resource-group cortex-rg \
+  --budget-name cortex-monthly \
+  --amount 150 --category cost --time-grain Monthly \
+  --time-period @/tmp/tp.json --notifications @/tmp/notif.json
+
+# Step 2: PUT full body via REST to add the Forecasted threshold
+# (PATCH/REST PUT requires latest eTag from `show-with-rg`)
+```
 
 ---
 
@@ -255,21 +261,17 @@ az consumption budget create \
 
 ---
 
-## P2 — Key Vault not bootstrapped
+## ✅ P0 — Key Vault bootstrapped (resolved 2026-05-06)
 
-**Status:** `infra/parameters.json` uses inline secrets passed via `--parameters` to deploy.sh. `infra/parameters.keyvault-template.json` is the production-track template waiting for KV bootstrap.
+**Status:** Live Key Vault `cortexks-kv` (centralus, RBAC mode) holds the two sensitive secrets — the asyncpg connection string and the JWT signing key. The Container App's system-assigned managed identity has the **Key Vault Secrets User** role on it, and its `database-url` + `jwt-secret-key` secrets are stored as `keyVaultUrl` references with `identity: system`. Rotating in KV propagates to new replicas; no Bicep redeploy needed (see `docs/DEPLOYMENT.md` § "Key Vault — secret rotation" for the rotation runbook).
 
-**Action (when ready):**
-1. Create a Key Vault (`cortex-kv` or similar) in the same resource group.
-2. Store the secrets:
-   ```bash
-   az keyvault secret set --vault-name <KV_NAME> --name cortex-db-admin-password --value "<the password>"
-   az keyvault secret set --vault-name <KV_NAME> --name cortex-jwt-secret-key --value "<the JWT key>"
-   ```
-3. Replace placeholders in `parameters.keyvault-template.json` (`__SUBSCRIPTION_ID__`, `__KV_RESOURCE_GROUP__`, `__KEY_VAULT_NAME__`).
-4. Rename `parameters.keyvault-template.json` → `parameters.json` (overwriting the inline-secrets one).
-5. Grant the deployment principal `Key Vault Secret User` role on the KV.
-6. Re-run `deploy.sh` — Bicep will pull secrets from KV instead of cmdline.
+**Verify live:**
+```bash
+az containerapp secret list --name cortexks-api --resource-group cortex-rg \
+  --query "[?name=='database-url' || name=='jwt-secret-key'].{name:name, keyVaultUrl:keyVaultUrl, identity:identity}" -o json
+```
+
+`infra/parameters.keyvault-template.json` was updated with the live KV id, the correct `cortexks` / `centralus` / `eastus` values, and the SWA frontend origin so a brand-new from-scratch deploy can use it directly.
 
 ---
 
@@ -398,7 +400,7 @@ async def logout(request: Request, response: Response, current_user_id: UUID = D
 From `features/cortex-second-brain/tasks/review-comments.tasks.md` Tasks 1-3 LOW + NIT:
 - PERF-12: Export endpoint loads all notes into memory (use `yield_per` for streaming)
 - PERF-13: Insights graph endpoint has 200-UUID `IN` list with no `LIMIT` on returned links
-- PERF-14: APScheduler `BackgroundScheduler` + `asyncio.run()` creates a second event loop per job (relevant only when scheduler is enabled — see P1)
+- ~~PERF-14: APScheduler `BackgroundScheduler` + `asyncio.run()` creates a second event loop per job~~ (no longer relevant — APScheduler removed 2026-05-06)
 - PERF-N1: `created_at` date filter casts to `str` instead of typed `datetime`
 - PERF-N2: ShadowReaderPrompt first poll waits full 2s; could fire immediately
 - QA-12, QA-15: misc style issues (TODO comments left, naming inconsistencies)

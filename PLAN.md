@@ -147,14 +147,14 @@ End-to-end happy path to validate before declaring "done":
 ## 6 — Roadmap forward (priority order)
 
 ### P0 — Blockers / live-deployment polish
-1. Run smoke test plan (§ 5) end-to-end in browser. Log any bugs to `KNOWN_ISSUES.md`.
-2. Rotate the deploy-time secrets via Key Vault (currently inline). Use `infra/parameters.keyvault-template.json`.
+1. ~~Run smoke test plan (§ 5) end-to-end in browser. Log any bugs to `KNOWN_ISSUES.md`.~~ ✅ Done 2026-05-06 (Round 9) — auth/refresh/capture/library/insights/sync all green.
+2. ~~Rotate the deploy-time secrets via Key Vault (currently inline). Use `infra/parameters.keyvault-template.json`.~~ ✅ Done 2026-05-06 (Round 9) — `cortexks-kv` live; container app `database-url` + `jwt-secret-key` resolve via KV refs with system-assigned managed identity.
 3. Add a basic **Container App auto-restart on failure** (already implicit via probes) plus health check alerts.
 
 ### P1 — Operational hygiene
-4. Move APScheduler distill cron OUT of Container App into Container Apps Job (currently `SCHEDULER_ENABLED=false`). Spec § 2.5 distill stage will not actually fire until this is done.
+4. ~~Move APScheduler distill cron OUT of Container App into Container Apps Job~~ ✅ **Removed entirely 2026-05-06 (Round 9)** — daily/weekly summary functionality dropped per user product decision; alembic 007 dropped the table; UI cards gone.
 5. Wire GitHub Actions secrets so push-to-main auto-deploys (currently workflows exist but secrets are empty).
-6. Set up Azure Budget alerts (`$100` warning, `$140` critical) per `docs/DEPLOYMENT.md`.
+6. ~~Set up Azure Budget alerts (`$100` warning, `$140` critical) per `docs/DEPLOYMENT.md`.~~ ✅ Done 2026-05-05 — `cortex-monthly` budget on `cortex-rg`, $150/mo, three thresholds (67% Actual / 93% Actual / 100% Forecasted) → karths@microsoft.com.
 7. Set up Log Analytics alert on the B12 log-scrubber metric for any leaked tokens.
 
 ### P2 — Test debt
@@ -189,7 +189,7 @@ End-to-end happy path to validate before declaring "done":
 
 | Risk | Mitigation in place |
 |---|---|
-| Visual Studio Enterprise subscription cost spike | Budget alerts not yet wired (P1.6); manual `az consumption usage list` check recommended weekly |
+| Visual Studio Enterprise subscription cost spike | ✅ Budget alerts wired 2026-05-05 — `cortex-monthly` on `cortex-rg`, $150/mo, emails karths@microsoft.com at 67% Actual, 93% Actual, 100% Forecasted |
 | Azure OpenAI throughput limits in `eastus` | S0 SKU is per-token-rate-limited; for >1k notes/day, consider PTU or fallback to a different region |
 | pgvector index degrade beyond 100k rows | HNSW with `m=16, ef_construction=64` is fine for single-user MVP; revisit if scale increases |
 | Service Worker stale-bundle bug | Mitigated by `clientsClaim:true, skipWaiting:true` (deployed) |

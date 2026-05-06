@@ -493,3 +493,40 @@ The voice mic button stays out (Round 3 / Bug 10) — text answers only; voice a
 | No image compression on upload | Backend accepts arbitrary size. Frontend could compress to <5MB before upload (P3). |
 | No audio chunking for very long recordings | Single-blob upload for MVP. >5min recordings might OOM the SDK. (P3.) |
 | No exit/wipe local data action in Settings | "Delete all my data" is a P4 GDPR feature. |
+
+## § 22y — APScheduler distill cron removed entirely (2026-05-06, Round 9)
+
+**Decision:** The daily/weekly distill cron functionality is REMOVED in its entirety — backend module, model, table, scheduler hook, HTTP endpoints, frontend cards, and tests. Not migrated to a Container Apps Job, not deferred — dropped.
+
+**Why:** User product decision: _"Remove the daily cron job, I don't want that functionality at all. Ensure to remove it from UX as well."_
+
+**What this reverses / supersedes:**
+- **B14** (minReplicas=1 was justified by "keep APScheduler alive for nightly distill") — minReplicas=1 stays, but the new justification is cold-start avoidance only.
+- **B10** (Pipeline state machine) — the per-note enrichment stages (Stage 1 cleans → Stage 2 tags + categorizes + embeds) are unchanged. Only the multi-note daily/weekly aggregation distillate is gone.
+- **OQ-3** (Distill cron should run as APScheduler in-process or as a Container Apps Job) — answer: neither, the feature is gone.
+- **PERF-14** (asyncio + APScheduler event-loop conflict) — moot.
+- **QA-04** (Shadow Reader sweep on a 2-min interval) — the function `retry_stale_answer_pending` still exists and is callable manually, but is no longer scheduled. Was not running in production previously (scheduler was off via `SCHEDULER_ENABLED=false`), so live behaviour is unchanged.
+
+**What survives unchanged:**
+- The Recurring Patterns surface (`GET /api/insights/patterns`) — it's an on-demand GPT call, not a cron, and stays as the only Insights surface.
+- The Express `POST /api/ai/generate` (song / practice / reflection) — on-demand only.
+- The graph endpoint, all auth, all sync, all capture, all Shadow Reader.
+
+**DB impact:** Alembic 007 drops `daily_summaries` (was empty in prod — cron never ran).
+
+---
+
+## § 22z — Azure Key Vault for prod-grade secret rotation (2026-05-06, Round 9)
+
+**Decision:** The Container App's two sensitive runtime secrets — `database-url` (full asyncpg connection string) and `jwt-secret-key` — now live in Azure Key Vault `cortexks-kv` (centralus, RBAC mode) and are read at runtime via `keyVaultUrl` references with `identity: system`.
+
+**Why:** Closes the P0 from PLAN § 6: previously the secrets were only in the Container App secret store, copied in via inline `--parameters` to Bicep. Rotation required re-running the deploy script with new env vars. With KV refs, rotation is `az keyvault secret set ...` followed by a revision restart.
+
+**What this reverses:**
+- **B4** (Container App's secret store is the single source of truth) — KV is now the authoritative store; the Container App's secrets are pointers.
+
+**Other secrets:** `acr-password`, `azure-openai-api-key`, `azure-speech-key`, `azure-storage-connection-string`, `azure-vision-key` remain inline because Bicep can mint them at deploy time via `listCredentials()` / `listKeys()`. Migrating those to KV would add complexity without rotation benefit (their masters live in the originating Azure resource).
+
+**RBAC:** Container App's system-assigned managed identity = `5d6d721c-6a0a-48f9-b542-2b9e8f0e80c1`, granted `Key Vault Secrets User` on `cortexks-kv`. My user (`357b3db4-21b0-4e24-834c-1a0925c67ee5`) granted `Key Vault Secrets Officer` for write access.
+
+**Future deploys:** `infra/parameters.keyvault-template.json` is pre-populated with the live KV ID + Bicep references for `dbAdminPassword` + `jwtSecretKey`. Use it instead of `parameters.json` for from-scratch redeploys (and skip the `DB_ADMIN_PASSWORD` / `JWT_SECRET_KEY` env vars when invoking `deploy.sh`).

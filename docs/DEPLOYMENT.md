@@ -112,14 +112,36 @@ Azure Static Web Apps automatically retains previous deployments. Use the portal
 
 ## Budget Alerts
 
-Azure Cost Management budget alerts are configured at **$100** and **$140** per month to stay within the $150 NFR-4 budget ceiling.
+Azure Cost Management budget alerts are wired against the `cortex-rg` resource group to stay within the $150/mo NFR-4 budget ceiling.
 
-**Manual setup** (no native Bicep `Microsoft.Consumption/budgets` resource is wired in `main.bicep` due to subscription-scope constraint — portal step required):
+**Live config** (created 2026-05-05 via `az consumption budget create-with-rg` + REST PUT for the Forecasted threshold):
 
-1. Azure Portal → Cost Management + Billing → Budgets → + Add
-2. Scope: subscription or resource group `cortex-rg`
-3. Amount: $100 → alert at 100%; create a second budget at $140
-4. Alert recipients: `karths@microsoft.com`
+| Budget | Scope | Amount | Thresholds | Recipients |
+|---|---|---|---|---|
+| `cortex-monthly` | RG `cortex-rg` | $150 / Monthly | 67% Actual (~$100, warning), 93% Actual (~$140, critical), 100% Forecasted (leading indicator) | `karths@microsoft.com` |
+
+**Inspect:**
+```bash
+az consumption budget show-with-rg --resource-group cortex-rg --budget-name cortex-monthly
+```
+
+**Recreate from scratch:**
+```bash
+cat > /tmp/notif.json <<'JSON'
+{
+  "Actual_GreaterThan_67_Percent": {"enabled": true, "operator": "GreaterThan", "threshold": 67, "contact-emails": ["karths@microsoft.com"]},
+  "Actual_GreaterThan_93_Percent": {"enabled": true, "operator": "GreaterThan", "threshold": 93, "contact-emails": ["karths@microsoft.com"]}
+}
+JSON
+echo '{"startDate":"2026-05-01T00:00:00Z","endDate":"2027-05-01T00:00:00Z"}' > /tmp/tp.json
+az consumption budget create-with-rg --resource-group cortex-rg --budget-name cortex-monthly \
+  --amount 150 --category cost --time-grain Monthly \
+  --time-period @/tmp/tp.json --notifications @/tmp/notif.json
+# Then PUT https://management.azure.com/.../budgets/cortex-monthly?api-version=2024-08-01
+# with the full body to add a Forecasted threshold (CLI cannot set thresholdType=Forecasted).
+```
+
+> **Note:** `Microsoft.Consumption/budgets` is not in `main.bicep` because budgets are subscription/RG-scope resources that require the latest eTag for re-deploys. Treating as one-time `az` command that's idempotent on re-run via `update-with-rg`.
 
 ## Known Security Limitations (MVP Threat Model)
 
@@ -217,3 +239,69 @@ Health check: `curl http://localhost:8000/api/health` should return `{"status":"
 
 > **Security note:** Real `.env` files must never be committed to source control.
 > Use Azure Key Vault references for production secrets (injected via Container App secret references).
+
+## Key Vault — secret rotation
+
+**Live KV:** `cortexks-kv` in `cortex-rg` / `centralus` (created 2026-05-06).
+
+The Container App's two sensitive secrets — the asyncpg connection string and the JWT signing key — are stored in Azure Key Vault and resolved by the Container App at runtime via its system-assigned managed identity. Rotating a secret in KV automatically propagates to new replicas; no Bicep redeploy needed.
+
+| Secret name | Container App secret | Source |
+|---|---|---|
+| `cortex-database-url` | `database-url` | Full asyncpg connection string (`postgresql+asyncpg://cortexadmin:.../cortex`) |
+| `cortex-jwt-secret-key` | `jwt-secret-key` | 64-byte hex JWT HS256 signing key |
+
+### Rotate the JWT secret
+
+```bash
+NEW_JWT=$(python -c "import secrets; print(secrets.token_hex(64))")
+az keyvault secret set --vault-name cortexks-kv --name cortex-jwt-secret-key --value "$NEW_JWT"
+# Force the Container App to pull a fresh secret value (otherwise it caches for ~30 min):
+az containerapp update --name cortexks-api --resource-group cortex-rg --revision-suffix "rotjwt$(date +%s)"
+```
+
+### Rotate the DB password
+
+1. Update Postgres admin password (Azure Portal or `az postgres flexible-server update --admin-password`).
+2. Construct the new connection string and store in KV:
+   ```bash
+   NEW_PW=...
+   NEW_URL="postgresql+asyncpg://cortexadmin:${NEW_PW}@cortexks-db.postgres.database.azure.com:5432/cortex"
+   az keyvault secret set --vault-name cortexks-kv --name cortex-database-url --value "$NEW_URL"
+   az containerapp update --name cortexks-api --resource-group cortex-rg --revision-suffix "rotdb$(date +%s)"
+   ```
+
+### How the bootstrap was done (one-time, 2026-05-06)
+
+```bash
+# 1. Create the vault
+az keyvault create --name cortexks-kv --resource-group cortex-rg --location centralus \
+  --enable-rbac-authorization true --sku standard --retention-days 90
+
+# 2. RBAC: writer for you, reader for Container App's managed identity
+KV_ID=$(az keyvault show --name cortexks-kv --resource-group cortex-rg --query id -o tsv)
+ME=$(az ad signed-in-user show --query id -o tsv)
+CA=$(az containerapp identity show --name cortexks-api --resource-group cortex-rg --query principalId -o tsv)
+az role assignment create --assignee-object-id $ME --assignee-principal-type User \
+  --role "Key Vault Secrets Officer" --scope $KV_ID
+az role assignment create --assignee-object-id $CA --assignee-principal-type ServicePrincipal \
+  --role "Key Vault Secrets User" --scope $KV_ID
+
+# 3. Copy current Container App secrets into KV
+az keyvault secret set --vault-name cortexks-kv --name cortex-database-url \
+  --value "$(az containerapp secret show --name cortexks-api --resource-group cortex-rg --secret-name database-url --query value -o tsv)"
+az keyvault secret set --vault-name cortexks-kv --name cortex-jwt-secret-key \
+  --value "$(az containerapp secret show --name cortexks-api --resource-group cortex-rg --secret-name jwt-secret-key --query value -o tsv)"
+
+# 4. Switch Container App secrets to KV references
+az containerapp secret set --name cortexks-api --resource-group cortex-rg \
+  --secrets \
+    "database-url=keyvaultref:https://cortexks-kv.vault.azure.net/secrets/cortex-database-url,identityref:system" \
+    "jwt-secret-key=keyvaultref:https://cortexks-kv.vault.azure.net/secrets/cortex-jwt-secret-key,identityref:system"
+
+# 5. Roll a new revision so the secrets take effect
+az containerapp update --name cortexks-api --resource-group cortex-rg --revision-suffix "kv$(date +%s)"
+```
+
+For brand-new infra deploys, swap `infra/parameters.json` for `infra/parameters.keyvault-template.json` (already pre-populated with the live `cortexks-kv` ID + `cortex-jwt-secret-key` / `cortex-db-admin-password` references) and omit the `JWT_SECRET_KEY` / `DB_ADMIN_PASSWORD` env vars from `deploy.sh`.
+

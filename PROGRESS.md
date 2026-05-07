@@ -2,7 +2,7 @@
 
 > **Chronological log of what's been done.** New work appends to the end. Use this to verify "we already did X" before re-doing.
 
-**Last updated:** 2026-05-07 (Round 12: test triage fleet cleanup — backend 100% / frontend 99.8% green via PRs #13–#18)
+**Last updated:** 2026-05-07 (Round 13: P0 Container App auto-restart + health-check alerts closed via PR #20)
 
 ---
 
@@ -720,4 +720,50 @@ User asked to "fix the remaining backend + frontend tests thoroughly". Six follo
 | GitHub Actions Deploy Backend | green on push | – | – |
 
 The 1 remaining frontend skip is the `IndexedDB rawTranscription on stop` test — passes in isolation, fails in suite. Documented inline TODO to rework the mock useVoiceRecorder hook so mockHookState mutations enqueue React state updates. The functionality is verified end-to-end via chrome-devtools and 13 sibling tests in the same file cover the WS lifecycle.
+
+
+
+## 13 — Round 13 — P0 Container App auto-restart + health-check alerts (2026-05-07)
+
+User picked up the last open P0 row from PLAN.md § 6: _"Add a basic Container App auto-restart on failure (already implicit via probes) plus health check alerts."_ Investigation showed the auto-restart half was already wired (Bicep probes), so the actual deliverable was just the alerts half.
+
+### Investigation
+- `az monitor metrics alert list -g cortex-rg` → `[]` (zero alerts).
+- `az containerapp env show ...` → no Log Analytics workspace bound to `cortexks-env`.
+- `az containerapp show ... --query template.containers[0].probes` → both Liveness (period 30s, failureThreshold 3) and Readiness (period 10s, failureThreshold 3) probes against `/api/health` already on the live revision. Container Apps platform restarts the replica automatically when liveness fails 3x consecutively.
+
+### Approach (after user-confirmed scope: A+B stack via az CLI, single PR for docs)
+- Stack A (Container App metric alerts) + Stack B (App Insights URL-ping availability test).
+- All alerts route through a shared Action Group `cortex-alerts-ag` with email recipient `karths@microsoft.com` (matches the Round 5 budget-alerts pattern).
+- Single-region availability test (`us-il-ch1-azr` / Chicago) keeps cost ~$1/month. Expandable to 5 regions later for ~$5/month if needed.
+- Decision NOT to do an induced-prod-outage verification (risk vs reward); verified by config audit + live `/api/health` returning 200 + `{"status":"ok"}`.
+
+### Live resources created in cortex-rg
+- `microsoft.insights/actionGroups/cortex-alerts-ag` (email: karths@microsoft.com).
+- `microsoft.insights/components/cortexks-ai` (App Insights, classic web kind, centralus, auto-bound to default Log Analytics workspace).
+- `microsoft.insights/webtests/cortexks-api-health-ping` (classic ping test on `https://cortexks-api.../api/health` from us-il-ch1-azr, every 5 min, expects HTTP 200 + content match `"ok"`, retry on failure).
+- `microsoft.insights/metricAlerts/cortexks-api-restart-spike` (sev 2, `max RestartCount >= 3` over 5 min, scope: Container App).
+- `microsoft.insights/metricAlerts/cortexks-api-5xx-rate` (sev 2, `total Requests >= 10 where statusCodeCategory includes 5xx` over 5 min, scope: Container App).
+- `microsoft.insights/metricAlerts/cortexks-api-availability` (sev 1, `avg availabilityResults/availabilityPercentage < 100` over 5 min, scope: App Insights component).
+
+### Friction worth noting
+1. `Microsoft.Insights` resource provider was not registered on the subscription — the Action Group create command auto-registered it.
+2. The `application-insights` az CLI extension was not installed; first `az monitor app-insights component show` triggered the Y/n install prompt.
+3. The classic `ping` web test API requires a full XML `--web-test` payload even when `--request-url` + content-validation flags are set; PowerShell's variable expansion broke the inline XML, so I wrote it to `C:\Users\karths\AppData\Local\Temp\webtest.xml` and passed via `--web-test `"@"`.
+4. Availability metric alerts cannot scope to `microsoft.insights/webtests` (not a supported metric namespace for `metricAlerts`); the alert had to scope to the App Insights component instead. This is the standard pattern.
+5. `az monitor app-insights web-test show --query "locations[].id"` returned `[]` because the property name on the response is `location` (singular), not `id` — the underlying config is correctly `us-il-ch1-azr`.
+
+### Files touched (single small PR — docs only, no code/infra-as-code)
+- `docs/DEPLOYMENT.md` — new "Health-Check Alerts" section (paralleling "Budget Alerts") + "Auto-restart behaviour" subsection.
+- `HANDOFF.md` § 3b — new closed-P0 row.
+- `PLAN.md` § 6 P0.3 — strikethrough + Round 13 note.
+- `KNOWN_ISSUES.md` — new "✅ P0 — Container App auto-restart + health-check alerts (resolved)" section near the top.
+- `DECISIONS.md` § 22ac — new section recording the choices (A+B over C; az CLI over Bicep; single-region availability test; no induced-outage verification on prod).
+- This file (`PROGRESS.md`) — Round 13 entry.
+
+### Verification
+- `GET https://cortexks-api.wonderfulpond-177bdc9c.centralus.azurecontainerapps.io/api/health` → 200 + `{"status":"ok"}` (web test will succeed on first execution).
+- All 3 metric alerts return `enabled: true` from `az monitor metrics alert list`.
+- Web test `cortexks-api-health-ping` returns `provisioningState: Succeeded`, `enabled: true`, `locations: [{ location: us-il-ch1-azr }]`, `hidden-link` tag pointing to `cortexks-ai`.
+- Action Group has 1 enabled email receiver (`karths@microsoft.com`).
 

@@ -143,6 +143,88 @@ az consumption budget create-with-rg --resource-group cortex-rg --budget-name co
 
 > **Note:** `Microsoft.Consumption/budgets` is not in `main.bicep` because budgets are subscription/RG-scope resources that require the latest eTag for re-deploys. Treating as one-time `az` command that's idempotent on re-run via `update-with-rg`.
 
+## Health-Check Alerts
+
+Three Azure Monitor alerts notify `karths@microsoft.com` when the live API is unhealthy. All three feed into a shared Action Group `cortex-alerts-ag`. Cost ~$1/month (the Application Insights availability test).
+
+**Live config** (created 2026-05-07 via `az monitor` CLI, parallel to the Budget Alerts pattern):
+
+| Alert | Severity | Scope | Fires when |
+|---|---|---|---|
+| `cortexks-api-restart-spike` | 2 (Warning) | Container App `cortexks-api` | `RestartCount` (max) >= 3 over 5 min — replica is crash-looping; liveness probe is restarting it faster than transient blips |
+| `cortexks-api-5xx-rate` | 2 (Warning) | Container App `cortexks-api` | `Requests` (total, filtered `statusCodeCategory=5xx`) >= 10 over 5 min — container is up but the app is broken (DB exhausted, OpenAI key revoked, etc.) |
+| `cortexks-api-availability` | 1 (Error) | App Insights `cortexks-ai` (web test `cortexks-api-health-ping`) | `availabilityResults/availabilityPercentage` (avg) < 100 over 5 min — synthetic ping to `/api/health` from the Chicago region failed (catches outages even when the platform thinks the container is healthy) |
+
+**Inspect:**
+```bash
+az monitor metrics alert list -g cortex-rg -o table
+az monitor app-insights web-test show -g cortex-rg --name cortexks-api-health-ping
+az monitor action-group show -g cortex-rg -n cortex-alerts-ag
+```
+
+**Recreate from scratch:**
+```bash
+# 1. Action Group (single email recipient; reusable for future alerts)
+az monitor action-group create -g cortex-rg -n cortex-alerts-ag \
+  --short-name cortexag \
+  --action email karths-email karths@microsoft.com
+
+# 2. Container App restart-count alert
+CA_ID=$(az containerapp show -n cortexks-api -g cortex-rg --query id -o tsv)
+AG_ID=$(az monitor action-group show -g cortex-rg -n cortex-alerts-ag --query id -o tsv)
+az monitor metrics alert create \
+  --name cortexks-api-restart-spike --resource-group cortex-rg \
+  --scopes "$CA_ID" \
+  --condition "max RestartCount >= 3" \
+  --evaluation-frequency 1m --window-size 5m --severity 2 \
+  --action "$AG_ID" \
+  --description "Container App replica restart count spiked - liveness probe likely failing"
+
+# 3. Container App 5xx-rate alert (uses the statusCodeCategory dimension)
+az monitor metrics alert create \
+  --name cortexks-api-5xx-rate --resource-group cortex-rg \
+  --scopes "$CA_ID" \
+  --condition "total Requests >= 10 where statusCodeCategory includes 5xx" \
+  --evaluation-frequency 1m --window-size 5m --severity 2 \
+  --action "$AG_ID" \
+  --description "Container App returning >=10 5xx responses in a 5-minute window - app-level failure"
+
+# 4. Application Insights component (auto-binds to a default LA workspace)
+az monitor app-insights component create \
+  --app cortexks-ai --location centralus --resource-group cortex-rg \
+  --kind web --application-type web
+
+# 5. URL-ping availability test on /api/health (XML config required by the classic ping API).
+#    The hidden-link tag binds the test to the AI component.
+#    See backend/scripts/create_health_webtest.sh for the full XML template, OR re-run the
+#    az monitor app-insights web-test create command from infra/.
+#    Single region (us-il-ch1-azr / Chicago) keeps cost ~$1/mo; expand to 5 regions for ~$5/mo.
+
+# 6. Availability alert on the AI component (NOT on the webtest resource —
+#    microsoft.insights/webtests is not a supported metric namespace for metricAlerts)
+AI_ID=$(az monitor app-insights component show --app cortexks-ai -g cortex-rg --query id -o tsv)
+az monitor metrics alert create \
+  --name cortexks-api-availability --resource-group cortex-rg \
+  --scopes "$AI_ID" \
+  --condition "avg availabilityResults/availabilityPercentage < 100" \
+  --evaluation-frequency 1m --window-size 5m --severity 1 \
+  --action "$AG_ID" \
+  --description "Synthetic ping to /api/health below 100% availability in last 5 min"
+```
+
+> **Note:** Alerts live in Azure (operational state), not in `infra/main.bicep`. Same pattern as Budget Alerts — they're idempotent CLI commands and don't change between deploys.
+
+### Auto-restart behaviour (already wired)
+
+`infra/modules/container-app.bicep` lines 133–148 (and the equivalent block in `infra/main.bicep`) configure both probes against `/api/health`:
+
+| Probe | Purpose | Period | Failure threshold | Effect on failure |
+|---|---|---|---|---|
+| Liveness | "Is the container alive?" | 30 s | 3 | Container Apps **restarts the replica** automatically |
+| Readiness | "Is it accepting traffic?" | 10 s | 3 | Replica is **removed from ingress** (LB stops routing) |
+
+So "auto-restart on failure" is **already in production** by virtue of the Bicep probes — no additional infra needed. The health-check alerts above provide the missing piece: notification when those restarts happen.
+
 ## Known Security Limitations (MVP Threat Model)
 
 ### SEC-07 — Refresh Token Revocation Gap (30-day replay window)

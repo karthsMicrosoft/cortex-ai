@@ -570,3 +570,47 @@ az containerapp exec --name cortexks-api --resource-group cortex-rg \
 2. Run migrations as a separate Container Apps Job triggered by the workflow — cleanest separation, slightly more infra.
 
 For now: schema changes are infrequent enough (7 alembic versions over the entire project history) that the manual step is acceptable.
+
+
+## § 22ac — Container App auto-restart + health-check alerts (2026-05-07, Round 13)
+
+**Decision:** Health-check alerting on the live API uses **3 Azure Monitor alerts** routed through a shared Action Group `cortex-alerts-ag`, defined via az CLI (not Bicep), with a single-region App Insights availability test.
+
+**What was already in place (auto-restart half):** Bicep probes in `infra/modules/container-app.bicep` configure Liveness + Readiness on `/api/health` with `failureThreshold: 3`. Azure Container Apps platform restarts the replica automatically when liveness fails 3x consecutively. No infra change needed.
+
+**What was added (alerts half):**
+
+1. `cortexks-api-restart-spike` (sev 2) — Container App `RestartCount` >= 3 over 5 min.
+2. `cortexks-api-5xx-rate` (sev 2) — Container App `Requests` total >= 10 with dimension `statusCodeCategory=5xx` over 5 min.
+3. `cortexks-api-availability` (sev 1) — App Insights `availabilityResults/availabilityPercentage` (avg) < 100 over 5 min, fed by URL-ping web test `cortexks-api-health-ping` (every 5 min from `us-il-ch1-azr` Chicago, expects HTTP 200 + content match `"ok"`).
+
+All three alerts route through Action Group `cortex-alerts-ag` with single email recipient `karths@microsoft.com`.
+
+**Why this stack (A+B, not C — Log Analytics KQL alerts):**
+- Stack A (Container App metric alerts) is free and catches the platform-detected failure modes (crash loops, 5xx surges).
+- Stack B (synthetic ping) catches the failure mode A misses: container reports healthy but the network path / DNS / certificate / ingress is broken. ~$1/month at 1 region.
+- Stack C (Log Analytics KQL alerts) would require provisioning + binding a workspace to the Container App env — significant new infra surface for marginal benefit on a single-user MVP.
+
+**Why az CLI, not Bicep:**
+- Matches the existing **Budget Alerts** precedent (DECISIONS § 22z context, `Microsoft.Consumption/budgets` already ops-managed not IaC).
+- Action Groups + metric alerts are idempotent on re-create. The recreate recipe is documented in `docs/DEPLOYMENT.md` § "Health-Check Alerts".
+- Bicep would have added a ~120-line module for ~5 minutes of lifetime bootstrap savings.
+
+**Why single-region availability test (us-il-ch1-azr):**
+- Cost: ~$1/month (5 regions = ~$5/month).
+- Backend is centralus; Chicago is the closest classic web test region — a regional outage that takes down centralus would also likely take down Chicago, so multi-region wouldn't catch much extra. Multi-region is more valuable when the app is geo-distributed.
+- One-line change to expand later if false-positive rate from a single region proves problematic.
+
+**Why no induced-outage verification:**
+- Inducing 3+ rapid restarts on prod or returning 10+ 5xx in 5 min is observable to the (single) user. Not worth the disruption to verify a config that's structurally validated by `az monitor metrics alert list` + a 200 response from `/api/health`.
+- First real liveness failure or 5xx burst will exercise the full path; if the alert doesn't fire, that's a real bug to fix then.
+
+**What this supersedes / closes:**
+- The PLAN § 6 P0.3 line "Add a basic Container App auto-restart on failure (already implicit via probes) plus health check alerts" — both halves now closed.
+- A latent gap from B14 / Round 9 (APScheduler removed): without daily distill cron, there's no in-process "we're alive" liveness signal beyond probes. The synthetic availability test now provides that signal externally.
+
+**Future tightening (P3+):**
+- Add a Smart Detector / failure-anomaly rule on App Insights once we collect 1+ week of baseline traffic.
+- Wire Slack / Teams webhooks via the Action Group as a second receiver (parallel to email).
+- Add `Microsoft.Insights/scheduledQueryRules` for KQL alerts on container logs once a Log Analytics workspace is in use for other reasons.
+

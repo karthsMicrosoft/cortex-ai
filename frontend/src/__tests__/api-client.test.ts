@@ -35,6 +35,25 @@ import { apiGet, apiPost, apiPut, apiDelete, ApiError } from '../api/client';
 import { useAuthStore } from '../store/authStore';
 
 // ---------------------------------------------------------------------------
+// Default mock state — restored before EVERY test so that one test's
+// .mockReturnValue(...) override (e.g. the refresh-on-401 path which sets
+// accessToken='old-token') doesn't leak into the next test. vi.clearAllMocks()
+// only clears call history; it does NOT restore implementations.
+// ---------------------------------------------------------------------------
+
+const _DEFAULT_AUTH_STATE = {
+  accessToken: 'test-access-token',
+  user: { id: 'u1', email: 'a@b.com', display_name: 'A' },
+  login: vi.fn(),
+  logout: vi.fn(),
+  setAccessToken: vi.fn(),
+};
+
+beforeEach(() => {
+  vi.mocked(useAuthStore.getState).mockReturnValue({ ..._DEFAULT_AUTH_STATE });
+});
+
+// ---------------------------------------------------------------------------
 // fetch mock helpers
 // ---------------------------------------------------------------------------
 

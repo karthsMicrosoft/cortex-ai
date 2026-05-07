@@ -374,11 +374,11 @@ describe('PersonalDictionary component (task 4.2)', () => {
   });
 
   it('displays a duplicate-term message when addTerm rejects with 409 status', async () => {
-    const dupError = Object.assign(new Error('Term already exists'), {
-      status: 409,
-      code: 'duplicate_term',
-      detail: 'Term already exists',
-    });
+    // Production catch in PersonalDictionary.tsx checks ``err instanceof ApiError``.
+    // Use the real ApiError (not Object.assign(new Error, ...)) so the
+    // 409-specific message branch fires.
+    const { ApiError } = await import('../api/client');
+    const dupError = new ApiError(409, 'duplicate_term', 'Term already exists');
     mockAddTerm.mockRejectedValue(dupError);
     mockListTerms.mockResolvedValue([]);
 

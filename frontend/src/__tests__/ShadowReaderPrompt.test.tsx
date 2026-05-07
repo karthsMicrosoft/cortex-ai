@@ -56,6 +56,10 @@ vi.mock('../hooks/useVoiceRecorder', () => ({
     stop: vi.fn().mockResolvedValue(undefined),
     _setPartialText: vi.fn(),
   }),
+  // Round-7: VoiceCapture (transitively imported by ShadowReaderPrompt's
+  // shared hooks) needs isMobile exported from this mock.
+  isMobile: false,
+  IS_MOBILE: false,
 }));
 
 // ---------------------------------------------------------------------------

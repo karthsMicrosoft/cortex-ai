@@ -31,6 +31,10 @@ vi.mock('../hooks/useVoiceRecorder', () => ({
     start: vi.fn().mockResolvedValue(undefined),
     stop: vi.fn().mockResolvedValue(new Blob(['audio'], { type: 'audio/webm' })),
   }),
+  // Round-7: VoiceCapture imports `isMobile` from this module to gate the WS
+  // path. Tests run in jsdom (desktop UA) so force false explicitly.
+  isMobile: false,
+  IS_MOBILE: false,
 }));
 
 // ---------------------------------------------------------------------------

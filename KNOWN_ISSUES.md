@@ -2,7 +2,7 @@
 
 > **Open work, bugs not fixed, gaps from "fully done."** Anything tagged P0/P1/P2 here is meant to be picked up by the next agent.
 
-**Last updated:** 2026-05-06 (Round 11: GitHub Actions deploys wired with OIDC + 8 test-triage PRs landed)
+**Last updated:** 2026-05-07 (Round 12: test triage fleet cleanup — backend 100% / frontend 99.8% green via PRs #13–#18)
 
 ---
 
@@ -133,39 +133,16 @@ Round-2 issues filed by the UX-tester agent live in `e2e/ISSUES.md` (next pickup
 
 ---
 
-## P1 — Backend test failures (30 still red after fix-pair pass)
+## ✅ P1 — Backend + frontend test failures (resolved 2026-05-07)
 
-**Status:** 263 pass / 30 fail / 266 skip on local pytest. **Fix-pair agent ran ~94 minutes** (earlier session) and edited many tests but didn't drive failures to zero.
+**Status:** Final round of test triage closed the remaining failures across both suites.
 
-### 1a — Categorized failure list
+**Backend:** `626 passed | 0 failed | 6 skipped | 1 xfailed | 1 xpassed` — **100%** pass rate (target was ≥95%).
+**Frontend:** `523 passed | 0 failed | 1 skipped` (30/30 test files green) — **99.8%** pass rate. The 1 skip is a documented order-dependent flake in `VoiceCapture.realtime.test.tsx` (`IndexedDB rawTranscription on stop`) — passes in isolation; deferred with an inline TODO to rework the mock useVoiceRecorder so mutating `mockHookState.isRecording` enqueues a React state update.
 
-Run from `backend/` with `.venv/Scripts/python.exe -m pytest tests/ --tb=short --no-cov -q` to reproduce.
+The triage was done as a 9-PR fleet sweep over 2026-05-06/05-07 (PRs #2 → #18, see PROGRESS § 12). Net delta: +30 backend passes, +90 frontend passes, 1 production bug found and fixed (PR #6 dictionary bulk SQLite portability), 0 production behavior regressions.
 
-| Cluster | Count | Sample failing tests | Triage notes |
-|---|---|---|---|
-| **Schedulers / lifespan introspection** | 8 | `test_scheduler.py::TestSchedulerModuleImport::test_main_has_lifespan_or_startup`, `test_main_references_scheduler`, `test_scheduler_has_nightly_daily_job`, `test_nightly_job_calls_generate_daily_summary`, `test_weekly_job_registered`, `test_scheduler_started_at_startup`, `test_scheduler_shutdown_at_teardown`, `test_scheduler_uses_cron_trigger`, `test_main_py_references_apscheduler`, `test_scheduler_runs_at_2359` | Tests assert `@app.on_event` or specific class names. Implementation uses `@asynccontextmanager` lifespan + the scheduler is now gated on `SCHEDULER_ENABLED` env var. **Action:** rewrite tests to look for the lifespan context manager + the gated import path. |
-| **Speech SDK mocks** | 5 | `test_speech.py::TestTranscribeAudioFile::test_returns_transcript_string`, `test_default_language_en_us`, `test_explicit_language_passed_through`, `test_recognize_once_async_called`, `test_retries_on_transient_error` | Tests mock `recognize_once_async` differently than implementation calls it (we use `loop.run_in_executor(None, future.get)` to await the SDK's concurrent.futures-style future). **Action:** update mock to return a future-like object whose `.get()` returns the result, OR refactor implementation to use a simpler awaitable. |
-| **Vocab usage_count Python-side assertions** | 3 | `test_voice_phrase_list.py::TestIncrementTermUsage::test_increments_usage_count_for_found_term`, `test_case_insensitive_match`, `test_multiple_terms_incremented` | PERF-02 fix moved logic from Python loop to single SQL UPDATE. Tests still mock `vocab_entry.usage_count == N` — the SQL UPDATE doesn't mutate the in-memory MagicMock. **Action:** rewrite to assert `db.execute()` was called with the UPDATE statement and ILIKE pattern; drop the in-memory state assertion. |
-| **`_note_to_out` shadow_reader fields** | 3 | `test_voice_phrase_list.py::TestSingleNoteToOutHelper::test_voice_py_note_to_out_includes_shadow_reader_status`, `_questions`, `_answer` | Tests look for `shadow_reader_*` strings inside `voice.py` source code. After QA-05 fix, `voice.py` imports `_note_to_out` from `_note_serializers.py` (which has the fields). **Action:** rewrite to read `_note_serializers.py` instead OR import the function and inspect its output. |
-| **Migration 003 introspection** | 3 | `test_shadow_reader.py::TestMigration003UsesAsyncCompatibleIdiom::test_migration_003_does_not_use_op_get_bind`, `test_migration_003_uses_op_execute`, `test_migration_003_upgrade_callable` | Tests use `importlib.util` to load the migration file and grep for substrings. The QA-01 fix removed `op.get_bind()` correctly but the test asserts `def upgrade(` exact pattern. **Action:** loosen the regex to `def upgrade` (with or without parens). |
-| **Schema introspection** | 1 | `test_notes.py::TestNoteContentSizeLimit::test_note_update_schema_has_content_max_length` | Pydantic v2 reports `maxLength` differently than v1. **Action:** update to Pydantic v2 introspection — use `NoteUpdate.model_json_schema()` then check `properties.content.maxLength`. |
-| **Router prefix tests** | 2 | `test_dictionary.py::TestDictionaryRouterImport::test_router_prefix`, `test_insights.py::TestInsightsModuleImport::test_insights_router_exists` | Tests assert specific prefix strings. **Action:** update assertions to match actual prefix (`/api/dictionary` vs whatever expected). |
-| **Security config production guard** | 1 | `test_security_config.py::TestJWTSecretKeyProductionGuard::test_placeholder_rejected_in_production` | Test sets `JWT_SECRET_KEY="change-me-in-production"` + `ENVIRONMENT="production"` and expects `ValidationError`. The implementation raises `RuntimeError` from `check_production_secrets()` at module load (a different exception). **Action:** update test to expect `ValidationError` from the field validator, OR `RuntimeError` from the boot check, depending on which path triggers first. |
-| **OCR race condition** | 1 | `test_ocr.py::TestOCRBackgroundTaskRefetchesByID::test_race_condition_note_not_yet_in_db_handled_without_simple_namespace` | Test asserts `SimpleNamespace` is NOT used. QA-06 fix removed it but the test grep pattern may also match a comment. **Action:** loosen the assertion or strengthen the source check. |
-| **GIN FTS index migration assertion** | 1 | `test_search.py::TestPERF05FullTextIndex::test_migration_creates_gin_index_on_notes_content` | Test looks for `CREATE INDEX CONCURRENTLY` in migration 005. Lead removed `CONCURRENTLY` for first deploy. **Action:** drop `CONCURRENTLY` from the assertion OR set `transaction_per_migration=False` and restore `CONCURRENTLY`. |
-| **WS auth tests marked async-but-sync** | 4 | `test_voice_ws.py::TestValidateWsToken::test_invalid_token_raises`, etc. | Tests are decorated with `@pytest.mark.asyncio` but the function bodies are sync. PytestWarning issued. **Action:** remove the `pytestmark = pytest.mark.asyncio` from those classes, or convert the bodies to `async def` (no functional change since they only call sync `validate_ws_token`). |
-
-### 1b — Real production bug found in this set
-
-`backend/app/services/speech.py:84`: `speechsdk.CancellationDetails.from_result(result)` — the `from_result` classmethod doesn't exist in azure-cognitiveservices-speech 1.40. Correct API is the constructor `CancellationDetails(result)`. **Already fixed.**
-
-### 1c — Suggested triage approach
-
-For each cluster:
-1. Decide: real bug or test-side flake?
-2. If real bug → fix in `backend/app/`
-3. If test-side → fix in `backend/tests/` so the test asserts current behavior
-4. Re-run pytest; expect ≥95% pass rate (≤2 acceptable acknowledged failures)
+The original cluster-by-cluster breakdown that was here is now historical and is captured in PROGRESS § 12 alongside the per-PR root-cause / fix / verification table.
 
 ---
 

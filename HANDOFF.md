@@ -2,7 +2,7 @@
 
 > **Read this first.** This document briefs an incoming agent (Claude / Copilot / Aider / human) on the state of the project so work can resume without context loss.
 
-**Last updated:** 2026-05-06 (Round 11: GitHub Actions deploys wired with OIDC + 8 test-triage PRs landed since merge of #1)
+**Last updated:** 2026-05-07 (Round 12: test triage fleet cleanup — backend 100% / frontend 99.8% green via PRs #13–#18)
 **Status:** Live on Azure. Phase 1 MVP + Phase 2 (Personal Dictionary + Shadow Reader) deployed. **Eight rounds** of user-reported UX bug-bashes closed. Round 8 (latest): mobile recording silent-failure (iOS MediaRecorder needs `start(timeslice)` to emit chunks mid-stream; mobile UI no longer shows degraded toast and mirrors response into Dexie correctly) + cross-browser audio playback (iOS Safari has zero WebM support — backend now transcodes all uploaded audio to MP4/AAC at upload time via existing ffmpeg; one-time migration script converts existing webm blobs). 131 backend regression tests passing (rounds 4–8 + pipeline + auth).
 
 ---
@@ -82,8 +82,8 @@ az containerapp secret list --name cortexks-api --resource-group cortex-rg --sho
 | **P1** | ~~Move APScheduler distill cron OUT of Container App~~ ✅ Round 9 (2026-05-06) — **removed entirely** per user decision; daily/weekly summary UI + endpoints + table also dropped (alembic 007) | KNOWN_ISSUES.md § "P1 — APScheduler removed entirely" |
 | **P1** | Migrate refresh token back to first-party cookies once a custom domain or SWA Standard SKU is in place (Round 7 escape hatch via localStorage is XSS-readable) | `KNOWN_ISSUES.md` § "Migrate refresh token to first-party cookies" + `DECISIONS.md` § 22v |
 | **P1** | ~~Wire GitHub Actions deploy secrets so push-to-main auto-deploys~~ ✅ Round 11 (2026-05-06) — OIDC-federated `cortex-github-actions` AAD app + 7 repo secrets; both workflows green on push and `workflow_dispatch` | KNOWN_ISSUES.md § "P1 — GitHub Actions deploys wired" |
-| **P1** | Triage 30 backend test-side failures (assertions out of sync with implementation refactors). Goal: ≥95% pass rate | `KNOWN_ISSUES.md` § "Backend test failures" |
-| **P2** | Frontend `api-client.test.ts` mock-isolation flake (`vi.clearAllMocks` → `vi.resetAllMocks`) | `KNOWN_ISSUES.md` § "Frontend mock-isolation" |
+| **P1** | ~~Triage 30 backend test-side failures~~ ✅ Round 12 (2026-05-07) — backend now 626/0/6 = **100%** | KNOWN_ISSUES.md § "Backend + frontend test failures" |
+| **P2** | ~~Frontend `api-client.test.ts` mock-isolation flake~~ ✅ Closed PR #14 (2026-05-07) — beforeEach restores `useAuthStore.getState` mock state | n/a |
 | **P2** | Spec-auditor SA-M1 cosmetic migration cleanup | `KNOWN_ISSUES.md` § "SA-M1" |
 | **P3** | Phase 3 scope — Express UI polish, Settings export, image-capture UI, voice answer for Shadow Reader, E2E + perf | `PLAN.md` § 6 P3 |
 | **P3** | JTI revocation in Redis or DB table (in-memory now; lost on Container App restart) | `KNOWN_ISSUES.md` § "JTI revocation" |

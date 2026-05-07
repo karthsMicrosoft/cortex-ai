@@ -15,15 +15,28 @@ import '@testing-library/jest-dom';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
 
 // ----- Mock auth store -----
+// The api/client.ts retry-on-401 path calls useAuthStore.getState(), so the
+// mock must expose getState() in addition to the hook callable form. Older
+// versions of this test only mocked the hook (vi.fn(() => ({...}))), which
+// caused 'useAuthStore.getState is not a function' to bubble up from any
+// /api call the page made.
 const mockLogin = vi.fn();
+const _loginPageAuthState = {
+  accessToken: null,
+  user: null,
+  login: mockLogin,
+  logout: vi.fn(),
+  setAccessToken: vi.fn(),
+};
 vi.mock('../store/authStore', () => ({
-  useAuthStore: vi.fn(() => ({
-    accessToken: null,
-    user: null,
-    login: mockLogin,
-    logout: vi.fn(),
-    setAccessToken: vi.fn(),
-  })),
+  useAuthStore: Object.assign(
+    vi.fn(() => _loginPageAuthState),
+    {
+      getState: () => _loginPageAuthState,
+      subscribe: () => () => {},
+      setState: () => {},
+    },
+  ),
 }));
 
 // ----- Mock auth API -----

@@ -20,6 +20,11 @@ import logging
 import os
 import uuid
 
+# Speech SDK imported at module level so tests can patch
+# ``app.api.voice.speechsdk`` reliably (function-local imports of namespace
+# packages don't always honor sys.modules patches in Python 3.11+).
+import azure.cognitiveservices.speech as speechsdk
+
 from fastapi import APIRouter, BackgroundTasks, Depends, File, HTTPException, Query, UploadFile, WebSocket, WebSocketDisconnect, status
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
@@ -260,7 +265,7 @@ async def voice_stream(
           {"type": "error", "message": "..."}                     — on SDK init failure
     """
     import asyncio
-    import azure.cognitiveservices.speech as speechsdk
+    # speechsdk imported at module level (see top of file).
 
     # ------------------------------------------------------------------ auth
     # Validate token BEFORE accept() so rejected connections get a clean close.

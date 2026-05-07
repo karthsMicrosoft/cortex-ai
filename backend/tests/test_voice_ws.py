@@ -251,7 +251,7 @@ class TestWebSocketAuth:
         """
         sdk_mocks = speech_sdk_mock
 
-        with patch("azure.cognitiveservices.speech", sdk_mocks["sdk"]):
+        with patch("app.api.voice.speechsdk", sdk_mocks["sdk"]):
             try:
                 with ws_client.websocket_connect(
                     f"/api/voice/stream?token={valid_token}"
@@ -286,7 +286,7 @@ class TestPhraseListLoader:
 
         mock_load = AsyncMock(return_value=5)
 
-        with patch("azure.cognitiveservices.speech", sdk_mocks["sdk"]):
+        with patch("app.api.voice.speechsdk", sdk_mocks["sdk"]):
             with patch("app.api.voice.load_user_phrase_list", mock_load):
                 try:
                     with ws_client.websocket_connect(
@@ -310,7 +310,7 @@ class TestPhraseListLoader:
         """
         sdk_mocks = speech_sdk_mock
 
-        with patch("azure.cognitiveservices.speech", sdk_mocks["sdk"]):
+        with patch("app.api.voice.speechsdk", sdk_mocks["sdk"]):
             with patch("app.api.voice.load_user_phrase_list", None):
                 connection_succeeded = False
                 try:
@@ -372,7 +372,7 @@ class TestPartialFinalMessages:
 
         received: list[dict] = []
 
-        with patch("azure.cognitiveservices.speech", sdk_mocks["sdk"]):
+        with patch("app.api.voice.speechsdk", sdk_mocks["sdk"]):
             try:
                 with ws_client.websocket_connect(
                     f"/api/voice/stream?token={valid_token}"
@@ -421,7 +421,7 @@ class TestPartialFinalMessages:
 
         received: list[dict] = []
 
-        with patch("azure.cognitiveservices.speech", sdk_mocks["sdk"]):
+        with patch("app.api.voice.speechsdk", sdk_mocks["sdk"]):
             try:
                 with ws_client.websocket_connect(
                     f"/api/voice/stream?token={valid_token}"
@@ -468,7 +468,12 @@ class TestReceiveLoopAndDisconnect:
 
         audio_chunk = b"\x52\x49\x46\x46" + b"\x00" * 20  # fake RIFF header
 
-        with patch("azure.cognitiveservices.speech", sdk_mocks["sdk"]):
+        # load_user_phrase_list is a real async helper that does a DB query.
+        # The ws_client fixture doesn't override get_db, so the real call
+        # blocks the WS handler before it ever reaches the receive loop.
+        # Stub it out (matches the existing TestPhraseListLoader pattern).
+        with patch("app.api.voice.speechsdk", sdk_mocks["sdk"]), \
+             patch("app.api.voice.load_user_phrase_list", AsyncMock(return_value=0)):
             try:
                 with ws_client.websocket_connect(
                     f"/api/voice/stream?token={valid_token}"
@@ -493,7 +498,8 @@ class TestReceiveLoopAndDisconnect:
         sdk_mocks = speech_sdk_mock
         push_stream = sdk_mocks["push_stream"]
 
-        with patch("azure.cognitiveservices.speech", sdk_mocks["sdk"]):
+        with patch("app.api.voice.speechsdk", sdk_mocks["sdk"]), \
+             patch("app.api.voice.load_user_phrase_list", AsyncMock(return_value=0)):
             try:
                 with ws_client.websocket_connect(
                     f"/api/voice/stream?token={valid_token}"
@@ -512,7 +518,8 @@ class TestReceiveLoopAndDisconnect:
         sdk_mocks = speech_sdk_mock
         recognizer = sdk_mocks["recognizer"]
 
-        with patch("azure.cognitiveservices.speech", sdk_mocks["sdk"]):
+        with patch("app.api.voice.speechsdk", sdk_mocks["sdk"]), \
+             patch("app.api.voice.load_user_phrase_list", AsyncMock(return_value=0)):
             try:
                 with ws_client.websocket_connect(
                     f"/api/voice/stream?token={valid_token}"
@@ -548,7 +555,7 @@ class TestSpeechSdkInitFailure:
 
         received: list[dict] = []
 
-        with patch("azure.cognitiveservices.speech", broken_sdk):
+        with patch("app.api.voice.speechsdk", broken_sdk):
             try:
                 with ws_client.websocket_connect(
                     f"/api/voice/stream?token={valid_token}"

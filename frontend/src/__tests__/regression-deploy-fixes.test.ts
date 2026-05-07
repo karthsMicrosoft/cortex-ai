@@ -262,7 +262,13 @@ describe('R6: Login/Register set the access token BEFORE awaiting me()', () => {
 
   it('RegisterPage stores access_token before calling me()', () => {
     const src = readSrc('src/pages/RegisterPage.tsx');
-    const setAccessTokenIdx = src.indexOf('setAccessToken(data.access_token)');
+    // Round-7: production uses ``regData.access_token`` (the variable name for
+    // the register-response object) rather than the ``data.access_token`` shape
+    // used by login. Match either to keep the regression guard meaningful.
+    const setAccessTokenIdx = Math.max(
+      src.indexOf('setAccessToken(regData.access_token)'),
+      src.indexOf('setAccessToken(data.access_token)'),
+    );
     const meCallIdx = src.indexOf('await me()');
     expect(setAccessTokenIdx).toBeGreaterThan(-1);
     expect(meCallIdx).toBeGreaterThan(-1);

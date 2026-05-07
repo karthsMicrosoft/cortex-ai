@@ -171,7 +171,9 @@ describe('CreatePage (Task 5.3)', () => {
   it('renders a Create or Express heading', async () => {
     renderCreatePage();
     await waitFor(() => {
-      const heading = screen.getByRole('heading', { name: /create|express/i });
+      // CreatePage has both an h1 ("Create") and an h2 ("What do you want to
+      // create?"). Both match /create/i, so disambiguate by level.
+      const heading = screen.getByRole('heading', { level: 1, name: /create|express/i });
       expect(heading).toBeInTheDocument();
     });
   });
@@ -181,7 +183,10 @@ describe('CreatePage (Task 5.3)', () => {
   it('renders kind chooser with song option', async () => {
     renderCreatePage();
     await waitFor(() => {
-      const songOption = screen.getByText(/song/i);
+      // Two buttons can match /song idea/i — the kind chooser ("Song Idea")
+      // AND the bottom generate button ("Generate Song Idea") when selectedKind
+      // is 'song'. Use exact match to target only the chooser button.
+      const songOption = screen.getByRole('button', { name: /^song idea$/i });
       expect(songOption).toBeInTheDocument();
     });
   });
@@ -189,7 +194,7 @@ describe('CreatePage (Task 5.3)', () => {
   it('renders kind chooser with practice option', async () => {
     renderCreatePage();
     await waitFor(() => {
-      const practiceOption = screen.getByText(/practice/i);
+      const practiceOption = screen.getByRole('button', { name: /^practice plan$/i });
       expect(practiceOption).toBeInTheDocument();
     });
   });
@@ -197,7 +202,7 @@ describe('CreatePage (Task 5.3)', () => {
   it('renders kind chooser with reflection option', async () => {
     renderCreatePage();
     await waitFor(() => {
-      const reflectionOption = screen.getByText(/reflection/i);
+      const reflectionOption = screen.getByRole('button', { name: /^reflection$/i });
       expect(reflectionOption).toBeInTheDocument();
     });
   });
@@ -205,10 +210,9 @@ describe('CreatePage (Task 5.3)', () => {
   it('has exactly three kind options', async () => {
     renderCreatePage();
     await waitFor(() => {
-      // All three kinds should be visible
-      expect(screen.getByText(/song/i)).toBeInTheDocument();
-      expect(screen.getByText(/practice/i)).toBeInTheDocument();
-      expect(screen.getByText(/reflection/i)).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: /^song idea$/i })).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: /^practice plan$/i })).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: /^reflection$/i })).toBeInTheDocument();
     });
   });
 
@@ -217,11 +221,13 @@ describe('CreatePage (Task 5.3)', () => {
   it('renders source note selector', async () => {
     renderCreatePage();
     await waitFor(() => {
-      // Should show a list/selector of notes to choose from
-      expect(
-        screen.queryByText(/select notes|source notes|choose notes|pick notes/i) ??
-        screen.queryAllByRole('checkbox').length > 0 ? document.createElement('div') : null
-      ).toBeInTheDocument();
+      // Production renders a "Source Notes (N selected)" h2 above a list of
+      // <button aria-pressed> per note. Match either the heading or the list.
+      const heading = screen.queryByRole('heading', { name: /source notes/i });
+      const noteButtons = screen
+        .queryAllByRole('button')
+        .filter((b) => b.getAttribute('aria-pressed') !== null);
+      expect(heading !== null || noteButtons.length > 0).toBe(true);
     });
   });
 
@@ -346,26 +352,58 @@ describe('CreatePage (Task 5.3)', () => {
     let resolveGenerate: (value: unknown) => void;
     const pendingGenerate = new Promise((res) => { resolveGenerate = res; });
 
+    // Same notes-list mock as the default setupFetchMocks so the source-note
+    // selector actually has rows to click. The generate endpoint is left
+    // pending so the loading state stays visible for the assertion.
     vi.stubGlobal('fetch', vi.fn().mockImplementation((url: string) => {
       if (url.includes('ai/generate')) return pendingGenerate;
-      return Promise.resolve({ ok: true, status: 200, json: async () => ({ items: [], total: 0 }) });
+      if (url.includes('api/notes')) {
+        return Promise.resolve({
+          ok: true,
+          status: 200,
+          json: async () => ({
+            items: NOTE_FIXTURES.map((n) => ({
+              id: n.serverId,
+              content: n.content,
+              category: n.category,
+              source_type: n.sourceType,
+              processing_status: n.processingStatus,
+              created_at: n.createdAt.toISOString(),
+              updated_at: n.updatedAt.toISOString(),
+              tags: n.tags,
+            })),
+            total: NOTE_FIXTURES.length,
+          }),
+        });
+      }
+      return Promise.resolve({ ok: true, status: 200, json: async () => ({}) });
     }));
 
     renderCreatePage();
 
-    await waitFor(() => {
-      screen.getByText(/Jazz improvisation/i);
+    // Production renders source-note rows as <button aria-pressed> with text
+    // starting with the category in brackets (e.g. "[Music] Jazz improvisation
+    // in Dorian mode."). Kind-chooser buttons ALSO have aria-pressed, so
+    // filter further by looking for the bracketed category prefix.
+    const noteButton = await waitFor(() => {
+      const btn = screen
+        .queryAllByRole('button')
+        .find((b) =>
+          b.getAttribute('aria-pressed') !== null &&
+          /^\[[A-Za-z]+\]/.test(b.textContent ?? ''),
+        );
+      if (!btn) throw new Error('source-note button not yet rendered');
+      return btn;
     });
 
-    const checkboxes = screen.queryAllByRole('checkbox');
-    if (checkboxes.length > 0) {
-      fireEvent.click(checkboxes[0]);
-      const generateBtn = screen.getByRole('button', { name: /generate|create/i });
-      fireEvent.click(generateBtn);
+    fireEvent.click(noteButton);
+    const generateBtn = screen.getByRole('button', { name: /^generate /i });
+    fireEvent.click(generateBtn);
 
-      // During generation, a loading indicator should appear
-      expect(document.body.textContent).toMatch(/generating|loading|creating|…|\.\.\./i);
-    }
+    // During generation, the button text flips to "Generating…"
+    await waitFor(() => {
+      expect(document.body.textContent).toMatch(/generating|loading|creating|\.\.\./i);
+    });
   });
 
   // --- Error state ---

@@ -16,15 +16,26 @@ import '@testing-library/jest-dom';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
 
 // ----- Mock auth store -----
+// Same pattern as LoginPage.test.tsx — api/client.ts:getState() needs to
+// exist, otherwise pages that hit /api blow up with
+// 'useAuthStore.getState is not a function'.
 const mockLoginStore = vi.fn();
+const _registerPageAuthState = {
+  accessToken: null,
+  user: null,
+  login: mockLoginStore,
+  logout: vi.fn(),
+  setAccessToken: vi.fn(),
+};
 vi.mock('../store/authStore', () => ({
-  useAuthStore: vi.fn(() => ({
-    accessToken: null,
-    user: null,
-    login: mockLoginStore,
-    logout: vi.fn(),
-    setAccessToken: vi.fn(),
-  })),
+  useAuthStore: Object.assign(
+    vi.fn(() => _registerPageAuthState),
+    {
+      getState: () => _registerPageAuthState,
+      subscribe: () => () => {},
+      setState: () => {},
+    },
+  ),
 }));
 
 // ----- Mock auth API -----
@@ -131,14 +142,16 @@ describe('RegisterPage (Task 5.4)', () => {
     });
   });
 
-  it('auto-logs in after successful registration', async () => {
+  it('logs in immediately after successful registration (Round-7: no separate /login call)', async () => {
+    // Round-7 contract: /api/auth/register now returns access_token +
+    // refresh_token in the body, so RegisterPage no longer makes a follow-up
+    // loginApi call. It uses regData.access_token directly. See DECISIONS § 22v.
     vi.mocked(registerApi).mockResolvedValueOnce({
       id: 'u-autologin',
       email: 'auto@example.com',
       display_name: 'Auto',
-    });
-    vi.mocked(loginApi).mockResolvedValueOnce({
       access_token: 'auto-tok',
+      refresh_token: 'auto-refresh',
       token_type: 'bearer',
     });
     vi.mocked(meApi).mockResolvedValueOnce({
@@ -152,20 +165,26 @@ describe('RegisterPage (Task 5.4)', () => {
     fireEvent.change(getPasswordInput()!, { target: { value: 'autopass' } });
     fireEvent.click(getSubmitButton());
 
+    // The auth store's login() is called with the token from the register
+    // response (no separate loginApi round-trip).
     await waitFor(() => {
-      // login API called after register with same credentials
-      expect(loginApi).toHaveBeenCalledWith('auto@example.com', 'autopass');
+      expect(mockLoginStore).toHaveBeenCalledWith(
+        'auto-tok',
+        expect.objectContaining({ email: 'auto@example.com' }),
+      );
     });
+    // Round-7 regression guard: loginApi must NOT have been called.
+    expect(loginApi).not.toHaveBeenCalled();
   });
 
-  it('calls authStore.login() with token after auto-login', async () => {
+  it('calls authStore.login() with the token from the register response (Round-7)', async () => {
+    // Round-7: register response itself carries access_token + refresh_token.
     vi.mocked(registerApi).mockResolvedValueOnce({
       id: 'u-store',
       email: 'store@example.com',
       display_name: 'Store',
-    });
-    vi.mocked(loginApi).mockResolvedValueOnce({
       access_token: 'store-tok',
+      refresh_token: 'store-refresh',
       token_type: 'bearer',
     });
     vi.mocked(meApi).mockResolvedValueOnce({
@@ -187,14 +206,13 @@ describe('RegisterPage (Task 5.4)', () => {
     });
   });
 
-  it('navigates to / after successful registration + auto-login', async () => {
+  it('navigates to / after successful registration (Round-7: register response carries token)', async () => {
     vi.mocked(registerApi).mockResolvedValueOnce({
       id: 'u-nav',
       email: 'nav@example.com',
       display_name: 'Nav',
-    });
-    vi.mocked(loginApi).mockResolvedValueOnce({
       access_token: 'nav-tok',
+      refresh_token: 'nav-refresh',
       token_type: 'bearer',
     });
     vi.mocked(meApi).mockResolvedValueOnce({

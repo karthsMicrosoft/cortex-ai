@@ -2,7 +2,7 @@
 
 > **Open work, bugs not fixed, gaps from "fully done."** Anything tagged P0/P1/P2 here is meant to be picked up by the next agent.
 
-**Last updated:** 2026-05-07 (Round 12: test triage fleet cleanup — backend 100% / frontend 99.8% green via PRs #13–#18)
+**Last updated:** 2026-05-07 (Round 13: P0 Container App auto-restart + health-check alerts closed via PR #20)
 
 ---
 
@@ -124,6 +124,24 @@ Four production bugs fixed and verified live:
 Result: text note submission now reaches `Enriched` status end-to-end. Hard refresh preserves session.
 
 Round-2 issues filed by the UX-tester agent live in `e2e/ISSUES.md` (next pickup).
+
+## ✅ P0 — Container App auto-restart + health-check alerts (resolved 2026-05-07, Round 13)
+
+**Status:** Closed.
+
+**Auto-restart half** was already in place: `infra/modules/container-app.bicep` lines 133–148 configure Liveness + Readiness probes against `/api/health` with `failureThreshold: 3`. Container Apps platform automatically restarts the replica when liveness fails 3× consecutively. No infra change needed; just verified + documented.
+
+**Alerts half** added: 3 Azure Monitor alerts in `cortex-rg` routing to `karths@microsoft.com` via shared Action Group `cortex-alerts-ag`.
+
+| Alert | Severity | Fires when |
+|---|---|---|
+| `cortexks-api-restart-spike` | 2 | Container App `RestartCount` (max) >= 3 over 5 min |
+| `cortexks-api-5xx-rate` | 2 | Container App `Requests` total >= 10 with `statusCodeCategory=5xx` over 5 min |
+| `cortexks-api-availability` | 1 | App Insights synthetic ping to `/api/health` from Chicago drops availability < 100% over 5 min |
+
+App Insights `cortexks-ai` (centralus, classic web kind) + classic URL-ping web test `cortexks-api-health-ping` (every 5 min from `us-il-ch1-azr`, expects HTTP 200 + content match `"ok"`) bootstrap the availability surface. Cost ~$1/month.
+
+Rebuild recipe + Bicep-vs-CLI rationale in `docs/DEPLOYMENT.md` § "Health-Check Alerts". Decision history in `DECISIONS.md` § 22ac.
 
 ## P0 — Smoke test the deployed app end-to-end
 

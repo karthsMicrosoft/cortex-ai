@@ -149,7 +149,7 @@ End-to-end happy path to validate before declaring "done":
 ### P0 — Blockers / live-deployment polish
 1. ~~Run smoke test plan (§ 5) end-to-end in browser. Log any bugs to `KNOWN_ISSUES.md`.~~ ✅ Done 2026-05-06 (Round 9) — auth/refresh/capture/library/insights/sync all green.
 2. ~~Rotate the deploy-time secrets via Key Vault (currently inline). Use `infra/parameters.keyvault-template.json`.~~ ✅ Done 2026-05-06 (Round 9) — `cortexks-kv` live; container app `database-url` + `jwt-secret-key` resolve via KV refs with system-assigned managed identity.
-3. Add a basic **Container App auto-restart on failure** (already implicit via probes) plus health check alerts.
+3. ~~Add a basic **Container App auto-restart on failure** (already implicit via probes) plus health check alerts.~~ ✅ Done 2026-05-07 (Round 13) — Bicep probes already gave auto-restart; added 3 Azure Monitor alerts (`cortexks-api-restart-spike`, `cortexks-api-5xx-rate`, `cortexks-api-availability`) routing through Action Group `cortex-alerts-ag` to `karths@microsoft.com`. App Insights `cortexks-ai` + URL-ping web test on `/api/health` from Chicago. See `docs/DEPLOYMENT.md` § "Health-Check Alerts".
 
 ### P1 — Operational hygiene
 4. ~~Move APScheduler distill cron OUT of Container App into Container Apps Job~~ ✅ **Removed entirely 2026-05-06 (Round 9)** — daily/weekly summary functionality dropped per user product decision; alembic 007 dropped the table; UI cards gone.

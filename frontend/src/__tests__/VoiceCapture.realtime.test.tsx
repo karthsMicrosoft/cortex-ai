@@ -48,6 +48,14 @@ vi.mock('../hooks/useVoiceRecorder', () => ({
     start: vi.fn().mockResolvedValue(undefined),
     stop: vi.fn().mockResolvedValue(new Blob(['audio'], { type: 'audio/webm' })),
   }),
+  // Round-7 made WS desktop-only: VoiceCapture imports ``isMobile`` from this
+  // hook and short-circuits the WS path when isMobile is true. The realtime
+  // tests assert the WS path is taken, so force isMobile=false here. (Without
+  // this, jsdom's default navigator.userAgent isn't 'mobile', but if any other
+  // test in the run mutates it OR vitest's default UA changes, the WS path
+  // would silently be skipped.)
+  isMobile: false,
+  IS_MOBILE: false,
   setPartialTranscript: (
     _recorder: unknown,
     text: string,

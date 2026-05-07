@@ -174,15 +174,25 @@ describe('R3: VoiceCapture.tsx uses wsUrl() + apiUrl()', () => {
 // R4 — ShadowReaderPrompt.tsx uses apiUrl()
 // =========================================================================
 
-describe('R4: ShadowReaderPrompt.tsx voice-answer upload uses apiUrl()', () => {
+describe('R4: ShadowReaderPrompt voice-answer upload (feature removed)', () => {
+  // The voice-mic answer + audio-upload path was removed from
+  // ShadowReaderPrompt — the bottom-sheet now accepts text answers only.
+  // The R4 invariant we still want to guard is: the component must NOT
+  // ship a relative fetch('/api/upload/audio') path that would hit the
+  // SWA host instead of the API host. The "wraps with apiUrl()" assertion
+  // was about a since-removed codepath; converted to a removal-guard.
+  // (The component's docstring still mentions /api/upload/audio for
+  // historical context — that's fine, what matters is no runtime fetch.)
   const src = readSrc('src/components/ShadowReaderPrompt.tsx');
 
   it('does NOT call fetch with a relative /api/upload/audio path', () => {
     expect(src).not.toMatch(/fetch\s*\(\s*['"]\/api\/upload\/audio['"]/);
   });
 
-  it('wraps the voice-answer upload URL with apiUrl()', () => {
-    expect(src).toMatch(/fetch\s*\(\s*apiUrl\s*\(\s*['"]\/api\/upload\/audio['"]/);
+  it('does NOT call fetch with apiUrl(/api/upload/audio) either (feature removed)', () => {
+    // If voice answer comes back, restore both this test and the original
+    // "wraps with apiUrl" expectation.
+    expect(src).not.toMatch(/fetch\s*\(\s*apiUrl\s*\(\s*['"]\/api\/upload\/audio['"]/);
   });
 });
 

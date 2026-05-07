@@ -390,14 +390,23 @@ class TestRefreshEndpoint:
 
     @pytest.mark.asyncio
     async def test_refresh_returns_new_access_token(self, client: AsyncClient):
-        """POST /api/auth/refresh must return a new access_token."""
+        """POST /api/auth/refresh must return a new access_token.
+
+        Round-7 (2026-05-01) reversed SEC-02 — refresh now expects the
+        token in the JSON body OR the cookie. The httpx ASGITransport
+        ``base_url='http://test'`` fixture won't echo back the Secure
+        cookie, so use the body form (which is what the live PWA does
+        too — see DECISIONS § 22v).
+        """
         email = _unique_email()
         await _register(client, email)
         login_resp = await _login(client, email)
+        refresh_token = login_resp.json()["refresh_token"]
 
-        # Refresh token is set as an HttpOnly cookie by login — use cookie-based refresh
-        # (AsyncClient preserves cookies automatically across requests)
-        resp = await client.post("/api/auth/refresh")
+        resp = await client.post(
+            "/api/auth/refresh",
+            json={"refresh_token": refresh_token},
+        )
 
         assert resp.status_code == 200, (
             f"Expected 200 from /api/auth/refresh, got {resp.status_code}: {resp.text}"
@@ -412,9 +421,14 @@ class TestRefreshEndpoint:
         await _register(client, email)
         login_resp = await _login(client, email)
         old_access = login_resp.json()["access_token"]
+        refresh_token = login_resp.json()["refresh_token"]
 
-        # Use cookie that was set by login
-        resp = await client.post("/api/auth/refresh")
+        # Use body-form refresh (Round-7 SEC-02 reversal) so the test works
+        # regardless of cookie-Secure / SameSite quirks.
+        resp = await client.post(
+            "/api/auth/refresh",
+            json={"refresh_token": refresh_token},
+        )
         if resp.status_code in (401, 422, 405):
             pytest.skip("Refresh endpoint not yet implemented or requires different auth")
 
@@ -622,10 +636,13 @@ class TestRefreshTokenInBody:
             )
 
     @pytest.mark.asyncio
-    async def test_login_refresh_cookie_samesite_lax(self, client: AsyncClient):
+    async def test_login_refresh_cookie_samesite_none(self, client: AsyncClient):
         """
-        SEC-02: The refresh cookie must have 'SameSite=Lax' to protect against
-        CSRF while still allowing top-level navigations.
+        Round-7 (2026-05-01) — SEC-02 was reversed for the cross-origin
+        SWA → backend cookie flow. The refresh cookie now ships with
+        ``SameSite=None`` (was ``SameSite=Lax`` originally) so Edge's
+        Balanced tracking-prevention preserves it across the third-party
+        boundary. See DECISIONS § 22v.
         """
         email = _unique_email()
         await _register(client, email)
@@ -638,8 +655,9 @@ class TestRefreshTokenInBody:
             pytest.skip("No refresh_token Set-Cookie found; SEC-02 cookie presence tested elsewhere")
 
         for cookie_header in refresh_cookies:
-            assert "samesite=lax" in cookie_header.lower(), (
-                f"SEC-02 NOT FIXED: refresh_token cookie must have 'SameSite=Lax'. "
+            assert "samesite=none" in cookie_header.lower(), (
+                f"Round-7 SEC-02 reversal: refresh_token cookie must have 'SameSite=None' "
+                f"(NOT 'SameSite=Lax') for cross-origin SWA -> backend. "
                 f"Raw Set-Cookie header: {cookie_header}"
             )
 

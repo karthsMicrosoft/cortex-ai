@@ -2,7 +2,7 @@
 
 > **Chronological log of what's been done.** New work appends to the end. Use this to verify "we already did X" before re-doing.
 
-**Last updated:** 2026-05-07 (Round 13: P0 Container App auto-restart + health-check alerts closed via PR #20)
+**Last updated:** 2026-05-07 (Round 14: SA-M1 cosmetic migration cleanup closed + P1 first-party-cookies explicitly deferred via PR #21)
 
 ---
 
@@ -766,4 +766,50 @@ User picked up the last open P0 row from PLAN.md § 6: _"Add a basic Container A
 - All 3 metric alerts return `enabled: true` from `az monitor metrics alert list`.
 - Web test `cortexks-api-health-ping` returns `provisioningState: Succeeded`, `enabled: true`, `locations: [{ location: us-il-ch1-azr }]`, `hidden-link` tag pointing to `cortexks-ai`.
 - Action Group has 1 enabled email receiver (`karths@microsoft.com`).
+
+
+
+## 14 — Round 14 — SA-M1 migration cleanup + P1 cookie deferral (2026-05-07)
+
+User picked P2 SA-M1 (cosmetic migration cleanup) after explicitly deferring P1 (first-party-cookie migration) on cost/value grounds.
+
+### P1 deferral decision
+User does not currently own a domain. Options weighed:
+- Buy a $12/yr domain + autonomous Azure DNS — cheap, requires one-time registrar step.
+- SWA Standard SKU ($9/mo) — fully autonomous via az CLI, ~9x more recurring cost.
+- Status quo (localStorage workaround per DECISIONS s 22v) — $ , XSS-readable but accepted MVP trade-off.
+
+User chose status quo. Captured in DECISIONS s 22ad and HANDOFF s 3b row updated to `Deferred`.
+
+### SA-M1 cleanup
+**Was:** `backend/alembic/versions/001_initial_schema.py` declared `notes.embedding` as `sa.Text()` placeholder inside `op.create_table()`, then dropped + re-added as `vector(1536)` via raw DDL — three statements where one suffices.
+
+**Now:** Placeholder column + `DROP COLUMN` removed. Single `op.execute("ALTER TABLE notes ADD COLUMN embedding vector(1536)")` after `create_table`.
+
+**TDD pattern (red-then-green):**
+1. RED — added 2 static tests to `tests/test_database.py::TestAlembicMigrationFile`:
+   - `test_no_embedding_placeholder_dance_in_001` — asserts no `sa.Column("embedding"`, no `DROP COLUMN embedding`, exactly 1 `ADD COLUMN embedding vector(1536)`.
+   - `test_hnsw_index_still_present_after_001` — regression guard that `idx_notes_embedding` + HNSW + `vector_cosine_ops` survive.
+2. Verified RED: 1/10 failed in TestAlembicMigrationFile (the placeholder-dance test).
+3. GREEN — applied surgical edit to migration 001 (2 lines removed from `upgrade()`, comment updated).
+4. Verified GREEN: 10/10 tests pass.
+5. Full backend regression: `628 passed, 6 skipped, 1 xfailed, 1 xpassed` (Round 12 baseline 626 + 2 new tests = 628). Zero regressions.
+
+**Safety:** Migration 001 has already run on prod (alembic_version at 007). Editing the file is 100% no-op for the live container; only affects from-scratch redeploys. Schema produced by fresh deploy is identical except for column position (mid-table now vs last-table before), which is invisible to SQLAlchemy ORM (addresses columns by name, never by ordinal).
+
+### Files touched (single small PR)
+- `backend/alembic/versions/001_initial_schema.py` — production fix (-3 lines, +5 lines incl. updated explanatory comment).
+- `backend/tests/test_database.py` — +2 static tests.
+- `KNOWN_ISSUES.md` — closed P2 SA-M1 row, updated P1 to `Deferred`.
+- `HANDOFF.md` s 3b — ticked P2 row, updated P1 row to `Deferred`.
+- `DECISIONS.md` — new s 22ad documenting P1 cookie-migration deferral rationale.
+- `PROGRESS.md` — Round 14 entry (this file).
+
+### Verification
+- `pytest tests/test_database.py::TestAlembicMigrationFile` -> 10 passed.
+- `pytest --ignore=tests/test_deployed_smoke.py` -> `628 passed, 6 skipped, 1 xfailed, 1 xpassed`.
+- TypeScript: N/A (no frontend changes).
+- Frontend tests: N/A (no frontend changes).
+- Chrome-devtools live verify: N/A (cosmetic SQL cleanup, no user-visible behaviour change).
+- Production deploy: skipped — migration 001 has already run on prod, change is dead code there.
 

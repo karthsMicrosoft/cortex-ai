@@ -2,7 +2,7 @@
 
 > **Open work, bugs not fixed, gaps from "fully done."** Anything tagged P0/P1/P2 here is meant to be picked up by the next agent.
 
-**Last updated:** 2026-05-07 (Round 13: P0 Container App auto-restart + health-check alerts closed via PR #20)
+**Last updated:** 2026-05-07 (Round 14: SA-M1 cosmetic migration cleanup closed + P1 first-party-cookies explicitly deferred via PR #21)
 
 ---
 
@@ -287,13 +287,21 @@ az containerapp secret list --name cortexks-api --resource-group cortex-rg \
 
 ---
 
-## P2 — Spec auditor SA-M1 (cosmetic migration cleanup)
+## ✅ P2 — Spec auditor SA-M1 (resolved 2026-05-07, Round 14)
 
-**Status:** `backend/alembic/versions/001_initial_schema.py` creates `notes.embedding` as `sa.Text()` placeholder, then drops and re-adds as `vector(1536)` via raw DDL.
+**Status:** Closed.
 
-**Why it works:** Functionally correct — pgvector type isn't natively known to SQLAlchemy DDL, so the workaround inserts the column then alters it.
+**Was:** `backend/alembic/versions/001_initial_schema.py` declared `notes.embedding` as `sa.Text()` placeholder inside `op.create_table()`, then dropped + re-added as `vector(1536)` via raw DDL — three statements where one suffices.
 
-**Cleanup:** Replace the placeholder + drop + re-add with a single `op.execute("ALTER TABLE notes ADD COLUMN embedding vector(1536)")`. Lower risk: keep as-is (it's documented).
+**Now:** The placeholder column + the `DROP COLUMN` are gone. Single `op.execute("ALTER TABLE notes ADD COLUMN embedding vector(1536)")` after `create_table`. Same end-state schema (column position differs, invisible to SQLAlchemy ORM which addresses by name).
+
+**Why safe to edit:** Migration 001 has already run on prod (alembic_version is at 007). Editing the file is a no-op for the live container; only affects from-scratch redeploys (e.g., disaster recovery, fresh dev DBs).
+
+**Coverage:** 2 new static-introspection tests in `tests/test_database.py::TestAlembicMigrationFile`:
+- `test_no_embedding_placeholder_dance_in_001` — asserts no `sa.Column("embedding"`, no `DROP COLUMN embedding`, exactly 1 `ADD COLUMN embedding vector(1536)`.
+- `test_hnsw_index_still_present_after_001` — regression guard that `idx_notes_embedding` + HNSW + `vector_cosine_ops` survive the cleanup.
+
+PR #21. Backend now at 628/0/6 (Round 12 baseline + 2 new tests).
 
 ---
 

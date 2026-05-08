@@ -90,8 +90,8 @@ def upgrade() -> None:
         sa.Column("mood", sa.String(30), nullable=True),
         sa.Column("music_metadata", postgresql.JSONB(), server_default=sa.text("'{}'::jsonb")),
         sa.Column("processing_status", sa.String(20), server_default="raw"),
-        # vector(1536) — raw DDL because SQLAlchemy doesn't know this type
-        sa.Column("embedding", sa.Text(), nullable=True),  # placeholder; real DDL via raw SQL below
+        # embedding column is added below via raw DDL — pgvector's vector(1536)
+        # type isn't natively known to SQLAlchemy DDL, so we add it after create_table.
         sa.Column("sync_status", sa.String(20), server_default="synced"),
         sa.Column("client_id", sa.String(100), nullable=True),
         # Phase 2 — Shadow Reader (inlined per design)
@@ -130,8 +130,10 @@ def upgrade() -> None:
         ),
     )
 
-    # Replace the placeholder embedding column with a real vector(1536) column
-    op.execute("ALTER TABLE notes DROP COLUMN embedding")
+    # Add the embedding column directly as vector(1536) — pgvector's vector type
+    # isn't natively known to SQLAlchemy DDL, so it's added here via raw SQL
+    # after op.create_table. (SA-M1 cleanup: previously created as TEXT placeholder
+    # then dropped + re-added; now done in a single ALTER TABLE statement.)
     op.execute("ALTER TABLE notes ADD COLUMN embedding vector(1536)")
 
     # Notes indexes

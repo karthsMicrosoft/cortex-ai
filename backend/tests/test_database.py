@@ -208,6 +208,45 @@ class TestAlembicMigrationFile:
             "downgrade() must drop tables"
         )
 
+    def test_no_embedding_placeholder_dance_in_001(self):
+        """SA-M1 cleanup (Round 14): migration 001 must NOT use the
+        placeholder-then-drop+re-add pattern for notes.embedding. It must
+        declare the vector column directly via
+        op.execute('ALTER TABLE notes ADD COLUMN embedding vector(1536)')
+        without a preceding DROP and without a sa.Column("embedding") placeholder.
+        """
+        if not MIGRATION_FILE.exists():
+            pytest.skip("Migration file not yet created")
+        content = MIGRATION_FILE.read_text(encoding="utf-8")
+        assert 'sa.Column("embedding"' not in content, (
+            "SA-M1: notes.embedding placeholder column still present in op.create_table. "
+            "Remove the sa.Text() placeholder and rely on the raw ALTER TABLE ADD COLUMN."
+        )
+        assert "DROP COLUMN embedding" not in content, (
+            "SA-M1: ALTER TABLE notes DROP COLUMN embedding still present. "
+            "Removing the placeholder makes the DROP unnecessary."
+        )
+        add_count = len(re.findall(r"ADD COLUMN embedding vector\(1536\)", content))
+        assert add_count == 1, (
+            f"SA-M1: expected exactly 1 ADD COLUMN embedding vector(1536); got {add_count}."
+        )
+
+    def test_hnsw_index_still_present_after_001(self):
+        """SA-M1 regression guard: cleanup must not remove the HNSW index
+        on notes.embedding."""
+        if not MIGRATION_FILE.exists():
+            pytest.skip("Migration file not yet created")
+        content = MIGRATION_FILE.read_text(encoding="utf-8")
+        assert "idx_notes_embedding" in content, (
+            "SA-M1 regression: HNSW index name idx_notes_embedding missing"
+        )
+        assert "hnsw" in content.lower(), (
+            "SA-M1 regression: HNSW index DDL missing"
+        )
+        assert "vector_cosine_ops" in content, (
+            "SA-M1 regression: vector_cosine_ops operator class missing from HNSW index"
+        )
+
 
 @pytest.mark.skipif(
     SKIP_MIGRATION,

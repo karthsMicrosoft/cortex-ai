@@ -614,3 +614,24 @@ All three alerts route through Action Group `cortex-alerts-ag` with single email
 - Wire Slack / Teams webhooks via the Action Group as a second receiver (parallel to email).
 - Add `Microsoft.Insights/scheduledQueryRules` for KQL alerts on container logs once a Log Analytics workspace is in use for other reasons.
 
+
+
+## § 22ad — Round 14: P2 SA-M1 cleanup + P1 first-party-cookie deferral (2026-05-07)
+
+Two related but separate decisions captured together because they were resolved in the same user session and the same PR (#21).
+
+### P2 SA-M1 — applied
+`backend/alembic/versions/001_initial_schema.py` `notes.embedding` column declaration was a 3-statement dance: declare as `sa.Text()` placeholder inside `create_table`, then `DROP COLUMN`, then `ADD COLUMN ... vector(1536)`. Functionally correct (pgvector type isn't natively known to SQLAlchemy DDL) but ugly. Cleaned up to a single `ADD COLUMN` after `create_table`. Schema-equivalent except for column ordinal position (invisible to SQLAlchemy ORM). Migration 001 has already run on prod (alembic_version at 007), so the edit is a true no-op for the live container.
+
+### P1 first-party-cookies — explicitly deferred (NOT done)
+User does not currently own a domain. Cost/value analysis run in Round 14:
+- Cheap domain (`$`12/yr) + Azure DNS zone — would require user to register a domain at a registrar (~5 min manual step) and either delegate DNS to Azure or add 4 records manually. Not autonomous.
+- SWA Standard SKU (`$`9/mo = `$`108/yr) — fully autonomous via az CLI; provides linked-backend reverse-proxy so SWA + Container App share the same origin; cookies become same-site without DNS work.
+- Status quo (localStorage workaround per s 22v) — `$`0 recurring; XSS-readable but threat model in s 22v accepts it for single-user MVP without CSP.
+
+User explicitly chose status quo: domain cost not worth the hassle, SWA Standard cost not worth the autonomy. The localStorage trade-off remains as documented in s 22v (refresh token alone is insufficient to take over an account; JTI denylist invalidates after one use; every refresh is logged).
+
+**Re-litigate when:** (a) user buys a domain for unrelated reasons, (b) SWA Standard becomes a project requirement (e.g., for the linked-backend feature), (c) the threat model changes (multi-tenant, public deployment, CSP added).
+
+**Mechanical change required when re-litigated:** Remove `localStorage.setItem/getItem('cortex_refresh')` from `frontend/src/api/auth.ts` and `client.ts`. Update `backend/tests/test_auth.py::TestRefreshTokenInBody` (rename and invert) back to the cookie-only contract. Backend `/login`, `/register`, `/refresh` already set the httpOnly cookie as defense-in-depth; the body augmentation is the only thing that needs to come out.
+

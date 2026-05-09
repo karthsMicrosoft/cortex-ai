@@ -1,0 +1,83 @@
+name: E2E (Playwright)
+
+# Hits the live SWA + Container Apps deployment with the shared E2E user
+# created by e2e/tests/auth.setup.ts. Intentionally NOT triggered on every PR
+# — failures here are typically deploy/state issues, not code regressions in
+# the PR under review. Use the nightly schedule to surface drift, and trigger
+# manually via the Actions tab (`workflow_dispatch`) to validate after a deploy
+# or to debug a specific failure.
+#
+# Required repository secrets:
+#   (none currently — auth.setup.ts uses hard-coded shared credentials in
+#    e2e/tests/constants.ts: e2e-shared-cortex@example.com / TestPass123*)
+#
+# If we later switch to per-environment test users, add:
+#   E2E_USER_EMAIL, E2E_USER_PASSWORD
+# and reference them via env: below + read in constants.ts.
+
+on:
+  workflow_dispatch:
+  schedule:
+    # 09:00 UTC ≈ 02:00 PT — overnight failures surface before the work day
+    # without blocking PR throughput.
+    - cron: '0 9 * * *'
+
+permissions:
+  contents: read
+  id-token: write   # reserved for future az login if a test needs Azure data plane
+
+concurrency:
+  group: e2e-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  playwright:
+    name: Playwright (chromium-desktop)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    env:
+      # Live deployment URLs the Playwright tests target. Mirrors
+      # e2e/playwright.config.ts `baseURL` and the API origin assertions
+      # inside the spec files. Override here so a future staging env can
+      # reuse the same workflow with different secrets/vars.
+      PLAYWRIGHT_BASE_URL: https://gentle-river-06c1e4e10.7.azurestaticapps.net
+      CORTEX_API_URL: https://cortexks-api.wonderfulpond-177bdc9c.centralus.azurecontainerapps.io
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: e2e/package-lock.json
+
+      - name: Install npm dependencies
+        run: npm ci --prefix e2e
+
+      - name: Install Playwright browsers (chromium + system deps)
+        run: npx --prefix e2e playwright install --with-deps chromium
+
+      - name: Run Playwright tests
+        run: npm --prefix e2e run e2e
+
+      - name: Upload Playwright report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report
+          path: e2e/playwright-report/
+          retention-days: 14
+          if-no-files-found: ignore
+
+      - name: Upload test-results (traces, screenshots, videos)
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-test-results
+          path: e2e/test-results/
+          retention-days: 14
+          if-no-files-found: ignore

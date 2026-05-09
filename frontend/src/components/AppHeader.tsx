@@ -20,7 +20,7 @@ export function AppHeader(): React.ReactElement {
         Cortex
       </Link>
       <Link
-        to="/profile"
+        to="/settings"
         aria-label="Profile and settings"
         className="flex h-8 w-8 items-center justify-center rounded-full bg-slate-800 text-sm font-semibold text-slate-200 hover:bg-slate-700"
       >

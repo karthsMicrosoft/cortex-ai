@@ -193,9 +193,9 @@ describe('S4: ProfilePage exists with edit name + change password + logout', () 
     expect(app).toMatch(/import\s+ProfilePage\s+from\s+['"]\.\/pages\/ProfilePage['"]/);
   });
 
-  it('AppHeader links to /profile', () => {
+  it('AppHeader links to /settings (Round 15: profile shortcut moved to Settings)', () => {
     const header = readSrc('src/components/AppHeader.tsx');
-    expect(header).toMatch(/to=['"]\/profile['"]/);
+    expect(header).toMatch(/to=['"]\/settings['"]/);
   });
 
   it('api/auth.ts exposes updateProfile, changePassword, logout', () => {

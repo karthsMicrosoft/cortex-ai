@@ -4,6 +4,7 @@
  * Typed wrappers around:
  *   GET  /api/notes/{id}/shadow-reader
  *   POST /api/notes/{id}/shadow-reader/answer
+ *   POST /api/notes/{id}/shadow-reader/answer-audio  (Round 15 / PR #26 — FR-8.4)
  *   POST /api/notes/{id}/shadow-reader/dismiss
  *   PUT  /api/users/me/shadow-reader/settings
  */
@@ -35,6 +36,11 @@ export interface ShadowReaderSettingsOut {
   disabled_categories: string[];
 }
 
+export interface ShadowReaderAudioAnswerOut {
+  transcript: string;
+  status: string;
+}
+
 // ---------------------------------------------------------------------------
 // API functions
 // ---------------------------------------------------------------------------
@@ -55,6 +61,25 @@ export async function answer(noteId: string, text: string): Promise<{ status: st
   return apiPost<{ status: string }>(`/api/notes/${noteId}/shadow-reader/answer`, {
     answer: text,
   });
+}
+
+/**
+ * Submit a voice answer (FR-8.4 / Round 15).
+ *
+ * Caller has already POSTed the recorded audio blob to /api/upload and
+ * received `{ url, blob_path }`. We forward those to the backend, which
+ * downloads the audio, transcribes it via Azure Speech, and feeds the
+ * transcript into the same merge pipeline as the text-answer endpoint.
+ */
+export async function submitAudioAnswer(
+  noteId: string,
+  audioUrl: string,
+  blobPath: string,
+): Promise<ShadowReaderAudioAnswerOut> {
+  return apiPost<ShadowReaderAudioAnswerOut>(
+    `/api/notes/${noteId}/shadow-reader/answer-audio`,
+    { audio_url: audioUrl, blob_path: blobPath },
+  );
 }
 
 /**

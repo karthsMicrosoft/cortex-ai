@@ -34,32 +34,41 @@ const mockGetQuestions = vi.fn();
 const mockAnswer = vi.fn();
 const mockDismiss = vi.fn();
 const mockUpdateSettings = vi.fn();
+const mockSubmitAudioAnswer = vi.fn();
 
 vi.mock('../api/shadowReader', () => ({
   getQuestions: (...args: unknown[]) => mockGetQuestions(...args),
   answer: (...args: unknown[]) => mockAnswer(...args),
   dismiss: (...args: unknown[]) => mockDismiss(...args),
   updateSettings: (...args: unknown[]) => mockUpdateSettings(...args),
+  submitAudioAnswer: (...args: unknown[]) => mockSubmitAudioAnswer(...args),
 }));
 
 // ---------------------------------------------------------------------------
 // Mock useVoiceRecorder hook (used by ShadowReaderPrompt for voice answers)
 // ---------------------------------------------------------------------------
 
+const mockRecorder = {
+  isRecording: false,
+  partialText: '',
+  wsRef: { current: null },
+  setWs: vi.fn(),
+  start: vi.fn().mockResolvedValue(undefined),
+  stop: vi.fn().mockResolvedValue(undefined as unknown as Blob | undefined),
+  _setPartialText: vi.fn(),
+};
+let mockIsMobileFlag = false;
+
 vi.mock('../hooks/useVoiceRecorder', () => ({
-  useVoiceRecorder: () => ({
-    isRecording: false,
-    partialText: '',
-    wsRef: { current: null },
-    setWs: vi.fn(),
-    start: vi.fn().mockResolvedValue(undefined),
-    stop: vi.fn().mockResolvedValue(undefined),
-    _setPartialText: vi.fn(),
-  }),
+  useVoiceRecorder: () => mockRecorder,
   // Round-7: VoiceCapture (transitively imported by ShadowReaderPrompt's
   // shared hooks) needs isMobile exported from this mock.
-  isMobile: false,
-  IS_MOBILE: false,
+  get isMobile() {
+    return mockIsMobileFlag;
+  },
+  get IS_MOBILE() {
+    return mockIsMobileFlag;
+  },
 }));
 
 // ---------------------------------------------------------------------------
@@ -406,16 +415,8 @@ describe('ShadowReaderPrompt — answer interaction', () => {
     const textarea = document.querySelector('textarea')!;
     fireEvent.change(textarea, { target: { value: 'It feels melancholy, like rain on glass.' } });
 
-    // Find send button — last or second-to-last button
-    const buttons = screen.getAllByRole('button');
-    // Send button is distinct from dismiss; click the one that is NOT the first (dismiss) button
-    const sendBtn = buttons.find(
-      (b) =>
-        b !== buttons[0] &&
-        (b.getAttribute('aria-label')?.toLowerCase().includes('send') ||
-          b.querySelector('svg') !== null),
-    ) ?? buttons[buttons.length - 1];
-
+    // Send button identified by its explicit aria-label.
+    const sendBtn = screen.getByRole('button', { name: /submit reflection/i });
     fireEvent.click(sendBtn);
 
           expect(mockAnswer).toHaveBeenCalledWith(
@@ -432,8 +433,7 @@ describe('ShadowReaderPrompt — answer interaction', () => {
     const textarea = document.querySelector('textarea')!;
     fireEvent.change(textarea, { target: { value: 'My reflection answer.' } });
 
-    const buttons = screen.getAllByRole('button');
-    const sendBtn = buttons[buttons.length - 1];
+    const sendBtn = screen.getByRole('button', { name: /submit reflection/i });
     await act(async () => {
       fireEvent.click(sendBtn);
       await vi.advanceTimersByTimeAsync(0);
@@ -449,8 +449,7 @@ describe('ShadowReaderPrompt — answer interaction', () => {
     /* state settled by fake-timer drain */
 
     // Do NOT type anything
-    const buttons = screen.getAllByRole('button');
-    const sendBtn = buttons[buttons.length - 1];
+    const sendBtn = screen.getByRole('button', { name: /submit reflection/i });
     fireEvent.click(sendBtn);
 
     // Give it time to process
@@ -529,5 +528,173 @@ describe('ShadowReaderPrompt — NoteDetailPage integration', () => {
       // Not yet implemented — red phase
       expect(true).toBe(true); // still collected
     }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Round 15 / PR #26 — voice answer (FR-8.4)
+// ---------------------------------------------------------------------------
+
+describe('ShadowReaderPrompt — voice answer (FR-8.4 / Round 15)', () => {
+  const originalFetch = globalThis.fetch;
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.clearAllMocks();
+    mockGetQuestions.mockResolvedValue(ASKED_RESPONSE);
+    mockDismiss.mockResolvedValue({ status: 'dismissed' });
+    mockAnswer.mockResolvedValue({ status: 'answered' });
+    mockSubmitAudioAnswer.mockResolvedValue({
+      transcript: 'voice transcript here',
+      status: 'answer_pending',
+    });
+    mockRecorder.isRecording = false;
+    mockRecorder.start = vi.fn().mockResolvedValue(undefined);
+    mockRecorder.stop = vi
+      .fn()
+      .mockResolvedValue(new Blob(['fake'], { type: 'audio/webm' }));
+    mockIsMobileFlag = false;
+    globalThis.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        url: 'https://blob.example.com/audio/u/x.webm?sas=abc',
+        blob_path: 'audio/u/x.webm',
+      }),
+    } as Response);
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    globalThis.fetch = originalFetch;
+  });
+
+  it('renders mic button on desktop UA', async () => {
+    mockIsMobileFlag = false;
+    await renderPrompt();
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(2100);
+    });
+    const mic = screen.queryByRole('button', { name: /record voice answer|stop recording/i });
+    expect(mic).not.toBeNull();
+  });
+
+  it('does NOT render mic button on mobile UA', async () => {
+    mockIsMobileFlag = true;
+    await renderPrompt();
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(2100);
+    });
+    const mic = screen.queryByRole('button', { name: /record voice answer|stop recording/i });
+    expect(mic).toBeNull();
+  });
+
+  it('mic click starts recording then stops on second click', async () => {
+    await renderPrompt();
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(2100);
+    });
+    const mic = screen.getByRole('button', { name: /record voice answer/i });
+    await act(async () => {
+      fireEvent.click(mic);
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    expect(mockRecorder.start).toHaveBeenCalled();
+
+    // Simulate the recorder reporting it is now recording.
+    mockRecorder.isRecording = true;
+    await act(async () => {
+      fireEvent.click(mic);
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    expect(mockRecorder.stop).toHaveBeenCalled();
+  });
+
+  it('stop triggers upload + submitAudioAnswer with returned url + blob_path', async () => {
+    await renderPrompt();
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(2100);
+    });
+    const mic = screen.getByRole('button', { name: /record voice answer/i });
+    await act(async () => {
+      fireEvent.click(mic);
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    mockRecorder.isRecording = true;
+    await act(async () => {
+      fireEvent.click(mic);
+      // Allow async upload + submit promise chain to settle.
+      await vi.advanceTimersByTimeAsync(0);
+      await Promise.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(globalThis.fetch).toHaveBeenCalled();
+    const fetchCall = (globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls[0];
+    expect(String(fetchCall[0])).toMatch(/\/api\/upload$/);
+
+    expect(mockSubmitAudioAnswer).toHaveBeenCalledWith(
+      NOTE_ID,
+      'https://blob.example.com/audio/u/x.webm?sas=abc',
+      'audio/u/x.webm',
+    );
+  });
+
+  it('transcribe failure shows error and preserves text input', async () => {
+    mockSubmitAudioAnswer.mockRejectedValueOnce(new Error('voice transcription failed'));
+    await renderPrompt();
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(2100);
+    });
+    const textarea = document.querySelector('textarea')!;
+    fireEvent.change(textarea, { target: { value: 'typed text' } });
+
+    const mic = screen.getByRole('button', { name: /record voice answer/i });
+    await act(async () => {
+      fireEvent.click(mic);
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    mockRecorder.isRecording = true;
+    await act(async () => {
+      fireEvent.click(mic);
+      await vi.advanceTimersByTimeAsync(0);
+      await Promise.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    // Textarea remains visible with text intact.
+    const ta2 = document.querySelector('textarea') as HTMLTextAreaElement | null;
+    expect(ta2).not.toBeNull();
+    expect(ta2!.value).toBe('typed text');
+    // Some error message rendered.
+    const alerts = screen.queryAllByRole('alert');
+    expect(alerts.length).toBeGreaterThan(0);
+  });
+
+  it('successful audio submit dismisses prompt', async () => {
+    const onComplete = vi.fn();
+    await renderPrompt(NOTE_ID, onComplete);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(2100);
+    });
+    const mic = screen.getByRole('button', { name: /record voice answer/i });
+    await act(async () => {
+      fireEvent.click(mic);
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    mockRecorder.isRecording = true;
+    await act(async () => {
+      fireEvent.click(mic);
+      await vi.advanceTimersByTimeAsync(0);
+      await Promise.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(onComplete).toHaveBeenCalled();
+    const ta = document.querySelector('textarea');
+    expect(ta).toBeNull();
   });
 });

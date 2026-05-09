@@ -1,7 +1,7 @@
 /**
  * ShadowReaderPrompt — auto-rendering bottom-sheet for the Shadow Reader feature (US-8).
  *
- * Behaviour (Round-4 revert 2026-05-01 — bug 16):
+ * Behaviour:
  *  - Polls /api/notes/{id}/shadow-reader on the B17 tiered schedule:
  *      • 10 × 2 s   (first 20 s)
  *      • 5  × 5 s   (next 25 s)
@@ -10,17 +10,34 @@
  *  - When status === 'asked' the component auto-renders a bottom-sheet docked
  *    above the BottomNav (h-16 on mobile, gone on ≥ sm). This is NOT a
  *    role='dialog' modal — it does not block page interaction.
- *  - When status is anything else, the component returns null (renders nothing).
- *  - Voice mic was REMOVED in the previous revision — it called a non-existent
- *    /api/upload/audio endpoint and on failure left the page rendering
- *    "(recording pending transcription…)". Text-only answers stay; voice
- *    answer is a P3 follow-up.
+ *  - When status is anything else, the component returns null.
+ *
+ * Voice answer (Round 15 / PR #26 — FR-8.4 "User answers via voice or text"):
+ *  - On desktop UAs we render a mic button alongside the textarea. Pressing it
+ *    starts MediaRecorder via useVoiceRecorder (same MIME-probing pattern the
+ *    main capture flow uses); pressing again stops recording, uploads the blob
+ *    via POST /api/upload, then calls submitAudioAnswer(noteId, url, blob_path)
+ *    which transcribes server-side and feeds the transcript into the same
+ *    shadow-reader merge pipeline as the text answer.
+ *  - On mobile UAs the mic is hidden entirely (DECISIONS § 22w — mobile uses
+ *    the file-only voice paths). The textarea remains the supported input.
+ *  - The previous PR #14 mic was removed because it called a nonexistent
+ *    /api/upload/audio endpoint; this revival uses the working /api/upload
+ *    helper plus a new /shadow-reader/answer-audio backend endpoint.
  */
 
 import { useCallback, useEffect, useState } from 'react';
-import { Send, Sparkles, X } from 'lucide-react';
-import { answer, dismiss, getQuestions } from '../api/shadowReader';
+import { Mic, Send, Sparkles, Square, X } from 'lucide-react';
+import {
+  answer,
+  dismiss,
+  getQuestions,
+  submitAudioAnswer,
+} from '../api/shadowReader';
 import type { ShadowReaderStatus } from '../api/shadowReader';
+import { apiUrl } from '../api/client';
+import { isMobile, useVoiceRecorder } from '../hooks/useVoiceRecorder';
+import { useAuthStore } from '../store/authStore';
 
 interface Props {
   noteId: string;
@@ -44,8 +61,12 @@ export function ShadowReaderPrompt({ noteId, onComplete }: Props): React.ReactEl
   const [questions, setQuestions] = useState<string[]>([]);
   const [answerText, setAnswerText] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [isRecording, setIsRecording] = useState(false);
+  const [isTranscribing, setIsTranscribing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [hidden, setHidden] = useState(false); // user dismissed/answered locally
+
+  const recorder = useVoiceRecorder();
 
   // -------------------------------------------------------------------------
   // Polling — B17 tiered schedule (10×2s, then 5×5s, total 45s window)
@@ -102,7 +123,7 @@ export function ShadowReaderPrompt({ noteId, onComplete }: Props): React.ReactEl
   }, [noteId]);
 
   // -------------------------------------------------------------------------
-  // Actions
+  // Actions — dismiss / text answer
   // -------------------------------------------------------------------------
   const handleDismiss = useCallback(async () => {
     try {
@@ -131,6 +152,74 @@ export function ShadowReaderPrompt({ noteId, onComplete }: Props): React.ReactEl
   }, [answerText, isSubmitting, noteId, onComplete]);
 
   // -------------------------------------------------------------------------
+  // Voice answer (FR-8.4 / Round 15) — desktop only
+  // -------------------------------------------------------------------------
+  const uploadAndSubmitAudio = useCallback(
+    async (blob: Blob) => {
+      const token = useAuthStore.getState().accessToken;
+      const ext = blob.type.includes('mp4')
+        ? 'mp4'
+        : blob.type.includes('ogg')
+          ? 'ogg'
+          : 'webm';
+      const form = new FormData();
+      form.append('file', blob, `shadow-reader-${Date.now()}.${ext}`);
+
+      const uploadResp = await fetch(apiUrl('/api/upload'), {
+        method: 'POST',
+        headers: token ? { Authorization: `Bearer ${token}` } : undefined,
+        credentials: 'include',
+        body: form,
+      });
+      if (!uploadResp.ok) {
+        throw new Error(`Upload failed: ${uploadResp.status}`);
+      }
+      const { url, blob_path: blobPath } = (await uploadResp.json()) as {
+        url: string;
+        blob_path: string;
+      };
+      await submitAudioAnswer(noteId, url, blobPath);
+    },
+    [noteId],
+  );
+
+  const handleMicClick = useCallback(async () => {
+    setError(null);
+    if (!isRecording) {
+      try {
+        await recorder.start();
+        setIsRecording(true);
+      } catch (err) {
+        setError(
+          err instanceof Error ? err.message : 'Could not start recording',
+        );
+      }
+      return;
+    }
+
+    // Second click → stop + upload + transcribe.
+    setIsRecording(false);
+    setIsTranscribing(true);
+    try {
+      const blob = await recorder.stop();
+      if (!blob) {
+        throw new Error('Recording was empty');
+      }
+      await uploadAndSubmitAudio(blob);
+      setHidden(true);
+      onComplete?.();
+    } catch (err) {
+      setError(
+        err instanceof Error
+          ? err.message || 'Voice transcription failed'
+          : 'Voice transcription failed',
+      );
+    } finally {
+      setIsTranscribing(false);
+    }
+  }, [isRecording, recorder, uploadAndSubmitAudio, onComplete]);
+
+  // -------------------------------------------------------------------------
   // Render — auto-show only when status === 'asked' and not locally hidden
   // -------------------------------------------------------------------------
   if (hidden) return null;
@@ -140,8 +229,7 @@ export function ShadowReaderPrompt({ noteId, onComplete }: Props): React.ReactEl
     <div
       // Bottom-sheet positioned ABOVE the BottomNav (h-16 = 64px). On ≥ sm the
       // BottomNav is hidden, so the sheet sits closer to the bottom edge.
-      // NOT a role='dialog' — does not block page interaction (the UI
-      // non-blocking guarantee in ShadowReaderPrompt.test.tsx).
+      // NOT a role='dialog' — does not block page interaction.
       className="fixed inset-x-0 bottom-20 z-30 mx-auto w-full max-w-md px-4 sm:bottom-6"
       aria-label="Shadow Reader"
       data-testid="shadow-reader-sheet"
@@ -187,6 +275,12 @@ export function ShadowReaderPrompt({ noteId, onComplete }: Props): React.ReactEl
           }}
         />
 
+        {isTranscribing && (
+          <p className="mb-3 text-xs text-indigo-300" role="status">
+            Transcribing…
+          </p>
+        )}
+
         {error && (
           <p className="mb-3 text-xs text-red-400" role="alert">
             {error}
@@ -211,6 +305,25 @@ export function ShadowReaderPrompt({ noteId, onComplete }: Props): React.ReactEl
             <Send className="h-4 w-4" aria-hidden="true" />
             {isSubmitting ? 'Saving…' : 'Send'}
           </button>
+          {!isMobile && (
+            <button
+              type="button"
+              onClick={() => void handleMicClick()}
+              disabled={isTranscribing}
+              className={`inline-flex items-center gap-1.5 rounded-lg px-3 py-2 text-sm font-medium focus:outline-none focus:ring-2 focus:ring-indigo-400 disabled:opacity-50 ${
+                isRecording
+                  ? 'bg-red-600/80 text-white hover:bg-red-500'
+                  : 'bg-slate-800 text-slate-200 hover:bg-slate-700'
+              }`}
+              aria-label={isRecording ? 'Stop recording' : 'Record voice answer'}
+            >
+              {isRecording ? (
+                <Square className="h-4 w-4" aria-hidden="true" />
+              ) : (
+                <Mic className="h-4 w-4" aria-hidden="true" />
+              )}
+            </button>
+          )}
         </div>
       </div>
     </div>

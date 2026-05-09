@@ -1139,6 +1139,170 @@ class TestAnswerShadowReaderEndpoint:
         assert resp.status_code == 404
 
 
+class TestAnswerAudioShadowReaderEndpoint:
+    """Round 15 / PR #26 — POST /{note_id}/shadow-reader/answer-audio (FR-8.4 voice path)."""
+
+    async def test_answer_audio_requires_auth(self, client):
+        note_id = str(uuid.uuid4())
+        resp = await client.post(
+            f"/api/notes/{note_id}/shadow-reader/answer-audio",
+            json={"audio_url": "https://example.com/x.webm", "blob_path": "audio/x.webm"},
+        )
+        assert resp.status_code == 401
+
+    async def test_answer_audio_404_for_other_users_note(
+        self, client, auth_headers, second_user_headers, db_session
+    ):
+        from app.models.note import Note
+        import uuid as _uuid
+
+        user2_resp = await client.get("/api/auth/me", headers=second_user_headers)
+        if user2_resp.status_code != 200:
+            pytest.skip("Auth/me endpoint not available")
+        user2_id = _uuid.UUID(user2_resp.json()["id"])
+
+        note = Note(
+            user_id=user2_id,
+            content=FIFTY_WORD_CONTENT,
+            source_type="text",
+            shadow_reader_status="asked",
+            shadow_reader_questions=["What emotion does this evoke?"],
+        )
+        db_session.add(note)
+        await db_session.flush()
+
+        resp = await client.post(
+            f"/api/notes/{note.id}/shadow-reader/answer-audio",
+            json={"audio_url": "https://example.com/x.webm", "blob_path": "audio/x.webm"},
+            headers=auth_headers,
+        )
+        assert resp.status_code == 404
+
+    async def test_answer_audio_happy_path_transcribes_and_stores(
+        self, client, auth_headers, db_session
+    ):
+        from app.models.note import Note
+        from sqlalchemy import select
+        import uuid as _uuid
+
+        user_resp = await client.get("/api/auth/me", headers=auth_headers)
+        if user_resp.status_code != 200:
+            pytest.skip("Auth/me endpoint not available")
+        user_id = _uuid.UUID(user_resp.json()["id"])
+
+        note = Note(
+            user_id=user_id,
+            content=FIFTY_WORD_CONTENT,
+            source_type="text",
+            shadow_reader_status="asked",
+            shadow_reader_questions=["What emotion does this evoke?"],
+        )
+        db_session.add(note)
+        await db_session.flush()
+        note_id = note.id
+
+        with patch(
+            "app.api.shadow_reader.transcribe_audio_url",
+            AsyncMock(return_value="this is the transcript"),
+        ), patch(
+            "app.api.shadow_reader.merge_answer_into_note", AsyncMock()
+        ):
+            resp = await client.post(
+                f"/api/notes/{note_id}/shadow-reader/answer-audio",
+                json={
+                    "audio_url": "https://example.com/x.webm?sas=abc",
+                    "blob_path": "audio/u/x.webm",
+                },
+                headers=auth_headers,
+            )
+
+        assert resp.status_code == 200, resp.text
+        # Reload from DB to verify side effects.
+        await db_session.commit()
+        result = await db_session.execute(select(Note).where(Note.id == note_id))
+        refreshed = result.scalar_one()
+        assert refreshed.shadow_reader_answer == "this is the transcript"
+        assert refreshed.shadow_reader_status == "answer_pending"
+
+    async def test_answer_audio_502_on_transcribe_failure(
+        self, client, auth_headers, db_session
+    ):
+        from app.models.note import Note
+        import uuid as _uuid
+
+        user_resp = await client.get("/api/auth/me", headers=auth_headers)
+        if user_resp.status_code != 200:
+            pytest.skip("Auth/me endpoint not available")
+        user_id = _uuid.UUID(user_resp.json()["id"])
+
+        note = Note(
+            user_id=user_id,
+            content=FIFTY_WORD_CONTENT,
+            source_type="text",
+            shadow_reader_status="asked",
+            shadow_reader_questions=["What emotion does this evoke?"],
+        )
+        db_session.add(note)
+        await db_session.flush()
+
+        with patch(
+            "app.api.shadow_reader.transcribe_audio_url",
+            AsyncMock(side_effect=RuntimeError("boom")),
+        ):
+            resp = await client.post(
+                f"/api/notes/{note.id}/shadow-reader/answer-audio",
+                json={
+                    "audio_url": "https://example.com/x.webm",
+                    "blob_path": "audio/u/x.webm",
+                },
+                headers=auth_headers,
+            )
+
+        assert resp.status_code == 502
+        assert "voice transcription failed" in resp.text.lower()
+
+    async def test_answer_audio_response_includes_transcript(
+        self, client, auth_headers, db_session
+    ):
+        from app.models.note import Note
+        import uuid as _uuid
+
+        user_resp = await client.get("/api/auth/me", headers=auth_headers)
+        if user_resp.status_code != 200:
+            pytest.skip("Auth/me endpoint not available")
+        user_id = _uuid.UUID(user_resp.json()["id"])
+
+        note = Note(
+            user_id=user_id,
+            content=FIFTY_WORD_CONTENT,
+            source_type="text",
+            shadow_reader_status="asked",
+            shadow_reader_questions=["What emotion does this evoke?"],
+        )
+        db_session.add(note)
+        await db_session.flush()
+
+        with patch(
+            "app.api.shadow_reader.transcribe_audio_url",
+            AsyncMock(return_value="hello world"),
+        ), patch(
+            "app.api.shadow_reader.merge_answer_into_note", AsyncMock()
+        ):
+            resp = await client.post(
+                f"/api/notes/{note.id}/shadow-reader/answer-audio",
+                json={
+                    "audio_url": "https://example.com/x.webm",
+                    "blob_path": "audio/u/x.webm",
+                },
+                headers=auth_headers,
+            )
+
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data.get("transcript") == "hello world"
+        assert data.get("status") == "answer_pending"
+
+
 class TestDismissShadowReaderEndpoint:
     async def test_dismiss_requires_auth(self, client):
         note_id = str(uuid.uuid4())

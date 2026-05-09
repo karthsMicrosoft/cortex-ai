@@ -7,9 +7,11 @@
  *   - Image upload input for FR-1.5
  *   - Submitting text creates a LocalNote with sourceType='text'
  *   - Uploading an image creates a LocalNote with sourceType='image' and imageBlob
+ *
+ * Round 15 / PR #24 — Image capture polish: preview, resize, validation, save UX.
  */
 
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import React from 'react';
 import { MemoryRouter } from 'react-router-dom';
@@ -98,6 +100,64 @@ async function getMockedDb() {
   const { db } = await import('../db');
   return db;
 }
+
+// ---------------------------------------------------------------------------
+// Image / canvas globals for image capture flow (Round 15 / PR #24)
+// ---------------------------------------------------------------------------
+const _origCreateObjectURL = (typeof URL !== 'undefined' ? URL.createObjectURL : undefined) as
+  | typeof URL.createObjectURL
+  | undefined;
+const _origRevokeObjectURL = (typeof URL !== 'undefined' ? URL.revokeObjectURL : undefined) as
+  | typeof URL.revokeObjectURL
+  | undefined;
+const _origImage = (globalThis as { Image?: unknown }).Image;
+
+class _FakeImage {
+  public naturalWidth = 1024;
+  public naturalHeight = 768;
+  public width = 1024;
+  public height = 768;
+  public onload: (() => void) | null = null;
+  public onerror: (() => void) | null = null;
+  private _src = '';
+  get src() { return this._src; }
+  set src(v: string) {
+    this._src = v;
+    const w = (globalThis as unknown as { __nextImgWidth?: number }).__nextImgWidth;
+    if (w) {
+      this.naturalWidth = w;
+      this.width = w;
+    }
+    setTimeout(() => this.onload?.(), 0);
+  }
+}
+
+beforeEach(() => {
+  // @ts-expect-error override for tests
+  URL.createObjectURL = vi.fn((_b: Blob) => `blob:mock-${Math.random()}`);
+  // @ts-expect-error override for tests
+  URL.revokeObjectURL = vi.fn();
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  (HTMLCanvasElement.prototype as any).toBlob = function (
+    cb: (blob: Blob | null) => void,
+    type?: string,
+  ) {
+    cb(new Blob(['resized-bytes'], { type: type || 'image/jpeg' }));
+  };
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  (HTMLCanvasElement.prototype as any).getContext = function () {
+    return { drawImage: vi.fn() };
+  };
+  // @ts-expect-error override Image global for tests
+  globalThis.Image = _FakeImage;
+});
+
+afterEach(() => {
+  if (_origCreateObjectURL) URL.createObjectURL = _origCreateObjectURL;
+  if (_origRevokeObjectURL) URL.revokeObjectURL = _origRevokeObjectURL;
+  if (_origImage) (globalThis as unknown as { Image: unknown }).Image = _origImage;
+  delete (globalThis as unknown as { __nextImgWidth?: number }).__nextImgWidth;
+});
 
 // ---------------------------------------------------------------------------
 // Tests
@@ -192,6 +252,10 @@ describe('CapturePage (Task 1.4 / 3.2)', () => {
     const mockFile = new File(['img-data'], 'photo.jpg', { type: 'image/jpeg' });
 
     fireEvent.change(fileInput, { target: { files: [mockFile] } });
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: /save image/i })).toBeInTheDocument(),
+    );
+    fireEvent.click(screen.getByRole('button', { name: /save image/i }));
 
     const db = await getMockedDb();
     await waitFor(() => expect(db.notes.add).toHaveBeenCalled());
@@ -205,6 +269,10 @@ describe('CapturePage (Task 1.4 / 3.2)', () => {
     const mockFile = new File(['img-data'], 'photo.jpg', { type: 'image/jpeg' });
 
     fireEvent.change(fileInput, { target: { files: [mockFile] } });
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: /save image/i })).toBeInTheDocument(),
+    );
+    fireEvent.click(screen.getByRole('button', { name: /save image/i }));
 
     const db = await getMockedDb();
     await waitFor(() => expect(db.notes.add).toHaveBeenCalled());
@@ -218,6 +286,10 @@ describe('CapturePage (Task 1.4 / 3.2)', () => {
     fireEvent.change(fileInput, {
       target: { files: [new File(['d'], 'x.png', { type: 'image/png' })] },
     });
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: /save image/i })).toBeInTheDocument(),
+    );
+    fireEvent.click(screen.getByRole('button', { name: /save image/i }));
 
     const db = await getMockedDb();
     await waitFor(() => expect(db.notes.add).toHaveBeenCalled());
@@ -233,5 +305,123 @@ describe('CapturePage (Task 1.4 / 3.2)', () => {
     await new Promise((r) => setTimeout(r, 50));
     const db = await getMockedDb();
     expect(db.notes.add).not.toHaveBeenCalled();
+  });
+
+  // --- Round 15 / PR #24 — Image capture polish ---
+
+  describe('Image capture polish (PR #24)', () => {
+    it('selecting an image shows a preview', async () => {
+      renderCapturePage();
+      const fileInput = screen.getByLabelText(/image|photo|upload/i) as HTMLInputElement;
+      const file = new File(['img'], 'a.png', { type: 'image/png' });
+      fireEvent.change(fileInput, { target: { files: [file] } });
+
+      await waitFor(() => {
+        expect(screen.getByRole('img', { name: /preview|image/i })).toBeInTheDocument();
+      });
+      expect(URL.createObjectURL).toHaveBeenCalled();
+    });
+
+    it('image >5MB triggers resize (canvas.toBlob) before storing', async () => {
+      renderCapturePage();
+      const fileInput = screen.getByLabelText(/image|photo|upload/i) as HTMLInputElement;
+      const big = new Blob([new Uint8Array(6 * 1024 * 1024)], { type: 'image/jpeg' });
+      const file = new File([big], 'big.jpg', { type: 'image/jpeg' });
+      Object.defineProperty(file, 'size', { value: 6 * 1024 * 1024 });
+      const toBlobSpy = vi.spyOn(HTMLCanvasElement.prototype, 'toBlob');
+
+      fireEvent.change(fileInput, { target: { files: [file] } });
+
+      await waitFor(() => expect(toBlobSpy).toHaveBeenCalled());
+    });
+
+    it('image wider than 2048px triggers resize', async () => {
+      (globalThis as unknown as { __nextImgWidth: number }).__nextImgWidth = 4096;
+      renderCapturePage();
+      const fileInput = screen.getByLabelText(/image|photo|upload/i) as HTMLInputElement;
+      const file = new File(['x'], 'wide.jpg', { type: 'image/jpeg' });
+      const toBlobSpy = vi.spyOn(HTMLCanvasElement.prototype, 'toBlob');
+
+      fireEvent.change(fileInput, { target: { files: [file] } });
+
+      await waitFor(() => expect(toBlobSpy).toHaveBeenCalled());
+    });
+
+    it('non-image file shows a validation error', async () => {
+      renderCapturePage();
+      const fileInput = screen.getByLabelText(/image|photo|upload/i) as HTMLInputElement;
+      const file = new File(['hello'], 'a.txt', { type: 'text/plain' });
+      fireEvent.change(fileInput, { target: { files: [file] } });
+
+      await waitFor(() => {
+        expect(screen.getByText(/must be an image|invalid (file )?type|not an image/i)).toBeInTheDocument();
+      });
+      const db = await getMockedDb();
+      expect(db.notes.add).not.toHaveBeenCalled();
+    });
+
+    it('clicking Save image note shows uploading state and stores the blob', async () => {
+      renderCapturePage();
+      const fileInput = screen.getByLabelText(/image|photo|upload/i) as HTMLInputElement;
+      const file = new File(['x'], 'a.png', { type: 'image/png' });
+      fireEvent.change(fileInput, { target: { files: [file] } });
+
+      await waitFor(() =>
+        expect(screen.getByRole('button', { name: /save image/i })).toBeInTheDocument(),
+      );
+
+      const saveBtn = screen.getByRole('button', { name: /save image/i });
+      fireEvent.click(saveBtn);
+
+      await waitFor(() => {
+        expect(screen.getByText(/uploading/i)).toBeInTheDocument();
+      });
+
+      const db = await getMockedDb();
+      await waitFor(() => expect(db.notes.add).toHaveBeenCalled());
+      const arg = (db.notes.add as ReturnType<typeof vi.fn>).mock.calls[0][0];
+      expect(arg.sourceType).toBe('image');
+      expect(arg.imageBlob).toBeInstanceOf(Blob);
+    });
+
+    it('Save failure shows error toast and keeps the preview', async () => {
+      const db = await getMockedDb();
+      (db.notes.add as ReturnType<typeof vi.fn>).mockRejectedValueOnce(
+        new Error('boom'),
+      );
+
+      renderCapturePage();
+      const fileInput = screen.getByLabelText(/image|photo|upload/i) as HTMLInputElement;
+      const file = new File(['x'], 'a.png', { type: 'image/png' });
+      fireEvent.change(fileInput, { target: { files: [file] } });
+
+      await waitFor(() =>
+        expect(screen.getByRole('button', { name: /save image/i })).toBeInTheDocument(),
+      );
+      fireEvent.click(screen.getByRole('button', { name: /save image/i }));
+
+      await waitFor(() => {
+        expect(screen.getByText(/failed|error|try again/i)).toBeInTheDocument();
+      });
+      expect(screen.getByRole('img', { name: /preview|image/i })).toBeInTheDocument();
+    });
+
+    it('Cancel/Remove revokes the object URL', async () => {
+      renderCapturePage();
+      const fileInput = screen.getByLabelText(/image|photo|upload/i) as HTMLInputElement;
+      const file = new File(['x'], 'a.png', { type: 'image/png' });
+      fireEvent.change(fileInput, { target: { files: [file] } });
+
+      await waitFor(() =>
+        expect(screen.getByRole('img', { name: /preview|image/i })).toBeInTheDocument(),
+      );
+
+      const removeBtn =
+        screen.queryByRole('button', { name: /remove|clear|×/i }) ||
+        screen.getByRole('button', { name: /cancel/i });
+      fireEvent.click(removeBtn);
+
+      await waitFor(() => expect(URL.revokeObjectURL).toHaveBeenCalled());
+    });
   });
 });

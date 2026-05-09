@@ -405,3 +405,65 @@ class TestOCRBackgroundTaskRefetchesByID:
                 "without an early db.commit(). Fix: call await db.commit() before "
                 "background_tasks.add_task() in create_note(), then remove SimpleNamespace."
             )
+
+
+# ---------------------------------------------------------------------------
+# Empty OCR result — placeholder content (Round 15 / PR #24)
+# ---------------------------------------------------------------------------
+
+class TestProcessImageNoteEmptyOCR:
+    async def test_process_image_note_empty_read_result_writes_placeholder(self):
+        '''When Vision returns zero blocks, note.content gets a no-text placeholder
+        and processing_status proceeds to transcribed (so Stage 2 still runs).'''
+        from app.pipeline.ocr import process_image_note
+
+        note = MagicMock()
+        note.image_url = FAKE_IMAGE_URL
+        note.content = ''
+        note.processing_status = 'raw'
+
+        # Vision returns a result with read.blocks == [] (no readable text)
+        mock_result = MagicMock()
+        mock_result.read = MagicMock()
+        mock_result.read.blocks = []
+
+        mock_client = MagicMock()
+        mock_client.analyze_from_url = MagicMock(return_value=mock_result)
+
+        with patch('app.pipeline.ocr.settings') as mock_settings:
+            mock_settings.AZURE_VISION_ENDPOINT = 'https://fake.cognitiveservices.azure.com'
+            mock_settings.AZURE_VISION_KEY = 'fake-key'
+            with patch('app.pipeline.ocr.ImageAnalysisClient', return_value=mock_client):
+                with patch('app.pipeline.ocr.AzureKeyCredential', MagicMock()):
+                    await process_image_note(note)
+
+        assert note.content == '[image with no readable text]', (
+            f'Expected placeholder, got: {note.content!r}'
+        )
+        # Status must still proceed so the pipeline does not stall on this note.
+        assert note.processing_status == 'transcribed'
+
+    async def test_process_image_note_none_read_writes_placeholder(self):
+        '''When Vision returns result.read == None, treat as no readable text.'''
+        from app.pipeline.ocr import process_image_note
+
+        note = MagicMock()
+        note.image_url = FAKE_IMAGE_URL
+        note.content = ''
+        note.processing_status = 'raw'
+
+        mock_result = MagicMock()
+        mock_result.read = None
+
+        mock_client = MagicMock()
+        mock_client.analyze_from_url = MagicMock(return_value=mock_result)
+
+        with patch('app.pipeline.ocr.settings') as mock_settings:
+            mock_settings.AZURE_VISION_ENDPOINT = 'https://fake.cognitiveservices.azure.com'
+            mock_settings.AZURE_VISION_KEY = 'fake-key'
+            with patch('app.pipeline.ocr.ImageAnalysisClient', return_value=mock_client):
+                with patch('app.pipeline.ocr.AzureKeyCredential', MagicMock()):
+                    await process_image_note(note)
+
+        assert note.content == '[image with no readable text]'
+        assert note.processing_status == 'transcribed'

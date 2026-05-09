@@ -420,3 +420,103 @@ class TestExpressValidation:
             app.dependency_overrides.pop(get_openai, None)
             # All three should be accepted (not 422)
             assert resp.status_code != 422, f"Kind '{kind}' was rejected with 422"
+
+
+# ---------------------------------------------------------------------------
+# Round 15 / PR #22 — Express CreatePage polish (backend support)
+# ---------------------------------------------------------------------------
+
+class TestExpressPolishRound15:
+    async def test_express_filters_empty_content_notes(
+        self, client: AsyncClient, auth_headers: dict, db_session
+    ):
+        """Notes with empty/whitespace-only content must be excluded from the GPT prompt."""
+        from app.models.note import Note
+        from app.services.openai_client import get_openai
+        from app.main import app
+        import uuid as _uuid
+
+        me_resp = await client.get("/api/auth/me", headers=auth_headers)
+        if me_resp.status_code != 200:
+            pytest.skip("Auth/me not available")
+        user_id = _uuid.UUID(me_resp.json()["id"])
+
+        good_note = Note(
+            user_id=user_id,
+            content="Real content about Lydian mode.",
+            source_type="text",
+            category="Music",
+            processing_status="enriched",
+        )
+        empty_note = Note(
+            user_id=user_id,
+            content="",
+            source_type="text",
+            category="Music",
+            processing_status="enriched",
+        )
+        db_session.add_all([good_note, empty_note])
+        await db_session.flush()
+
+        captured: list[dict] = []
+
+        async def capture(**kwargs):
+            captured.append(kwargs)
+            r = MagicMock()
+            r.choices = [MagicMock()]
+            r.choices[0].message.content = "Generated."
+            return r
+
+        mock_openai = AsyncMock()
+        mock_openai.chat.completions.create = capture
+        app.dependency_overrides[get_openai] = lambda: mock_openai
+
+        resp = await client.post(
+            "/api/ai/generate",
+            json={
+                "kind": "song",
+                "source_note_ids": [str(good_note.id), str(empty_note.id)],
+            },
+            headers=auth_headers,
+        )
+        app.dependency_overrides.pop(get_openai, None)
+
+        assert resp.status_code == 200, resp.text
+        assert captured, "OpenAI client was not called"
+        prompt_text = json.dumps(captured[0].get("messages", []))
+        # The good note's content must appear; the empty note must NOT be
+        # injected as an empty `[Music] ` line.
+        assert "Lydian mode" in prompt_text
+        assert "[Music] \n" not in prompt_text
+        assert "[Music] [Music]" not in prompt_text
+
+    async def test_express_mixed_valid_and_invalid_uuids_returns_422(
+        self, client: AsyncClient, auth_headers: dict
+    ):
+        """Half-valid, half-garbage UUID list must return 422 with detail listing the bad ids."""
+        valid_a = str(uuid.uuid4())
+        valid_b = str(uuid.uuid4())
+        bad_a = "not-a-uuid"
+        bad_b = "definitely-bogus-1234"
+
+        payload = {
+            "kind": "song",
+            "source_note_ids": [valid_a, bad_a, valid_b, bad_b],
+        }
+        resp = await client.post("/api/ai/generate", json=payload, headers=auth_headers)
+
+        assert resp.status_code == 422, resp.text
+        detail = resp.json().get("detail", "")
+        # Pydantic v2 may wrap detail as a list of error dicts; coerce to a
+        # string for the substring check so either shape works.
+        detail_str = json.dumps(detail) if not isinstance(detail, str) else detail
+        # Detail must call out the invalid UUIDs in some way — either the
+        # bogus identifiers themselves or an explicit "UUID" rejection message.
+        mentions_id = bad_a in detail_str or bad_b in detail_str
+        mentions_uuid = "uuid" in detail_str.lower() or "invalid" in detail_str.lower()
+        assert mentions_id or mentions_uuid, (
+            f"Expected invalid-UUID indication in detail, got: {detail_str}"
+        )
+
+
+

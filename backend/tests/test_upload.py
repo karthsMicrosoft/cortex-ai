@@ -148,3 +148,41 @@ class TestUploadHappyPath:
         assert resp.status_code == 200
         assert isinstance(resp.json()["url"], str)
         assert len(resp.json()["url"]) > 0
+
+
+# ---------------------------------------------------------------------------
+# POST /api/upload — content type / size validation (Round 15 / PR #24)
+# ---------------------------------------------------------------------------
+
+class TestUploadValidation:
+    async def test_upload_rejects_non_image_non_audio_415(self, client, auth_headers):
+        '''Non-image, non-audio Content-Type must be rejected with 415.'''
+        files = {'file': ('a.txt', io.BytesIO(b'hello'), 'text/plain')}
+        resp = await client.post('/api/upload', files=files, headers=auth_headers)
+        assert resp.status_code == 415
+
+    async def test_upload_rejects_oversized_413(self, client, auth_headers):
+        '''Files larger than the 50MB limit must be rejected with 413.'''
+        from app.api import upload as upload_mod
+        from unittest.mock import patch as pt
+        # Patch the constant down so we don't need a 50MB request body in test.
+        # Use a tiny limit and a 1KB payload to exceed it.
+        with pt.object(upload_mod, '_MAX_FILE_SIZE_BYTES', 100):
+            files = {'file': ('a.jpg', io.BytesIO(b'x' * 1024), 'image/jpeg')}
+            with pt('app.api.upload.upload_blob', new_callable=AsyncMock, return_value='https://x'):
+                resp = await client.post('/api/upload', files=files, headers=auth_headers)
+        assert resp.status_code == 413
+
+    async def test_upload_accepts_valid_jpeg_200(self, client, auth_headers):
+        '''A small valid JPEG must return 200 with url + blob_path.'''
+        # Minimal JPEG SOI/EOI bytes
+        jpeg_bytes = b'\xff\xd8\xff\xe0\x00\x10JFIF\x00' + b'\x00' * 16 + b'\xff\xd9'
+        files = {'file': ('photo.jpg', io.BytesIO(jpeg_bytes), 'image/jpeg')}
+        fake_url = 'https://fake.blob.core.windows.net/cortex-media/images/x.jpg?sig=z'
+        with patch('app.api.upload.upload_blob', new_callable=AsyncMock, return_value=fake_url):
+            resp = await client.post('/api/upload', files=files, headers=auth_headers)
+        assert resp.status_code == 200
+        body = resp.json()
+        assert 'url' in body and body['url'] == fake_url
+        assert 'blob_path' in body
+        assert body['blob_path'].startswith('images/')

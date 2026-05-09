@@ -78,6 +78,11 @@ async def extract_text_from_image_url(url: str) -> str:
     return extracted
 
 
+# Placeholder content written to image notes when Vision returns no readable
+# text. Surfaced to the user in the library so the note isn't silently empty.
+NO_READABLE_TEXT_PLACEHOLDER = "[image with no readable text]"
+
+
 async def process_image_note(note: Note, db: Optional[AsyncSession] = None) -> None:
     """OCR an image note: extract text, update note.content, set status='transcribed'.
 
@@ -105,7 +110,7 @@ async def process_image_note(note: Note, db: Optional[AsyncSession] = None) -> N
             await db.commit()
         return
 
-    note.content = extracted_text or note.content  # keep original if OCR returned nothing
+    note.content = extracted_text or NO_READABLE_TEXT_PLACEHOLDER
     note.processing_status = "transcribed"  # triggers Stage 2 in the main pipeline
     if db is not None:
         await db.commit()

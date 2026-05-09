@@ -1,17 +1,74 @@
 /**
  * SettingsPage — top-level settings surface.
  *
- * Hosts the PersonalDictionary section (US-7) and ShadowReaderSettings (US-8).
+ * Hosts the PersonalDictionary section (US-7) and ShadowReaderSettings (US-8),
+ * plus a "Your Data" export action and an Account / change-password form
+ * (Round 15 / PR #23 — promotes the password form from /profile so users find
+ * it via the gear icon, while /profile remains for legacy bookmarks).
  *
  * Accessed via gear icon in the app header (no bottom-nav slot).
  */
+import { useState, type FormEvent } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { ArrowLeft, Settings } from 'lucide-react';
+import { ArrowLeft, Settings, Download } from 'lucide-react';
 import { PersonalDictionary } from '../components/PersonalDictionary';
 import { ShadowReaderSettings } from '../components/ShadowReaderSettings';
+import { changePassword } from '../api/auth';
+import { downloadExport } from '../api/export';
 
 export default function SettingsPage(): React.ReactElement {
   const navigate = useNavigate();
+
+  // ------------------------------------------------------------------ export
+  const [exporting, setExporting] = useState(false);
+  const [exportMessage, setExportMessage] = useState<{ kind: 'ok' | 'err'; text: string } | null>(null);
+
+  async function handleExport(): Promise<void> {
+    setExporting(true);
+    setExportMessage(null);
+    try {
+      await downloadExport();
+      setExportMessage({ kind: 'ok', text: 'Exported!' });
+    } catch (err) {
+      const text = err instanceof Error ? err.message : 'Export failed';
+      setExportMessage({ kind: 'err', text });
+    } finally {
+      setExporting(false);
+    }
+  }
+
+  // ------------------------------------------------------------------ password
+  const [currentPassword, setCurrentPassword] = useState('');
+  const [newPassword, setNewPassword] = useState('');
+  const [confirmPassword, setConfirmPassword] = useState('');
+  const [passwordSaving, setPasswordSaving] = useState(false);
+  const [passwordMessage, setPasswordMessage] = useState<{ kind: 'ok' | 'err'; text: string } | null>(null);
+
+  async function handlePasswordSubmit(e: FormEvent<HTMLFormElement>): Promise<void> {
+    e.preventDefault();
+    setPasswordMessage(null);
+    if (newPassword.length < 8) {
+      setPasswordMessage({ kind: 'err', text: 'New password must be at least 8 characters.' });
+      return;
+    }
+    if (newPassword !== confirmPassword) {
+      setPasswordMessage({ kind: 'err', text: 'Passwords do not match.' });
+      return;
+    }
+    setPasswordSaving(true);
+    try {
+      await changePassword(currentPassword, newPassword);
+      setCurrentPassword('');
+      setNewPassword('');
+      setConfirmPassword('');
+      setPasswordMessage({ kind: 'ok', text: 'Password changed.' });
+    } catch (err) {
+      const text = err instanceof Error ? err.message : 'Password change failed';
+      setPasswordMessage({ kind: 'err', text });
+    } finally {
+      setPasswordSaving(false);
+    }
+  }
 
   return (
     <div className="min-h-screen bg-[#0F172A] text-white">
@@ -30,6 +87,88 @@ export default function SettingsPage(): React.ReactElement {
 
       {/* Sections */}
       <main className="max-w-2xl mx-auto px-4 py-6 space-y-6">
+        {/* Your Data — Round 15 / PR #23 */}
+        <section className="rounded-2xl border border-slate-800 bg-slate-900 p-4 space-y-3">
+          <h2 className="text-sm font-semibold text-slate-200">Your Data</h2>
+          <p className="text-xs text-slate-400">
+            Download every note, summary, and dictionary term you've added to Cortex
+            as a single JSON file. We never lock you in.
+          </p>
+          <button
+            type="button"
+            onClick={() => { void handleExport(); }}
+            disabled={exporting}
+            className="inline-flex items-center gap-2 rounded-lg bg-indigo-600 px-4 py-2 text-sm font-semibold text-white hover:bg-indigo-500 disabled:opacity-50"
+          >
+            <Download className="h-4 w-4" aria-hidden="true" />
+            {exporting ? 'Exporting…' : 'Export your data'}
+          </button>
+          {exportMessage && (
+            <p
+              role={exportMessage.kind === 'err' ? 'alert' : 'status'}
+              className={exportMessage.kind === 'err' ? 'text-xs text-red-400' : 'text-xs text-emerald-400'}
+            >
+              {exportMessage.text}
+            </p>
+          )}
+        </section>
+
+        {/* Account — Round 15 / PR #23 (mirrors ProfilePage form) */}
+        <form
+          onSubmit={(e) => { void handlePasswordSubmit(e); }}
+          className="rounded-2xl border border-slate-800 bg-slate-900 p-4 space-y-3"
+        >
+          <h2 className="text-sm font-semibold text-slate-200">Account</h2>
+          <p className="text-xs text-slate-400">Change your account password.</p>
+          <input
+            type="password"
+            value={currentPassword}
+            onChange={(e) => setCurrentPassword(e.target.value)}
+            placeholder="Current password"
+            autoComplete="current-password"
+            required
+            className="w-full rounded-lg border border-slate-700 bg-slate-800 px-3 py-2 text-sm text-white"
+            aria-label="Current password"
+          />
+          <input
+            type="password"
+            value={newPassword}
+            onChange={(e) => setNewPassword(e.target.value)}
+            placeholder="New password (min 8 chars)"
+            autoComplete="new-password"
+            minLength={8}
+            required
+            className="w-full rounded-lg border border-slate-700 bg-slate-800 px-3 py-2 text-sm text-white"
+            aria-label="New password"
+          />
+          <input
+            type="password"
+            value={confirmPassword}
+            onChange={(e) => setConfirmPassword(e.target.value)}
+            placeholder="Confirm new password"
+            autoComplete="new-password"
+            minLength={8}
+            required
+            className="w-full rounded-lg border border-slate-700 bg-slate-800 px-3 py-2 text-sm text-white"
+            aria-label="Confirm new password"
+          />
+          {passwordMessage && (
+            <p
+              role={passwordMessage.kind === 'err' ? 'alert' : 'status'}
+              className={passwordMessage.kind === 'err' ? 'text-xs text-red-400' : 'text-xs text-emerald-400'}
+            >
+              {passwordMessage.text}
+            </p>
+          )}
+          <button
+            type="submit"
+            disabled={passwordSaving}
+            className="w-full rounded-lg bg-indigo-600 py-2 text-sm font-semibold text-white hover:bg-indigo-500 disabled:opacity-50"
+          >
+            {passwordSaving ? 'Changing…' : 'Change password'}
+          </button>
+        </form>
+
         {/* Personal Dictionary — US-7 */}
         <PersonalDictionary />
 

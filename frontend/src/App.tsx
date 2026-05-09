@@ -1,23 +1,29 @@
 import { lazy, Suspense } from 'react';
 import { Routes, Route, Navigate } from 'react-router-dom';
 import { useAuthStore } from './store/authStore';
+// Eager imports — auth boundary + first-paint pages must render immediately
+// (no extra round-trip for the chunk download).
 import LoginPage from './pages/LoginPage';
 import RegisterPage from './pages/RegisterPage';
 import CapturePage from './pages/CapturePage';
-import LibraryPage from './pages/LibraryPage';
-import SearchPage from './pages/SearchPage';
-import NoteDetailPage from './pages/NoteDetailPage';
-import InsightsPage from './pages/InsightsPage';
-// PERF-10: lazy-load BrainViewPage so react-force-graph-2d (d3 + canvas) is
-// code-split into its own chunk and does not bloat the initial JS bundle.
-const BrainViewPage = lazy(() => import('./pages/BrainViewPage'));
-import CreatePage from './pages/CreatePage';
 import ConflictsPage from './pages/ConflictsPage';
-import SettingsPage from './pages/SettingsPage';  // US-7
 import ProfilePage from './pages/ProfilePage';   // 2026-05-01 — issue #3
+
+// PERF (Round 15 / PR #25): code-split secondary pages so the initial JS
+// bundle stays small. PERF-10 already lazy-loaded BrainViewPage; this round
+// adds Insights / Create / Settings / NoteDetail / Library / Search.
+const BrainViewPage = lazy(() => import('./pages/BrainViewPage'));
+const InsightsPage = lazy(() => import('./pages/InsightsPage'));
+const CreatePage = lazy(() => import('./pages/CreatePage'));
+const SettingsPage = lazy(() => import('./pages/SettingsPage'));  // US-7
+const NoteDetailPage = lazy(() => import('./pages/NoteDetailPage'));
+const LibraryPage = lazy(() => import('./pages/LibraryPage'));
+const SearchPage = lazy(() => import('./pages/SearchPage'));
+
 import { BottomNav } from './components/BottomNav';
 import { AppHeader } from './components/AppHeader';
 import { SessionGate } from './components/SessionGate';
+import { RouteLoading } from './components/RouteLoading';
 
 // ---------------------------------------------------------------------------
 // Protected layout — AuthGate + AppHeader + BottomNav
@@ -52,6 +58,7 @@ export default function App(): React.ReactElement {
   return (
     <div className="min-h-screen bg-[#0F172A]">
       <SessionGate>
+      <Suspense fallback={<RouteLoading />}>
       <Routes>
         {/* Public routes */}
         <Route path="/login" element={<LoginPage />} />
@@ -102,14 +109,9 @@ export default function App(): React.ReactElement {
           path="/brain"
           element={
             <AuthGate>
-              {/* PERF-10: Suspense boundary for lazy BrainViewPage chunk */}
-              <Suspense fallback={
-                <div className="flex min-h-screen items-center justify-center bg-[#0F172A]">
-                  <span className="text-sm text-slate-400">Loading brain view…</span>
-                </div>
-              }>
-                <BrainViewPage />
-              </Suspense>
+              {/* PERF-10: lazy BrainViewPage chunk; Suspense boundary lives at
+                  the routing layer (single fallback for all lazy routes). */}
+              <BrainViewPage />
             </AuthGate>
           }
         />
@@ -156,6 +158,7 @@ export default function App(): React.ReactElement {
           }
         />
       </Routes>
+      </Suspense>
       </SessionGate>
     </div>
   );

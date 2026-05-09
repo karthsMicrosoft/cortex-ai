@@ -431,6 +431,280 @@ describe('CreatePage (Task 5.3)', () => {
 
   // --- Authorization ---
 
+  // ---------------------------------------------------------------------------
+  // Round 15 / PR #22 — Express CreatePage polish
+  // ---------------------------------------------------------------------------
+
+  // Helpers for the polish tests below — find the first source-note button
+  // (aria-pressed + [Category] text prefix) and click it; then click Generate
+  // and wait for the generated text to appear.
+  async function selectFirstNoteAndGenerate() {
+    const noteBtn = await waitFor(() => {
+      const btn = screen
+        .queryAllByRole('button')
+        .find((b) =>
+          b.getAttribute('aria-pressed') !== null &&
+          /^\[[A-Za-z]+\]/.test(b.textContent ?? ''),
+        );
+      if (!btn) throw new Error('source-note button not yet rendered');
+      return btn;
+    });
+    fireEvent.click(noteBtn);
+    const generateBtn = screen.getByRole('button', { name: /^generate /i });
+    fireEvent.click(generateBtn);
+    await waitFor(() => {
+      expect(screen.getByText(/Dorian Dreams/)).toBeInTheDocument();
+    });
+  }
+
+  it('renders Copy / Regenerate / Save as Note buttons after generation', async () => {
+    renderCreatePage();
+    await selectFirstNoteAndGenerate();
+    expect(screen.getByRole('button', { name: /^copy$/i })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /^regenerate$/i })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /save as note/i })).toBeInTheDocument();
+  });
+
+  it('Copy button writes generated text to clipboard', async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, 'clipboard', {
+      value: { writeText },
+      configurable: true,
+    });
+
+    renderCreatePage();
+    await selectFirstNoteAndGenerate();
+
+    const copyBtn = screen.getByRole('button', { name: /^copy$/i });
+    fireEvent.click(copyBtn);
+    await waitFor(() => {
+      expect(writeText).toHaveBeenCalledWith(GENERATED_TEXT);
+    });
+    await waitFor(() => {
+      expect(document.body.textContent).toMatch(/copied/i);
+    });
+  });
+
+  it('Regenerate button re-POSTs to /api/ai/generate', async () => {
+    const fetchSpy = vi.fn().mockImplementation((url: string) => {
+      if (url.includes('ai/generate')) {
+        return Promise.resolve({
+          ok: true,
+          status: 200,
+          json: async () => ({ generated_text: GENERATED_TEXT }),
+        });
+      }
+      return Promise.resolve({
+        ok: true,
+        status: 200,
+        json: async () => ({
+          items: NOTE_FIXTURES.map((n) => ({
+            id: n.serverId,
+            content: n.content,
+            category: n.category,
+            source_type: n.sourceType,
+            processing_status: n.processingStatus,
+            created_at: n.createdAt.toISOString(),
+            updated_at: n.updatedAt.toISOString(),
+            tags: n.tags,
+          })),
+          total: NOTE_FIXTURES.length,
+        }),
+      });
+    });
+    vi.stubGlobal('fetch', fetchSpy);
+
+    renderCreatePage();
+    await selectFirstNoteAndGenerate();
+
+    const callsBefore = fetchSpy.mock.calls.filter(([u]: [string]) => u.includes('ai/generate')).length;
+    const regen = screen.getByRole('button', { name: /^regenerate$/i });
+    fireEvent.click(regen);
+
+    await waitFor(() => {
+      const callsAfter = fetchSpy.mock.calls.filter(([u]: [string]) => u.includes('ai/generate')).length;
+      expect(callsAfter).toBeGreaterThan(callsBefore);
+    });
+  });
+
+  it('Save as Note POSTs to /api/notes with the right payload', async () => {
+    const fetchSpy = vi.fn().mockImplementation((url: string, options?: RequestInit) => {
+      if (url.includes('ai/generate')) {
+        return Promise.resolve({
+          ok: true,
+          status: 200,
+          json: async () => ({ generated_text: GENERATED_TEXT }),
+        });
+      }
+      // POST /api/notes (save-as-note) — distinguished from GET list by method
+      if (url.includes('api/notes') && options?.method === 'POST') {
+        return Promise.resolve({
+          ok: true,
+          status: 201,
+          json: async () => ({ id: 'new-saved-id', content: GENERATED_TEXT }),
+        });
+      }
+      return Promise.resolve({
+        ok: true,
+        status: 200,
+        json: async () => ({
+          items: NOTE_FIXTURES.map((n) => ({
+            id: n.serverId,
+            content: n.content,
+            category: n.category,
+            source_type: n.sourceType,
+            processing_status: n.processingStatus,
+            created_at: n.createdAt.toISOString(),
+            updated_at: n.updatedAt.toISOString(),
+            tags: n.tags,
+          })),
+          total: NOTE_FIXTURES.length,
+        }),
+      });
+    });
+    vi.stubGlobal('fetch', fetchSpy);
+
+    renderCreatePage();
+    await selectFirstNoteAndGenerate();
+
+    const saveBtn = screen.getByRole('button', { name: /save as note/i });
+    fireEvent.click(saveBtn);
+
+    await waitFor(() => {
+      const saveCall = fetchSpy.mock.calls.find(
+        ([u, opts]: [string, RequestInit]) => u.includes('api/notes') && opts?.method === 'POST',
+      );
+      expect(saveCall).toBeTruthy();
+      const [, opts] = saveCall as [string, RequestInit];
+      const body = JSON.parse(opts.body as string);
+      expect(body.content).toBe(GENERATED_TEXT);
+      expect(body.source_type).toBe('text');
+      expect(body.tags).toEqual(expect.arrayContaining(['express', 'song']));
+    });
+    await waitFor(() => {
+      expect(document.body.textContent).toMatch(/saved to library/i);
+    });
+  });
+
+  it('mode switch resets selected notes', async () => {
+    renderCreatePage();
+    const noteBtn = await waitFor(() => {
+      const btn = screen
+        .queryAllByRole('button')
+        .find((b) =>
+          b.getAttribute('aria-pressed') !== null &&
+          /^\[[A-Za-z]+\]/.test(b.textContent ?? ''),
+        );
+      if (!btn) throw new Error('source-note button not yet rendered');
+      return btn;
+    });
+    fireEvent.click(noteBtn);
+    expect(screen.getByText(/1 selected/i)).toBeInTheDocument();
+
+    // Switch mode
+    fireEvent.click(screen.getByRole('button', { name: /^practice plan$/i }));
+    await waitFor(() => {
+      expect(screen.getByText(/0 selected/i)).toBeInTheDocument();
+    });
+  });
+
+  it('mode switch resets generated text', async () => {
+    renderCreatePage();
+    await selectFirstNoteAndGenerate();
+    expect(screen.getByText(/Dorian Dreams/)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: /^reflection$/i }));
+    await waitFor(() => {
+      expect(screen.queryByText(/Dorian Dreams/)).not.toBeInTheDocument();
+    });
+  });
+
+  it('note-load failure shows retry button that re-fetches', async () => {
+    let notesCalls = 0;
+    const fetchSpy = vi.fn().mockImplementation((url: string) => {
+      if (url.includes('api/notes')) {
+        notesCalls += 1;
+        if (notesCalls === 1) {
+          return Promise.resolve({
+            ok: false,
+            status: 500,
+            json: async () => ({ detail: 'server boom' }),
+          });
+        }
+        return Promise.resolve({
+          ok: true,
+          status: 200,
+          json: async () => ({
+            items: NOTE_FIXTURES.map((n) => ({
+              id: n.serverId,
+              content: n.content,
+              category: n.category,
+              source_type: n.sourceType,
+              processing_status: n.processingStatus,
+              created_at: n.createdAt.toISOString(),
+              updated_at: n.updatedAt.toISOString(),
+              tags: n.tags,
+            })),
+            total: NOTE_FIXTURES.length,
+          }),
+        });
+      }
+      return Promise.resolve({ ok: true, status: 200, json: async () => ({}) });
+    });
+    vi.stubGlobal('fetch', fetchSpy);
+
+    renderCreatePage();
+    const retryBtn = await waitFor(() => {
+      return screen.getByRole('button', { name: /retry/i });
+    });
+    fireEvent.click(retryBtn);
+    await waitFor(() => {
+      expect(screen.getByText(/Jazz improvisation/i)).toBeInTheDocument();
+    });
+    expect(notesCalls).toBeGreaterThanOrEqual(2);
+  });
+
+  it('per-mode hint changes when mode changes', async () => {
+    renderCreatePage();
+    await waitFor(() => {
+      expect(screen.getByText(/best with music or songwriting notes/i)).toBeInTheDocument();
+    });
+    fireEvent.click(screen.getByRole('button', { name: /^practice plan$/i }));
+    await waitFor(() => {
+      expect(screen.getByText(/best with workout, training, or skill-practice notes/i)).toBeInTheDocument();
+    });
+    fireEvent.click(screen.getByRole('button', { name: /^reflection$/i }));
+    await waitFor(() => {
+      expect(screen.getByText(/best with journal entries and personal reflection notes/i)).toBeInTheDocument();
+    });
+  });
+
+  it('loadError, validationError, generateError are independent', async () => {
+    // Generate API fails, but notes load works — validationError must not be
+    // set, and loadError must not appear; only generateError shows.
+    setupFetchMocks({ ok: false, status: 500 });
+    renderCreatePage();
+
+    const noteBtn = await waitFor(() => {
+      const btn = screen
+        .queryAllByRole('button')
+        .find((b) =>
+          b.getAttribute('aria-pressed') !== null &&
+          /^\[[A-Za-z]+\]/.test(b.textContent ?? ''),
+        );
+      if (!btn) throw new Error('source-note button not yet rendered');
+      return btn;
+    });
+    fireEvent.click(noteBtn);
+    fireEvent.click(screen.getByRole('button', { name: /^generate /i }));
+
+    // generateError should be reachable via test id while loadError is not
+    await waitFor(() => {
+      expect(screen.getByTestId('generate-error')).toBeInTheDocument();
+    });
+    expect(screen.queryByTestId('load-error')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('validation-error')).not.toBeInTheDocument();
+  });
+
   it('sends Authorization header with generate request', async () => {
     const fetchSpy = vi.fn().mockImplementation((url: string) => {
       return Promise.resolve({

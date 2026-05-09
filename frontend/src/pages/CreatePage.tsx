@@ -1,5 +1,14 @@
-import { useCallback, useEffect, useState } from 'react';
-import { Music, Dumbbell, BookOpen, RefreshCw, Sparkles, X } from 'lucide-react';
+import { useCallback, useEffect, useRef, useState } from 'react';
+import {
+  Music,
+  Dumbbell,
+  BookOpen,
+  RefreshCw,
+  Sparkles,
+  X,
+  Copy as CopyIcon,
+  Save as SaveIcon,
+} from 'lucide-react';
 import { apiGet, apiPost } from '../api/client';
 import type { NoteOut, NotesListResponse } from '../api/notes';
 
@@ -21,6 +30,7 @@ interface KindConfig {
   label: string;
   icon: React.ReactElement;
   description: string;
+  hint: string;
   accent: string;
 }
 
@@ -29,18 +39,21 @@ const KIND_CONFIG: Record<GenerateKind, KindConfig> = {
     label: 'Song Idea',
     icon: <Music className="h-4 w-4" aria-hidden="true" />,
     description: 'Generate a song concept, themes, verse ideas, and a hook.',
+    hint: 'Best with music or songwriting notes',
     accent: 'text-purple-400 border-purple-500 bg-purple-900/30',
   },
   practice: {
     label: 'Practice Plan',
     icon: <Dumbbell className="h-4 w-4" aria-hidden="true" />,
     description: 'Create a focused music practice session plan.',
+    hint: 'Best with workout, training, or skill-practice notes',
     accent: 'text-green-400 border-green-500 bg-green-900/30',
   },
   reflection: {
     label: 'Reflection',
     icon: <BookOpen className="h-4 w-4" aria-hidden="true" />,
     description: 'Write a personal reflection that surfaces insights.',
+    hint: 'Best with journal entries and personal reflection notes',
     accent: 'text-amber-400 border-amber-500 bg-amber-900/30',
   },
 };
@@ -49,15 +62,6 @@ const KIND_CONFIG: Record<GenerateKind, KindConfig> = {
 // CreatePage
 // ---------------------------------------------------------------------------
 
-/**
- * CreatePage — Express generators (song, practice plan, reflection).
- *
- * 1. User picks a kind (song / practice / reflection).
- * 2. User selects source notes from their library.
- * 3. POST /api/ai/generate → renders generated_text.
- *
- * US-6 Task 5.3.
- */
 export default function CreatePage(): React.ReactElement {
   const [selectedKind, setSelectedKind] = useState<GenerateKind>('song');
   const [notes, setNotes] = useState<NoteOut[]>([]);
@@ -65,15 +69,33 @@ export default function CreatePage(): React.ReactElement {
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [generatedText, setGeneratedText] = useState<string | null>(null);
   const [isGenerating, setIsGenerating] = useState(false);
-  const [error, setError] = useState<string | null>(null);
 
-  // Load recent notes
-  useEffect(() => {
+  // Round 15 — separate error states per surface so failures don't leak.
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [validationError, setValidationError] = useState<string | null>(null);
+  const [generateError, setGenerateError] = useState<string | null>(null);
+
+  // Round 15 — Save-as-note + copy microcopy state.
+  const [copyFlash, setCopyFlash] = useState(false);
+  const [savedFlash, setSavedFlash] = useState(false);
+  const [saveError, setSaveError] = useState<string | null>(null);
+  const [isSaving, setIsSaving] = useState(false);
+
+  const generateBtnRef = useRef<HTMLButtonElement | null>(null);
+
+  // Round 15 — extracted loader so the retry button can call it.
+  const loadNotes = useCallback(() => {
+    setNotesLoading(true);
+    setLoadError(null);
     void apiGet<NotesListResponse>('/api/notes?limit=50')
       .then((data) => setNotes(data.items))
-      .catch((err: Error) => setError(err.message))
+      .catch((err: Error) => setLoadError(err.message))
       .finally(() => setNotesLoading(false));
   }, []);
+
+  useEffect(() => {
+    loadNotes();
+  }, [loadNotes]);
 
   const toggleNote = useCallback((id: string) => {
     setSelectedIds((prev) => {
@@ -87,14 +109,37 @@ export default function CreatePage(): React.ReactElement {
     });
   }, []);
 
+  // Round 15 — keyboard affordance: focus Generate after first selection so
+  // Enter triggers it.
+  useEffect(() => {
+    if (selectedIds.size === 1 && generateBtnRef.current) {
+      generateBtnRef.current.focus();
+    }
+  }, [selectedIds]);
+
+  // Round 15 — mode switch must reset selections, generated text and errors.
+  const changeKind = useCallback((kind: GenerateKind) => {
+    setSelectedKind(kind);
+    setSelectedIds(new Set());
+    setGeneratedText(null);
+    setValidationError(null);
+    setGenerateError(null);
+    setSaveError(null);
+    setCopyFlash(false);
+    setSavedFlash(false);
+  }, []);
+
   const handleGenerate = useCallback(async () => {
     if (selectedIds.size === 0) {
-      setError('Select at least one note to generate from.');
+      setValidationError('Select at least one note to generate from.');
       return;
     }
-    setError(null);
+    setValidationError(null);
+    setGenerateError(null);
     setIsGenerating(true);
     setGeneratedText(null);
+    setSavedFlash(false);
+    setCopyFlash(false);
     try {
       const result = await apiPost<GenerateResponse>('/api/ai/generate', {
         kind: selectedKind,
@@ -102,11 +147,42 @@ export default function CreatePage(): React.ReactElement {
       });
       setGeneratedText(result.generated_text);
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Generation failed.');
+      setGenerateError(err instanceof Error ? err.message : 'Generation failed.');
     } finally {
       setIsGenerating(false);
     }
   }, [selectedKind, selectedIds]);
+
+  const handleCopy = useCallback(async () => {
+    if (!generatedText) return;
+    try {
+      await navigator.clipboard.writeText(generatedText);
+      setCopyFlash(true);
+      window.setTimeout(() => setCopyFlash(false), 2000);
+    } catch {
+      setGenerateError('Could not copy to clipboard.');
+    }
+  }, [generatedText]);
+
+  const handleSaveAsNote = useCallback(async () => {
+    if (!generatedText) return;
+    setIsSaving(true);
+    setSaveError(null);
+    setSavedFlash(false);
+    try {
+      await apiPost('/api/notes', {
+        content: generatedText,
+        source_type: 'text',
+        tags: ['express', selectedKind],
+      });
+      setSavedFlash(true);
+      window.setTimeout(() => setSavedFlash(false), 2000);
+    } catch (err) {
+      setSaveError(err instanceof Error ? err.message : 'Could not save note.');
+    } finally {
+      setIsSaving(false);
+    }
+  }, [generatedText, selectedKind]);
 
   const config = KIND_CONFIG[selectedKind];
 
@@ -129,7 +205,7 @@ export default function CreatePage(): React.ReactElement {
               <button
                 key={kind}
                 type="button"
-                onClick={() => setSelectedKind(kind)}
+                onClick={() => changeKind(kind)}
                 className={[
                   'flex flex-1 flex-col items-center gap-1 rounded-xl border p-3 text-xs font-medium transition-colors focus:outline-none focus:ring-2 focus:ring-indigo-400',
                   selectedKind === kind
@@ -144,6 +220,9 @@ export default function CreatePage(): React.ReactElement {
             ))}
           </div>
           <p className="mt-2 text-xs text-slate-500">{config.description}</p>
+          <p className="mt-1 text-sm text-slate-400" data-testid="mode-hint">
+            {config.hint}
+          </p>
         </section>
 
         {/* Note selector */}
@@ -171,11 +250,27 @@ export default function CreatePage(): React.ReactElement {
             </div>
           )}
 
-          {!notesLoading && notes.length === 0 && (
+          {!notesLoading && loadError && (
+            <div
+              className="flex items-center justify-between gap-2 rounded-lg border border-red-500/40 bg-red-900/20 p-2.5"
+              data-testid="load-error"
+            >
+              <p className="text-xs text-red-300">Could not load notes: {loadError}</p>
+              <button
+                type="button"
+                onClick={loadNotes}
+                className="rounded-md border border-red-400/50 px-2 py-1 text-xs font-medium text-red-200 hover:bg-red-800/30 focus:outline-none focus:ring-2 focus:ring-red-400"
+              >
+                Retry
+              </button>
+            </div>
+          )}
+
+          {!notesLoading && !loadError && notes.length === 0 && (
             <p className="text-xs text-slate-500">No notes found. Capture some notes first.</p>
           )}
 
-          {!notesLoading && notes.length > 0 && (
+          {!notesLoading && !loadError && notes.length > 0 && (
             <div className="flex max-h-60 flex-col gap-1.5 overflow-y-auto pr-1">
               {notes.map((note) => {
                 const isSelected = selectedIds.has(note.id);
@@ -214,11 +309,20 @@ export default function CreatePage(): React.ReactElement {
           )}
         </section>
 
-        {/* Error */}
-        {error && <p className="text-xs text-red-400">{error}</p>}
+        {validationError && (
+          <p className="text-xs text-red-400" data-testid="validation-error">
+            {validationError}
+          </p>
+        )}
+        {generateError && (
+          <p className="text-xs text-red-400" data-testid="generate-error">
+            {generateError}
+          </p>
+        )}
 
         {/* Generate button */}
         <button
+          ref={generateBtnRef}
           type="button"
           onClick={() => void handleGenerate()}
           disabled={isGenerating || selectedIds.size === 0}
@@ -249,6 +353,47 @@ export default function CreatePage(): React.ReactElement {
             <p className="whitespace-pre-wrap text-sm leading-relaxed text-slate-200">
               {generatedText}
             </p>
+
+            <div className="mt-3 flex flex-wrap gap-2">
+              <button
+                type="button"
+                onClick={() => void handleCopy()}
+                className="flex items-center gap-1 rounded-md border border-slate-600 px-2.5 py-1.5 text-xs font-medium text-slate-200 hover:bg-slate-800 focus:outline-none focus:ring-2 focus:ring-indigo-400"
+              >
+                <CopyIcon className="h-3 w-3" aria-hidden="true" />
+                Copy
+              </button>
+              <button
+                type="button"
+                onClick={() => void handleGenerate()}
+                disabled={isGenerating}
+                className="flex items-center gap-1 rounded-md border border-slate-600 px-2.5 py-1.5 text-xs font-medium text-slate-200 hover:bg-slate-800 focus:outline-none focus:ring-2 focus:ring-indigo-400 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                <RefreshCw
+                  className={`h-3 w-3 ${isGenerating ? 'animate-spin' : ''}`}
+                  aria-hidden="true"
+                />
+                Regenerate
+              </button>
+              <button
+                type="button"
+                onClick={() => void handleSaveAsNote()}
+                disabled={isSaving}
+                className="flex items-center gap-1 rounded-md border border-indigo-500 bg-indigo-600/20 px-2.5 py-1.5 text-xs font-medium text-indigo-200 hover:bg-indigo-600/40 focus:outline-none focus:ring-2 focus:ring-indigo-400 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                <SaveIcon className="h-3 w-3" aria-hidden="true" />
+                Save as Note
+              </button>
+            </div>
+            <div className="mt-2 min-h-[1rem] text-xs">
+              {copyFlash && <span className="text-emerald-300">Copied!</span>}
+              {savedFlash && <span className="text-emerald-300">Saved to Library!</span>}
+              {saveError && (
+                <span className="text-red-300" data-testid="save-error">
+                  {saveError}
+                </span>
+              )}
+            </div>
           </section>
         )}
       </main>

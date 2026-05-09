@@ -86,7 +86,7 @@ az containerapp secret list --name cortexks-api --resource-group cortex-rg --sho
 | **P1** | ~~Triage 30 backend test-side failures~~ ✅ Round 12 (2026-05-07) — backend now 626/0/6 = **100%** | KNOWN_ISSUES.md § "Backend + frontend test failures" |
 | **P2** | ~~Frontend `api-client.test.ts` mock-isolation flake~~ ✅ Closed PR #14 (2026-05-07) — beforeEach restores `useAuthStore.getState` mock state | n/a |
 | **P2** | ~~Spec-auditor SA-M1 cosmetic migration cleanup~~ ✅ Round 14 (2026-05-07) — collapsed 3-statement embedding column dance into a single `ADD COLUMN`; +2 static tests; backend now 628/0/6 | `KNOWN_ISSUES.md` § "✅ P2 — Spec auditor SA-M1" |
-| **P3** | Phase 3 scope — Express UI polish, Settings export, image-capture UI, voice answer for Shadow Reader, E2E + perf | `PLAN.md` § 6 P3 |
+| **P3** | ~~Phase 3 scope — Express UI polish, Settings export, image-capture UI, voice answer for Shadow Reader, E2E + perf~~ ✅ Round 15 (2026-05-08) — 6 PRs landed (#22-#27): Settings export+change-password, Express CreatePage polish, Image capture preview/resize, Lazy-load route splitting (-58 KB main bundle), Shadow Reader voice answer (FR-8.4), E2E Playwright runner + nightly cron workflow. E2E pass: 17/17 against live | `PROGRESS.md` § 15 |
 | **P3** | JTI revocation in Redis or DB table (in-memory now; lost on Container App restart) | `KNOWN_ISSUES.md` § "JTI revocation" |
 | **P3** | `/api/auth/logout` server-side revoke (currently client-only) | `KNOWN_ISSUES.md` § "/auth/logout" |
 | **P4** | KMS-grade rotation for `JWT_SECRET_KEY`, strict CSP header, observability gaps | `PLAN.md` § 6 P4 |

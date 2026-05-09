@@ -2,7 +2,7 @@
 
 > **Chronological log of what's been done.** New work appends to the end. Use this to verify "we already did X" before re-doing.
 
-**Last updated:** 2026-05-07 (Round 14: SA-M1 cosmetic migration cleanup closed + P1 first-party-cookies explicitly deferred via PR #21)
+**Last updated:** 2026-05-08 (Round 15: Phase 3 closed via 6 PRs #22–#27)
 
 ---
 
@@ -812,4 +812,64 @@ User chose status quo. Captured in DECISIONS s 22ad and HANDOFF s 3b row updated
 - Frontend tests: N/A (no frontend changes).
 - Chrome-devtools live verify: N/A (cosmetic SQL cleanup, no user-visible behaviour change).
 - Production deploy: skipped — migration 001 has already run on prod, change is dead code there.
+
+
+
+## 15 — Round 15 — Phase 3 closeout via /fleet (2026-05-08)
+
+User asked to "tackle P3 thoroughly until completion" via /fleet (parallel agents) with TDD, audit, before/after screenshots, and PRs. Closed in 6 PRs over a single session.
+
+### Audit phase (4 parallel explore agents)
+
+Spawned `audit-express`, `audit-settings`, `audit-image-ocr`, `audit-shadow-perf` against the live repo. Returned structured reports identifying (a) what's shipped, (b) what's rough, (c) what's missing per spec, (d) test coverage gaps, (e) recommended polish work per file. This drove the 6-PR plan.
+
+### Wave 1 (3 parallel coder agents — all merged, all live-verified)
+
+| PR | Scope | Files | Tests added | Notes |
+|---|---|---|---|---|
+| #22 | Settings export + change-password | new `api/export.ts`; `SettingsPage.tsx` "Your Data" + "Account" sections; `AppHeader.tsx` profile-icon `/profile`->`/settings` | +13 frontend (8 SettingsPage, 1 AppHeader, 4 api-export) | Backend `GET /api/export` already existed; this PR wired the UI |
+| #23 | Express CreatePage polish | `pages/CreatePage.tsx` rewrite | +9 frontend (CreatePage), +2 backend (test_express empty-content + mixed-uuid 422) | Copy/Regenerate/Save-as-Note actions, per-mode hints, retry on note-load failure, mode-switch resets selection, separated load/validation/generate error states |
+| #24 | Image capture polish | new `ImagePreview.tsx`; `CapturePage.tsx` image flow rewrite | +7 frontend (CapturePage image), +1 frontend (ImagePreview), +3 backend (415/413/200 on /api/upload), +2 backend (OCR empty-result placeholder) | Client-side resize ≤2048px / 5MB JPEG via canvas; spinner overlay; OCR placeholder text fixed in same PR |
+
+### Wave 2 (3 parallel coder agents — all merged, all live-verified)
+
+| PR | Scope | Files | Tests added | Notes |
+|---|---|---|---|---|
+| #25 | Lazy-load route splitting | new `RouteLoading.tsx`; `App.tsx` 6 lazy imports + Suspense | +11 frontend (5 RouteLoading + 6 App.lazy) | Bundle: main 413.15 -> 354.59 KB raw (-58.56 KB), 125.45 -> 112.30 KB gzip (-13.15 KB). 6 new chunks: Insights 3.49, Search 4.00, Library 8.28, Create 9.93, Settings 14.14, NoteDetail 16.48 KB |
+| #27 (GH PR #27) | Shadow Reader voice answer (FR-8.4) | `api/shadow_reader.py` new endpoint + `transcribe_audio_url` helper; `schemas/shadow_reader.py` `ShadowReaderAudioAnswerCreate`; `ShadowReaderPrompt.tsx` mic UI restored desktop-only; `api/shadowReader.ts` `submitAudioAnswer` | +5 backend, +6 frontend | Mobile UA still skips mic per § 22w. Uses existing /api/upload + new /api/notes/{id}/shadow-reader/answer-audio. `transcribe_audio_url` added as thin httpx-download wrapper around existing `transcribe_audio_file` |
+| #26 (GH PR #26) | E2E Playwright runner + GH Actions | `e2e/package.json` new scripts; new `.github/workflows/e2e.yml`; `e2e/ISSUES.md` triage | n/a (infra) | `e2e`, `e2e:ui`, `e2e:install` npm scripts. Workflow: workflow_dispatch + nightly cron 09:00 UTC, uploads playwright-report on failure. **17/17 passed** in first manual run against live deployment (validates ISSUES.md triage that all 4 historical items are obsolete) |
+
+### Workspace contention
+
+Sub-agent fleet shared the same working directory. Agents reported branch swaps mid-stream; each self-isolated via `git stash -u` + branch re-checkout + selective `git stash pop`. Pattern was reliable in practice (all 6 PRs merged cleanly with no cross-contamination), but next round should consider `git worktree` per agent. Documented as a finding for fleet operations.
+
+### Backend deploy race
+
+PR #24 backend deploy hit `ContainerAppOperationInProgress` because PR #23's deploy was still running. Re-triggered via `gh workflow run deploy-backend.yml` and it succeeded on second try. Not a regression — Container Apps' platform-level serialization, with an obvious mitigation (sequence merges or add a `concurrency` group to the workflow). Filed as a follow-up nit.
+
+### Final state
+
+- Backend full suite: `640 passed, 6 skipped, 1 xfailed, 1 xpassed` (Round 14 baseline 628 + 12 added across PRs #22-#27).
+- Frontend full suite: `563 passed, 1 skipped` (Round 14 baseline 523 + 40 added).
+- TypeScript: clean.
+- `GET /api/health` -> 200.
+- E2E workflow: 17/17 passing live.
+- Live container image: `cortexks-api:61b67942cd9dd0a92109dbe163d9f9c24682722f` (PR #27 / shadow voice).
+- Live SWA bundle: deployed PR #25 lazy-load split confirmed via cache-buster reload + chrome-devtools.
+
+### Live verification (chrome-devtools)
+
+Before / after screenshots saved to session `files/`: `r15-before-{settings,create,capture}.png`, `r15-after-{settings,create,capture,library}.png`. Visible deltas:
+- Settings: +"Your Data" card with Export button, +"Account" card with change-password form, AppHeader profile-icon now goes to /settings.
+- Create: +per-mode hint "Best with music or songwriting notes" / etc.; mode-switch resets selection.
+- Library: same UI but loads via the new lazy chunk (verified by network panel showing `Library-*.js` chunk fetch).
+- Capture: file-picker upgrade is post-selection only (not visible in idle state); image preview UI exercised via E2E + test_capture.
+
+### Spec-auditor sign-off
+
+PROGRESS.md, KNOWN_ISSUES.md, HANDOFF.md s 3b, PLAN.md s 3 + s 6, DECISIONS.md s 22ae all updated to reflect Phase 3 closure. PR #28 (this docs PR) is the final closing artefact.
+
+### Remaining open work after Round 15
+
+P3 JTI revocation in Redis or DB table, P3 `/api/auth/logout` server-side revoke, P4 strict CSP + KMS rotation. All independent of Phase 3.
 

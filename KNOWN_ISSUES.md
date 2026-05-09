@@ -2,7 +2,7 @@
 
 > **Open work, bugs not fixed, gaps from "fully done."** Anything tagged P0/P1/P2 here is meant to be picked up by the next agent.
 
-**Last updated:** 2026-05-07 (Round 14: SA-M1 cosmetic migration cleanup closed + P1 first-party-cookies explicitly deferred via PR #21)
+**Last updated:** 2026-05-08 (Round 15: Phase 3 closed via 6 PRs #22–#27 — Express polish, Settings export+password, Image preview/resize, lazy-load splitting, Shadow Reader voice answer FR-8.4, E2E Playwright runner)
 
 ---
 
@@ -316,16 +316,24 @@ PR #21. Backend now at 628/0/6 (Round 12 baseline + 2 new tests).
 
 ---
 
-## P3 — Phase 3 not implemented
+## ✅ P3 — Phase 3 (resolved 2026-05-08, Round 15)
 
-Items 35-40 from spec § 4.2:
-- 35: Backend Music-specific AI processing pipeline (mostly done in `pipeline/music.py` from us-6, but no dedicated route or UI flow)
-- 36: Frontend Music player with waveform — DONE in us-6 `MusicPlayer.tsx`
-- 37: Backend Express endpoints (song / practice / reflection) — DONE in us-6 `api/express.py` or `api/insights.py:generate_express`
-- 37 (cont.): Frontend Settings page export data + change password — Settings page exists from us-7, but **export action button** in the UI is missing. `GET /api/export` endpoint is wired, but no UI calls it.
-- 38: Backend image upload + OCR — DONE in us-2 `pipeline/ocr.py`
-- 39: Frontend image capture/upload in Capture page — `CapturePage.tsx` has the file input but the offline branch (B11) is in syncManager only; **no end-to-end UI test of image capture**
-- 40: E2E + perf optimization — NOT STARTED
+Items 35-40 from spec § 4.2 — closed via 6 PRs (#22-#27). See `PROGRESS.md` § 15 for full per-PR root-cause + fix + verification table.
+
+| Spec item | Shipped via |
+|---|---|
+| 35 — Music AI pipeline | DONE in us-6 `pipeline/music.py` (pre-Round 15) |
+| 36 — Music player | DONE in us-6 `MusicPlayer.tsx` (pre-Round 15) |
+| 37 — Express endpoints | DONE in us-6 `api/insights.py::generate_express` (pre-Round 15) |
+| 37 — Settings export + change-password | **PR #22** (Round 15) — new `api/export.ts` + `SettingsPage` "Your Data" button calling `GET /api/export`, change-password form duplicated from `ProfilePage`, `AppHeader` profile-icon now points to `/settings` |
+| 35-36 — Express UI polish | **PR #23** (Round 15) — Copy/Regenerate/Save-as-Note buttons, per-mode hints, retry on note-load failure, mode-switch resets selection, separated load/validation/generate error states |
+| 38 — Backend image+OCR | DONE in us-2 `pipeline/ocr.py` (pre-Round 15) + **PR #24** (Round 15) added empty-OCR placeholder + 415/413 tests on `/api/upload` |
+| 39 — Frontend image capture | **PR #24** (Round 15) — preview-before-upload, client-side resize ≤2048px / 5MB JPEG, "Uploading…" spinner + error toast, new `ImagePreview.tsx` |
+| 40 — E2E + perf | **PR #25** lazy-load route splitting (-58 KB raw / -13 KB gzip main bundle, 6 new chunks for Insights/Create/Settings/Library/Search/NoteDetail) + **PR #26** Playwright runner (`npm run e2e`, GH Actions workflow `e2e.yml` with `workflow_dispatch` + nightly cron 09:00 UTC, 17/17 tests passing live) + **PR #27** Shadow Reader voice answer (FR-8.4) — restored mic UI on desktop, new `POST /api/notes/{id}/shadow-reader/answer-audio` that uses existing `/api/upload` + `transcribe_audio_url`, mobile UA still skips mic per § 22w |
+
+**TDD pattern used:** red→green for every PR (frontend Vitest + backend pytest where applicable). Full backend now at **640 passed / 6 skipped / 1 xfailed / 1 xpassed** (Round 14 baseline 628 + ~12 added across PRs). Full frontend at **563 passed / 1 skipped** (Round 14 baseline 523 + ~40 added).
+
+**Live verification:** chrome-devtools manual audit + cache-buster reload after each merge; before/after screenshots saved to session `files/`. E2E workflow (PR #26) provides ongoing regression coverage.
 
 ---
 

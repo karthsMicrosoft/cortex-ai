@@ -635,3 +635,33 @@ User explicitly chose status quo: domain cost not worth the hassle, SWA Standard
 
 **Mechanical change required when re-litigated:** Remove `localStorage.setItem/getItem('cortex_refresh')` from `frontend/src/api/auth.ts` and `client.ts`. Update `backend/tests/test_auth.py::TestRefreshTokenInBody` (rename and invert) back to the cookie-only contract. Backend `/login`, `/register`, `/refresh` already set the httpOnly cookie as defense-in-depth; the body augmentation is the only thing that needs to come out.
 
+
+
+## § 22ae — Phase 3 closure (2026-05-08, Round 15)
+
+Phase 3 (spec § 4.2 items 35-40) closed in a single session via 6 PRs (#22-#27). Decisions captured here for future reference.
+
+### Per-PR decisions
+
+**PR #22 — Settings export + change-password.** Decision: keep change-password form on **both** ProfilePage AND SettingsPage. Rationale: spec § 4.2 item 37 says Settings; existing users may have ProfilePage bookmarks; the form is small and the duplicate JSX is acceptable for the MVP. AppHeader profile-icon now points to /settings (was /profile) — /profile route still wired for backward compat.
+
+**PR #23 — Express CreatePage polish.** Decision: Save-as-Note creates a note tagged ``express`` + the kind (``song``/``practice``/``reflection``). This makes the GPT-generated content discoverable + filterable in Library. Did NOT add a separate ``Generated`` category since the existing 6 are spec-frozen.
+
+**PR #24 — Image capture polish.** Decision: client-side resize fires when EITHER size > 5 MB OR width > 2048 px. Re-encodes as JPEG quality 0.85. Rationale: Azure Vision's OCR works fine at 2048 px wide; downscaling here saves blob storage + speeds upload. Kept file-picker only (no camera capture) — spec was silent and camera adds significant browser-permission UX cost.
+
+**PR #25 — Lazy-load route splitting.** Decision: lazy-load 6 routes (Insights, Create, Settings, Library, Search, NoteDetail). Did NOT lazy-load Login, Register (auth boundary must render immediately), Capture (default route, FCP-critical), Profile (single screen, low-priority but rare access), or BrainView (already lazy). Bundle win: -58 KB raw / -13 KB gzip on main; 6 new chunks each 3-17 KB. Single Suspense boundary at the routing layer (not per-route) — simpler and the fallback is identical anyway.
+
+**PR #26 — E2E Playwright runner + GH Actions.** Decision: workflow_dispatch + nightly cron at 09:00 UTC (~midnight Pacific). NOT triggered on push/PR — Playwright runs against LIVE deployment so it must be deterministic about what's deployed. Manual + nightly is the right cadence for a single-user MVP. Workflow uploads playwright-report on failure for triage.
+
+**PR #27 — Shadow Reader voice answer (FR-8.4).** Decision: restore mic UI on **desktop only**; mobile still skips mic per DECISIONS § 22w (Round-7 mobile UA workaround). Backend uses **existing** working /api/upload (which returns SAS URL + blob path) and a **new** /api/notes/{id}/shadow-reader/answer-audio that downloads the SAS URL via httpx and re-uses the existing transcribe_audio_file helper. ``transcribe_audio_url`` is a thin wrapper added in this PR. Did NOT recreate the broken /api/upload/audio endpoint that was removed in PR #14.
+
+### Cross-cutting decisions
+
+**Fleet pattern with shared working dir.** All 6 PRs were developed by parallel sub-agents sharing a single working directory. Each agent self-isolated via stash + branch re-checkout. The pattern worked but is fragile — next round should evaluate ``git worktree`` per agent for better isolation.
+
+**Backend deploy race.** Container Apps platform serializes ``az containerapp update`` operations, so back-to-back merges that each trigger a backend deploy can fail with ``ContainerAppOperationInProgress``. Mitigations: (a) sequence merges with a small wait between each, (b) add a ``concurrency: { group: deploy-backend, cancel-in-progress: false }`` to the workflow. Filed as a follow-up nit; for now, manual ``gh workflow run`` re-trigger covers it.
+
+**TDD red->green for every PR.** Continued the established session policy. Tester would be a separate agent in some past rounds; this round each coder agent ran its own RED check before implementing. Total tests added: ~12 backend + ~40 frontend. Final suites: backend 640/0/6 (was 628), frontend 563/0/1 (was 523).
+
+**Live verification with chrome-devtools.** Before/after screenshots captured for SettingsPage, CreatePage, CapturePage, LibraryPage. Service-worker cache had to be manually cleared after deploy via ``navigator.serviceWorker.getRegistrations() / unregister()`` + ``caches.delete()`` to see new bundles — this is a known PWA pattern, not a bug.
+

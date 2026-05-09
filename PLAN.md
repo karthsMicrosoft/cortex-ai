@@ -57,15 +57,15 @@ Per spec § 2.1. Currently deployed in **`centralus`** with OpenAI in **`eastus`
 | us-8-shadow-reader | 31-32 | Stage 1.5 (Reflect) runs after Stage 2, ≤2 questions ≤15 words, 4 endpoints, ShadowReaderPrompt with B17 polling (10×2s + 5×5s), ShadowReaderSettings with global toggle + per-category opt-out |
 | us-9-realtime-stt | 33-34 | WebSocket streaming endpoint at `/api/voice/stream`, real-time partial transcription in VoiceCapture, B16 soft-fail import for us-7 helpers |
 
-### Phase 3 — Music + Express + Polish (items 35-40) ⏳ NOT STARTED
-| Item | What it would ship |
+### Phase 3 — Music + Express + Polish (items 35-40) ✅ DONE (Round 15, 2026-05-08)
+| Item | Shipped via |
 |---|---|
-| 35-36 | Express UI (CreatePage already exists from us-6 — Phase 3 would polish) |
-| 37 | Settings page export data + change password (Settings page exists from us-7; needs export action) |
-| 38-39 | Image upload + OCR end-to-end UI (backend done; frontend needs image-capture flow per B11) |
-| 40 | E2E test pass + perf optimization |
+| 35-36 | PR #23 — CreatePage Copy/Regenerate/Save-as-Note + per-mode hints + retry on load failure + separate error states |
+| 37 | PR #22 — SettingsPage "Your Data" + "Account" sections; Export button → `GET /api/export` blob download; change-password form duplicated from ProfilePage; AppHeader profile-icon link `/profile`→`/settings` |
+| 38-39 | PR #24 — CapturePage preview-before-upload, client-side resize ≤2048px / 5MB JPEG, "Uploading…" spinner + error toast; backend `/api/upload` 415/413 tests; OCR placeholder for empty `READ` results |
+| 40 | PR #25 lazy-load route splitting (-58 KB raw / -13 KB gzip main bundle, 6 new chunks) + PR #26 E2E Playwright runner + nightly cron workflow (17/17 passing against live) + PR #27 Shadow Reader voice answer (FR-8.4) |
 
-> Phase 3 is **out of current scope**. Spec mentions it as "2 weeks more". Pick up there if/when you continue.
+> Phase 3 closed 2026-05-08. See PROGRESS.md § 15 for details.
 
 ---
 
@@ -161,8 +161,8 @@ End-to-end happy path to validate before declaring "done":
 8. Triage the 30 backend test failures: per-failure determine real bug vs test-side flake. Update tests or code accordingly. Goal: ≥95% pass rate. See `KNOWN_ISSUES.md` § "Test failures".
 9. Fix the frontend `api-client.test.ts` mock-isolation bug (use `vi.resetAllMocks()` instead of `vi.clearAllMocks()` in afterEach).
 
-### P3 — Phase 3 scope (when ready)
-10. Items 37-40 from spec § 4.2 — Express UI polish, Settings export, image-capture UI, E2E + perf optimization.
+### P3 — Phase 3 scope ✅ DONE (Round 15, 2026-05-08)
+10. ~~Items 37-40 from spec § 4.2 — Express UI polish, Settings export, image-capture UI, E2E + perf optimization.~~ ✅ Closed via 6 PRs (#22-#27). See § 3 above and PROGRESS.md § 15.
 
 ### P4 — Production hardening
 11. Move JTI revocation from in-memory set to Redis or DB table (SEC-07 follow-up — currently in-memory means revocations are lost on Container App restart).

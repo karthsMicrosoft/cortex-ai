@@ -8,13 +8,17 @@ export class ApiError extends Error {
   code: string;
   detail: string;
   status: number;
+  /** Seconds until the caller may retry. Populated for HTTP 429 responses
+   * when the server returns a `Retry-After` header (slowapi sets this). */
+  retryAfter?: number;
 
-  constructor(status: number, code: string, detail: string) {
+  constructor(status: number, code: string, detail: string, retryAfter?: number) {
     super(detail);
     this.name = 'ApiError';
     this.status = status;
     this.code = code;
     this.detail = detail;
+    if (retryAfter !== undefined) this.retryAfter = retryAfter;
   }
 }
 
@@ -141,11 +145,25 @@ async function fetchWithAuth(
 // Public API client
 // ---------------------------------------------------------------------------
 
+function parseRetryAfter(res: Response): number | undefined {
+  if (res.status !== 429) return undefined;
+  const raw = res.headers.get('Retry-After');
+  if (!raw) return undefined;
+  const n = Number(raw);
+  if (Number.isFinite(n) && n >= 0) return n;
+  // HTTP-date form — convert to seconds-from-now.
+  const ts = Date.parse(raw);
+  if (!Number.isNaN(ts)) {
+    return Math.max(0, Math.round((ts - Date.now()) / 1000));
+  }
+  return undefined;
+}
+
 export async function apiGet<T>(url: string, options?: RequestOptions): Promise<T> {
   const res = await fetchWithAuth(url, { ...options, method: 'GET' });
   if (!res.ok) {
     const { code, detail } = await parseErrorBody(res);
-    throw new ApiError(res.status, code, detail);
+    throw new ApiError(res.status, code, detail, parseRetryAfter(res));
   }
   return res.json() as Promise<T>;
 }
@@ -154,7 +172,7 @@ export async function apiPost<T>(url: string, body?: unknown, options?: RequestO
   const res = await fetchWithAuth(url, { ...options, method: 'POST', body });
   if (!res.ok) {
     const { code, detail } = await parseErrorBody(res);
-    throw new ApiError(res.status, code, detail);
+    throw new ApiError(res.status, code, detail, parseRetryAfter(res));
   }
   return res.json() as Promise<T>;
 }
@@ -163,7 +181,7 @@ export async function apiPut<T>(url: string, body?: unknown, options?: RequestOp
   const res = await fetchWithAuth(url, { ...options, method: 'PUT', body });
   if (!res.ok) {
     const { code, detail } = await parseErrorBody(res);
-    throw new ApiError(res.status, code, detail);
+    throw new ApiError(res.status, code, detail, parseRetryAfter(res));
   }
   return res.json() as Promise<T>;
 }
@@ -172,6 +190,6 @@ export async function apiDelete(url: string, options?: RequestOptions): Promise<
   const res = await fetchWithAuth(url, { ...options, method: 'DELETE' });
   if (!res.ok) {
     const { code, detail } = await parseErrorBody(res);
-    throw new ApiError(res.status, code, detail);
+    throw new ApiError(res.status, code, detail, parseRetryAfter(res));
   }
 }

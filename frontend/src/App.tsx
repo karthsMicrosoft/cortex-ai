@@ -19,6 +19,7 @@ const SettingsPage = lazy(() => import('./pages/SettingsPage'));  // US-7
 const NoteDetailPage = lazy(() => import('./pages/NoteDetailPage'));
 const LibraryPage = lazy(() => import('./pages/LibraryPage'));
 const SearchPage = lazy(() => import('./pages/SearchPage'));
+const AskPage = lazy(() => import('./pages/AskPage'));
 
 import { BottomNav } from './components/BottomNav';
 import { AppHeader } from './components/AppHeader';
@@ -120,6 +121,14 @@ export default function App(): React.ReactElement {
           element={
             <AuthGate>
               <CreatePage />
+            </AuthGate>
+          }
+        />
+        <Route
+          path="/ask"
+          element={
+            <AuthGate>
+              <AskPage />
             </AuthGate>
           }
         />

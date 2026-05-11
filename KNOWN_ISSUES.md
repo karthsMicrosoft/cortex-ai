@@ -2,7 +2,7 @@
 
 > **Open work, bugs not fixed, gaps from "fully done."** Anything tagged P0/P1/P2 here is meant to be picked up by the next agent.
 
-**Last updated:** 2026-05-08 (Round 15: Phase 3 closed via 6 PRs #22–#27 — Express polish, Settings export+password, Image preview/resize, lazy-load splitting, Shadow Reader voice answer FR-8.4, E2E Playwright runner)
+**Last updated:** 2026-05-11 (Round 16: Phase 4 AI Search + Synthesis closed via 10 PRs #29-#41)
 
 ---
 

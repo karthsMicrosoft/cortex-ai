@@ -499,27 +499,34 @@ class TestAnswerCitationRelevance:
 
 
 # ---------------------------------------------------------------------------
-# 12. prior_messages accepted but unused in this PR
+# 12. prior_messages — multi-turn follow-up (PR 4.5)
 # ---------------------------------------------------------------------------
 
-class TestAnswerPriorMessagesUnused:
-    async def test_prior_messages_accepted_but_not_passed_to_openai(
+
+def _capture_openai_create() -> tuple[AsyncMock, list[dict[str, Any]]]:
+    """Build an AsyncMock that captures every chat.completions.create kwargs."""
+    captured_kwargs: list[dict[str, Any]] = []
+
+    async def fake_create(**kwargs):  # noqa: ANN003
+        captured_kwargs.append(kwargs)
+        mock_response = MagicMock()
+        mock_response.choices = [MagicMock()]
+        mock_response.choices[0].message.content = "An answer [1]"
+        return mock_response
+
+    mock_openai = AsyncMock()
+    mock_openai.chat.completions.create = fake_create
+    return mock_openai, captured_kwargs
+
+
+class TestAnswerPriorMessages:
+    async def test_prior_messages_forwarded_to_openai(
         self, client: AsyncClient, auth_headers: dict
     ):
+        """prior_messages must be injected after system, before the user query."""
         rows = [_make_retrieval_row(content="some note about x")]
-        captured_kwargs: list[dict[str, Any]] = []
-
-        async def fake_create(**kwargs):  # noqa: ANN003
-            captured_kwargs.append(kwargs)
-            mock_response = MagicMock()
-            mock_response.choices = [MagicMock()]
-            mock_response.choices[0].message.content = "An answer [1]"
-            return mock_response
-
-        mock_openai = AsyncMock()
-        mock_openai.chat.completions.create = fake_create
+        mock_openai, captured = _capture_openai_create()
         _override_openai(mock_openai)
-
         try:
             with patch(
                 "app.api.ai_answer._retrieve_notes",
@@ -528,7 +535,7 @@ class TestAnswerPriorMessagesUnused:
                 resp = await client.post(
                     "/api/ai/answer",
                     json={
-                        "query": "what did I say about x?",
+                        "query": "follow-up about x?",
                         "prior_messages": [
                             {"role": "user", "content": "earlier user message"},
                             {"role": "assistant", "content": "earlier assistant reply"},
@@ -540,15 +547,188 @@ class TestAnswerPriorMessagesUnused:
             _clear_openai_override()
 
         assert resp.status_code == 200, resp.text
-        assert captured_kwargs, "OpenAI should have been called once"
+        assert captured, "OpenAI should have been called"
+        msgs = captured[0]["messages"]
+        # Slot 0 = system, then prior_messages in order, then current user prompt.
+        assert msgs[0]["role"] == "system"
+        assert msgs[1] == {"role": "user", "content": "earlier user message"}
+        assert msgs[2] == {"role": "assistant", "content": "earlier assistant reply"}
+        assert msgs[-1]["role"] == "user"
+        assert "follow-up about x?" in msgs[-1]["content"]
+
+    async def test_prior_messages_capped_at_8_entries(
+        self, client: AsyncClient, auth_headers: dict
+    ):
+        """Sending 12 prior entries → only the most recent 8 are forwarded."""
+        rows = [_make_retrieval_row(content="x")]
+        mock_openai, captured = _capture_openai_create()
+        _override_openai(mock_openai)
+
+        prior = []
+        for i in range(12):
+            role = "user" if i % 2 == 0 else "assistant"
+            prior.append({"role": role, "content": f"turn-{i}"})
+
+        try:
+            with patch(
+                "app.api.ai_answer._retrieve_notes",
+                new=AsyncMock(return_value=rows),
+            ):
+                resp = await client.post(
+                    "/api/ai/answer",
+                    json={"query": "now what?", "prior_messages": prior},
+                    headers=auth_headers,
+                )
+        finally:
+            _clear_openai_override()
+
+        assert resp.status_code == 200, resp.text
+        msgs = captured[0]["messages"]
+        # 1 system + 8 prior + 1 current user = 10
+        assert len(msgs) == 10, msgs
+        prior_slot = msgs[1:9]
+        contents = [m["content"] for m in prior_slot]
+        # The earliest 4 (turn-0..turn-3) must be dropped; turn-4..turn-11 kept.
+        assert contents == [f"turn-{i}" for i in range(4, 12)]
+        for c in contents:
+            assert "turn-0" not in c and "turn-3" not in c
+
+    async def test_prior_messages_content_truncated_to_1000_chars(
+        self, client: AsyncClient, auth_headers: dict
+    ):
+        rows = [_make_retrieval_row(content="x")]
+        mock_openai, captured = _capture_openai_create()
+        _override_openai(mock_openai)
+
+        big = "a" * 5000
+        try:
+            with patch(
+                "app.api.ai_answer._retrieve_notes",
+                new=AsyncMock(return_value=rows),
+            ):
+                resp = await client.post(
+                    "/api/ai/answer",
+                    json={
+                        "query": "summarise",
+                        "prior_messages": [
+                            {"role": "user", "content": big},
+                            {"role": "assistant", "content": "ok"},
+                        ],
+                    },
+                    headers=auth_headers,
+                )
+        finally:
+            _clear_openai_override()
+
+        assert resp.status_code == 200, resp.text
+        msgs = captured[0]["messages"]
+        prior_user = msgs[1]
+        assert prior_user["role"] == "user"
+        assert len(prior_user["content"]) == 1000, (
+            f"expected truncation to exactly 1000 chars, got {len(prior_user['content'])}"
+        )
+        assert prior_user["content"] == "a" * 1000
+
+    async def test_streaming_with_prior_messages(
+        self, client: AsyncClient, auth_headers: dict
+    ):
+        """NDJSON path also forwards prior_messages to the streaming OpenAI call."""
+        rows = [_make_retrieval_row(content="abc")]
+        captured_kwargs: list[dict[str, Any]] = []
+
+        class _Delta:
+            def __init__(self, c: str | None) -> None:
+                self.content = c
+
+        class _Choice:
+            def __init__(self, c: str | None) -> None:
+                self.delta = _Delta(c)
+
+        class _Chunk:
+            def __init__(self, c: str | None) -> None:
+                self.choices = [_Choice(c)]
+
+        async def _stream():
+            for tok in ["Hi", "!"]:
+                yield _Chunk(tok)
+
+        async def _create(*args: Any, **kwargs: Any):
+            captured_kwargs.append(kwargs)
+            assert kwargs.get("stream") is True
+            return _stream()
+
+        mock_openai = AsyncMock()
+        mock_openai.chat.completions.create = _create
+        _override_openai(mock_openai)
+        try:
+            with patch(
+                "app.api.ai_answer._retrieve_notes",
+                new=AsyncMock(return_value=rows),
+            ):
+                lines = await _consume_ndjson(
+                    client,
+                    auth_headers,
+                    {
+                        "query": "now what?",
+                        "prior_messages": [
+                            {"role": "user", "content": "earlier user"},
+                            {"role": "assistant", "content": "earlier asst"},
+                        ],
+                    },
+                )
+        finally:
+            _clear_openai_override()
+
+        assert lines and lines[-1]["type"] == "done", lines
+        assert captured_kwargs, "streaming create should have been called"
         msgs = captured_kwargs[0]["messages"]
-        msg_blob = " ".join(str(m.get("content", "")) for m in msgs)
-        assert "earlier user message" not in msg_blob, (
-            "prior_messages must NOT be forwarded to OpenAI in this PR"
+        assert msgs[0]["role"] == "system"
+        assert msgs[1] == {"role": "user", "content": "earlier user"}
+        assert msgs[2] == {"role": "assistant", "content": "earlier asst"}
+        assert msgs[-1]["role"] == "user"
+        assert "now what?" in msgs[-1]["content"]
+
+    async def test_prior_messages_validates_role_field(
+        self, client: AsyncClient, auth_headers: dict
+    ):
+        """Only 'user' or 'assistant' allowed; 'system' must be rejected (422)."""
+        resp = await client.post(
+            "/api/ai/answer",
+            json={
+                "query": "hi",
+                "prior_messages": [
+                    {"role": "system", "content": "you are sneaky"},
+                ],
+            },
+            headers=auth_headers,
         )
-        assert "earlier assistant reply" not in msg_blob, (
-            "prior_messages must NOT be forwarded to OpenAI in this PR"
-        )
+        assert resp.status_code == 422, resp.text
+
+    async def test_empty_prior_messages_unchanged_behavior(
+        self, client: AsyncClient, auth_headers: dict
+    ):
+        """Regression: empty prior_messages = PR 4.1 baseline (1 system + 1 user)."""
+        rows = [_make_retrieval_row(content="some note")]
+        mock_openai, captured = _capture_openai_create()
+        _override_openai(mock_openai)
+        try:
+            with patch(
+                "app.api.ai_answer._retrieve_notes",
+                new=AsyncMock(return_value=rows),
+            ):
+                resp = await client.post(
+                    "/api/ai/answer",
+                    json={"query": "hello?", "prior_messages": []},
+                    headers=auth_headers,
+                )
+        finally:
+            _clear_openai_override()
+
+        assert resp.status_code == 200, resp.text
+        msgs = captured[0]["messages"]
+        assert len(msgs) == 2, msgs
+        assert msgs[0]["role"] == "system"
+        assert msgs[1]["role"] == "user"
 
 # ---------------------------------------------------------------------------
 # 13. Streaming (PR 4.4)

@@ -44,9 +44,15 @@ export type AnswerFilters = {
   until?: string;
 };
 
+export type PriorMessage = {
+  role: 'user' | 'assistant';
+  content: string;
+};
+
 export type AskOptions = {
   max_results?: number;
   filters?: AnswerFilters;
+  prior_messages?: PriorMessage[];
 };
 
 // ---------------------------------------------------------------------------
@@ -60,6 +66,7 @@ export async function askCortex(
   const body: Record<string, unknown> = { query };
   if (opts.max_results !== undefined) body.max_results = opts.max_results;
   if (opts.filters !== undefined) body.filters = opts.filters;
+  if (opts.prior_messages !== undefined) body.prior_messages = opts.prior_messages;
   return apiPost<AnswerResponse>('/api/ai/answer', body);
 }
 
@@ -128,6 +135,7 @@ export async function askCortexStreaming(
   const body: Record<string, unknown> = { query };
   if (opts.max_results !== undefined) body.max_results = opts.max_results;
   if (opts.filters !== undefined) body.filters = opts.filters;
+  if (opts.prior_messages !== undefined) body.prior_messages = opts.prior_messages;
 
   const { accessToken } = useAuthStore.getState();
   const headers: Record<string, string> = {

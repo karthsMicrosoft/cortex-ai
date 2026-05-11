@@ -34,6 +34,7 @@ from app.schemas.ai_answer import (
     AnswerFilters,
     AnswerRequest,
     AnswerResponse,
+    PriorMessage,
 )
 from app.services.openai_client import get_openai
 
@@ -48,6 +49,10 @@ _MAX_RESULTS_HARD_CAP = 20
 _NOTE_TRUNCATE_CHARS = 1500
 _SNIPPET_CHARS = 240
 _NO_MATCH_ANSWER = "I don't have any notes that match this question."
+
+# Multi-turn caps (PR 4.5).
+_PRIOR_MAX_ENTRIES = 8         # 4 user + 4 assistant turns max
+_PRIOR_CONTENT_CHARS = 1000    # per-message cap
 
 _SYSTEM_PROMPT = (
     "You are Cortex, the user's second brain. Answer using ONLY the provided "
@@ -210,6 +215,24 @@ def _build_citations(notes: list[dict[str, Any]]) -> list[AnswerCitation]:
     return citations
 
 
+def _normalize_prior_messages(
+    prior: Optional[list[PriorMessage]],
+) -> list[dict[str, str]]:
+    """Cap to last 8 entries and truncate each ``content`` to 1000 chars.
+
+    Returns chat-completion-shaped dicts ready to splice into ``messages``.
+    Empty / None input → ``[]`` (no prior context).
+    """
+    if not prior:
+        return []
+    # Keep only the most recent N entries.
+    recent = prior[-_PRIOR_MAX_ENTRIES:]
+    return [
+        {"role": m.role, "content": (m.content or "")[:_PRIOR_CONTENT_CHARS]}
+        for m in recent
+    ]
+
+
 # ---------------------------------------------------------------------------
 # OpenAI invocation with single retry → 502 on failure.
 # ---------------------------------------------------------------------------
@@ -218,10 +241,12 @@ async def _call_openai_with_retry(
     openai_client: AsyncAzureOpenAI,
     query: str,
     notes: list[dict[str, Any]],
+    prior_messages: Optional[list[PriorMessage]] = None,
 ) -> str:
     user_prompt = _build_user_prompt(query, notes)
-    messages = [
+    messages: list[dict[str, str]] = [
         {"role": "system", "content": _SYSTEM_PROMPT},
+        *_normalize_prior_messages(prior_messages),
         {"role": "user", "content": user_prompt},
     ]
 
@@ -269,11 +294,13 @@ async def _stream_openai_tokens(
     openai_client: AsyncAzureOpenAI,
     query: str,
     notes: list[dict[str, Any]],
+    prior_messages: Optional[list[PriorMessage]] = None,
 ) -> AsyncIterator[str]:
     """Async-iterate token chunks from OpenAI streaming chat completion."""
     user_prompt = _build_user_prompt(query, notes)
-    messages = [
+    messages: list[dict[str, str]] = [
         {"role": "system", "content": _SYSTEM_PROMPT},
+        *_normalize_prior_messages(prior_messages),
         {"role": "user", "content": user_prompt},
     ]
     stream = await openai_client.chat.completions.create(
@@ -299,6 +326,7 @@ async def _streaming_answer(
     user_id: uuid.UUID,
     query: str,
     notes: list[dict[str, Any]],
+    prior_messages: Optional[list[PriorMessage]] = None,
 ) -> AsyncIterator[bytes]:
     """Yield NDJSON frames: meta → token* → done | error."""
     yield _ndjson({
@@ -322,7 +350,9 @@ async def _streaming_answer(
 
     collected: list[str] = []
     try:
-        async for piece in _stream_openai_tokens(openai_client, query, notes):
+        async for piece in _stream_openai_tokens(
+            openai_client, query, notes, prior_messages
+        ):
             collected.append(piece)
             yield _ndjson({"type": "token", "text": piece})
     except Exception as exc:  # noqa: BLE001
@@ -406,6 +436,7 @@ async def answer(
                 user_id=current_user_id,
                 query=payload.query,
                 notes=notes,
+                prior_messages=payload.prior_messages,
             ),
             media_type=_NDJSON_MEDIA_TYPE,
         )
@@ -424,6 +455,7 @@ async def answer(
         openai_client=openai_client,
         query=payload.query,
         notes=notes,
+        prior_messages=payload.prior_messages,
     )
 
     citations = _build_citations(notes)

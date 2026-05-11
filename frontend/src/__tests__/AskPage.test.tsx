@@ -72,6 +72,7 @@ function streamWholeAnswer() {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  sessionStorage.clear();
 });
 
 // ---------------------------------------------------------------------------
@@ -322,5 +323,202 @@ describe('AskPage — streaming (PR 4.4)', () => {
     fireEvent.click(cancel);
     expect(receivedSignal?.aborted).toBe(true);
     release();
+  });
+});
+
+
+// ---------------------------------------------------------------------------
+// PR 4.5 — Multi-turn follow-up
+// ---------------------------------------------------------------------------
+
+const SECOND_ANSWER = {
+  answer: 'Sure — discipline matters [1].',
+  citations: [
+    { note_id: 'note-ccc', title: 'On discipline', snippet: 'practice daily', relevance: 0.66 },
+  ],
+  model: 'gpt-4o-mini',
+  retrieval_count: 1,
+  elapsed_ms: 321,
+};
+
+function streamSecondAnswer() {
+  mockAskCortexStreaming.mockImplementationOnce(async (_q: string, opts: {
+    onMeta?: (m: { type: 'meta'; retrieval_count: number; model: string }) => void;
+    onToken?: (t: string) => void;
+    onDone?: (cits: typeof SECOND_ANSWER.citations, ms: number) => void;
+  }) => {
+    opts.onMeta?.({ type: 'meta', retrieval_count: SECOND_ANSWER.retrieval_count, model: SECOND_ANSWER.model });
+    opts.onToken?.(SECOND_ANSWER.answer);
+    opts.onDone?.(SECOND_ANSWER.citations, SECOND_ANSWER.elapsed_ms);
+  });
+}
+
+describe('AskPage — multi-turn (PR 4.5)', () => {
+  beforeEach(() => {
+    sessionStorage.clear();
+  });
+
+  it('multi-turn: conversation list renders user + assistant messages', async () => {
+    streamWholeAnswer();
+    renderPage();
+    fireEvent.change(screen.getByRole('textbox', { name: /question/i }), { target: { value: 'what is leadership?' } });
+    fireEvent.click(screen.getByRole('button', { name: /^ask$/i }));
+
+    await screen.findByTestId('answer-text');
+    // The user's question must be visible somewhere in the conversation log.
+    const userBubbles = screen.getAllByTestId('user-turn');
+    expect(userBubbles).toHaveLength(1);
+    expect(userBubbles[0].textContent).toMatch(/what is leadership\?/i);
+    // And the assistant turn renders the answer.
+    const asstTurns = screen.getAllByTestId('assistant-turn');
+    expect(asstTurns).toHaveLength(1);
+  });
+
+  it('multi-turn: follow-up Ask sends prior_messages from conversation', async () => {
+    streamWholeAnswer();
+    renderPage();
+    fireEvent.change(screen.getByRole('textbox', { name: /question/i }), { target: { value: 'first?' } });
+    fireEvent.click(screen.getByRole('button', { name: /^ask$/i }));
+    await screen.findByTestId('answer-text');
+
+    // Now ask the follow-up.
+    streamSecondAnswer();
+    fireEvent.change(screen.getByRole('textbox', { name: /question/i }), { target: { value: 'follow-up?' } });
+    fireEvent.click(screen.getByRole('button', { name: /^ask$/i }));
+
+    await waitFor(() => {
+      expect(mockAskCortexStreaming).toHaveBeenCalledTimes(2);
+    });
+    const secondCall = mockAskCortexStreaming.mock.calls[1];
+    expect(secondCall[0]).toBe('follow-up?');
+    const opts = secondCall[1] as { prior_messages?: Array<{ role: string; content: string }> };
+    expect(opts.prior_messages).toBeDefined();
+    expect(opts.prior_messages).toEqual([
+      { role: 'user', content: 'first?' },
+      { role: 'assistant', content: SAMPLE_ANSWER.answer },
+    ]);
+  });
+
+  it('multi-turn: streaming token appends to assistant message', async () => {
+    let push: ((t: string) => void) | null = null;
+    let finish: (() => void) | null = null;
+    mockAskCortexStreaming.mockImplementation(async (_q, opts: {
+      onMeta?: (m: { type: 'meta'; retrieval_count: number; model: string }) => void;
+      onToken?: (t: string) => void;
+      onDone?: (cits: typeof SAMPLE_ANSWER.citations, ms: number) => void;
+    }) => {
+      opts.onMeta?.({ type: 'meta', retrieval_count: 1, model: 'gpt-4o-mini' });
+      push = (t: string) => opts.onToken?.(t);
+      await new Promise<void>((r) => {
+        finish = () => { opts.onDone?.([], 50); r(); };
+      });
+    });
+    renderPage();
+    fireEvent.change(screen.getByRole('textbox', { name: /question/i }), { target: { value: 'q?' } });
+    fireEvent.click(screen.getByRole('button', { name: /^ask$/i }));
+
+    await waitFor(() => expect(push).not.toBeNull());
+    push!('Hello');
+    await waitFor(() => {
+      expect(screen.getByTestId('answer-text').textContent).toMatch(/Hello/);
+    });
+    push!(' world');
+    await waitFor(() => {
+      expect(screen.getByTestId('answer-text').textContent).toMatch(/Hello world/);
+    });
+    finish!();
+  });
+
+  it('multi-turn: New conversation button clears state', async () => {
+    streamWholeAnswer();
+    renderPage();
+    fireEvent.change(screen.getByRole('textbox', { name: /question/i }), { target: { value: 'first?' } });
+    fireEvent.click(screen.getByRole('button', { name: /^ask$/i }));
+    await screen.findByTestId('answer-text');
+    expect(screen.getAllByTestId('user-turn')).toHaveLength(1);
+
+    const newBtn = screen.getByRole('button', { name: /new conversation/i });
+    fireEvent.click(newBtn);
+
+    expect(screen.queryByTestId('user-turn')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('assistant-turn')).not.toBeInTheDocument();
+    expect(screen.getByTestId('empty-state')).toBeInTheDocument();
+    expect(sessionStorage.getItem('cortex.ask.conversation')).toBeNull();
+  });
+
+  it('multi-turn: conversation persists to sessionStorage', async () => {
+    streamWholeAnswer();
+    renderPage();
+    fireEvent.change(screen.getByRole('textbox', { name: /question/i }), { target: { value: 'persist me' } });
+    fireEvent.click(screen.getByRole('button', { name: /^ask$/i }));
+    await screen.findByTestId('answer-text');
+
+    await waitFor(() => {
+      expect(sessionStorage.getItem('cortex.ask.conversation')).not.toBeNull();
+    });
+    const stored = JSON.parse(sessionStorage.getItem('cortex.ask.conversation') ?? '[]');
+    expect(stored).toHaveLength(2);
+    expect(stored[0]).toMatchObject({ role: 'user', content: 'persist me' });
+    expect(stored[1].role).toBe('assistant');
+    expect(stored[1].content).toContain(SAMPLE_ANSWER.answer);
+  });
+
+  it('multi-turn: conversation restores from sessionStorage on mount', () => {
+    sessionStorage.setItem(
+      'cortex.ask.conversation',
+      JSON.stringify([
+        { role: 'user', content: 'restored question' },
+        { role: 'assistant', content: 'restored answer', citations: [] },
+      ]),
+    );
+    renderPage();
+    expect(screen.getByText(/restored question/i)).toBeInTheDocument();
+    expect(screen.getByText(/restored answer/i)).toBeInTheDocument();
+    expect(screen.queryByTestId('empty-state')).not.toBeInTheDocument();
+  });
+
+  it("multi-turn: error in turn N+1 doesn't lose previous turns", async () => {
+    streamWholeAnswer();
+    renderPage();
+    fireEvent.change(screen.getByRole('textbox', { name: /question/i }), { target: { value: 'first?' } });
+    fireEvent.click(screen.getByRole('button', { name: /^ask$/i }));
+    await screen.findByTestId('answer-text');
+
+    mockAskCortexStreaming.mockImplementationOnce(async (_q, opts: { onError?: (d: string) => void }) => {
+      opts.onError?.('Upstream LLM failed: RuntimeError');
+    });
+    fireEvent.change(screen.getByRole('textbox', { name: /question/i }), { target: { value: 'second?' } });
+    fireEvent.click(screen.getByRole('button', { name: /^ask$/i }));
+
+    await waitFor(() => {
+      expect(screen.getByTestId('error-panel')).toBeInTheDocument();
+    });
+    // The first turn (both user + assistant) is still on screen.
+    expect(screen.getByText(/first\?/i)).toBeInTheDocument();
+    expect(screen.getAllByTestId('user-turn')).toHaveLength(2);
+    // The first assistant turn's answer text remains.
+    expect(screen.getByText(new RegExp(SAMPLE_ANSWER.citations[0].title, 'i'))).toBeInTheDocument();
+  });
+
+  it('multi-turn: each assistant turn has its own citations', async () => {
+    streamWholeAnswer();
+    renderPage();
+    fireEvent.change(screen.getByRole('textbox', { name: /question/i }), { target: { value: 'first?' } });
+    fireEvent.click(screen.getByRole('button', { name: /^ask$/i }));
+    await screen.findByTestId('answer-text');
+
+    streamSecondAnswer();
+    fireEvent.change(screen.getByRole('textbox', { name: /question/i }), { target: { value: 'second?' } });
+    fireEvent.click(screen.getByRole('button', { name: /^ask$/i }));
+
+    await waitFor(() => {
+      expect(screen.getAllByTestId('assistant-turn')).toHaveLength(2);
+    });
+    const allCitationLists = screen.getAllByTestId('citations');
+    expect(allCitationLists).toHaveLength(2);
+    // First turn has both leadership/trust; second turn has discipline only.
+    expect(screen.getByText(/on leadership/i)).toBeInTheDocument();
+    expect(screen.getByText(/on trust/i)).toBeInTheDocument();
+    expect(screen.getByText(/on discipline/i)).toBeInTheDocument();
   });
 });

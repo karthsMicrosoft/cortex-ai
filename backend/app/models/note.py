@@ -115,6 +115,16 @@ class Note(Base):
     shadow_reader_answer: Mapped[str | None] = mapped_column(Text, nullable=True)
     shadow_reader_status: Mapped[str] = mapped_column(String(20), default="pending")
 
+    # Phase 5 / PR 5.0 — Source provenance scaffolding (no API/UI yet).
+    # Populated by Phase 5.1+ (share_target, URL import, PDF ingestion).
+    source_url: Mapped[str | None] = mapped_column(Text, nullable=True)
+    source_title: Mapped[str | None] = mapped_column(Text, nullable=True)
+    source_parent_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid(as_uuid=True),
+        ForeignKey("notes.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )

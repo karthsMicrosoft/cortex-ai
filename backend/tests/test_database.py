@@ -247,6 +247,50 @@ class TestAlembicMigrationFile:
             "SA-M1 regression: vector_cosine_ops operator class missing from HNSW index"
         )
 
+    # ------------------------------------------------------------------
+    # Migration 008 — source provenance schema (Phase 5 / PR 5.0)
+    # ------------------------------------------------------------------
+    def test_migration_008_source_provenance_exists(self):
+        """008_source_provenance.py must exist and add the 3 provenance cols."""
+        path = BACKEND_DIR / "alembic" / "versions" / "008_source_provenance.py"
+        assert path.exists(), f"Migration file not found: {path}"
+        body = path.read_text(encoding="utf-8")
+        for col in ("source_url", "source_title", "source_parent_id"):
+            assert col in body, f"Migration 008 missing column reference: {col}"
+        assert "def upgrade()" in body
+        assert "def downgrade()" in body
+
+    def test_migration_008_creates_index(self):
+        """008 must create idx_notes_source_parent via op.create_index."""
+        path = BACKEND_DIR / "alembic" / "versions" / "008_source_provenance.py"
+        if not path.exists():
+            pytest.skip("Migration 008 not yet created")
+        body = path.read_text(encoding="utf-8")
+        assert "idx_notes_source_parent" in body, (
+            "Migration 008 must create idx_notes_source_parent"
+        )
+        assert "create_index" in body, (
+            "Migration 008 must use op.create_index for idx_notes_source_parent"
+        )
+
+    def test_migration_008_downgrade_drops_columns(self):
+        """008 downgrade() must drop all 3 provenance columns + the index."""
+        path = BACKEND_DIR / "alembic" / "versions" / "008_source_provenance.py"
+        if not path.exists():
+            pytest.skip("Migration 008 not yet created")
+        body = path.read_text(encoding="utf-8")
+        # Slice from 'def downgrade' to end of file
+        idx = body.find("def downgrade()")
+        assert idx >= 0, "downgrade() not defined"
+        downgrade_body = body[idx:]
+        for col in ("source_url", "source_title", "source_parent_id"):
+            assert col in downgrade_body, (
+                f"downgrade() must reference column: {col}"
+            )
+        assert "drop_column" in downgrade_body, (
+            "downgrade() must use op.drop_column"
+        )
+
 
 @pytest.mark.skipif(
     SKIP_MIGRATION,

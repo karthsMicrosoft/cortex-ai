@@ -72,6 +72,10 @@ class NoteOut(BaseModel):
     shadow_reader_status: Optional[_SHADOW_READER_STATUS] = "pending"
     shadow_reader_questions: Optional[list[str]] = None
     shadow_reader_answer: Optional[str] = None
+    # Phase 5 / PR 5.0 — Source provenance (scaffold; populated in Phase 5.1+).
+    source_url: Optional[str] = None
+    source_title: Optional[str] = None
+    source_parent_id: Optional[uuid.UUID] = None
     created_at: datetime
     updated_at: datetime
 

@@ -71,11 +71,11 @@ SELECT
 FROM notes n
 WHERE n.user_id = :user_id
   AND n.embedding IS NOT NULL
-  AND (:category   IS NULL OR n.category   = :category)
-  AND (:date_from  IS NULL OR n.created_at >= :date_from)
-  AND (:date_to    IS NULL OR n.created_at <= :date_to)
+  AND (CAST(:category   AS text)        IS NULL OR n.category   = :category)
+  AND (CAST(:date_from  AS timestamptz) IS NULL OR n.created_at >= :date_from)
+  AND (CAST(:date_to    AS timestamptz) IS NULL OR n.created_at <= :date_to)
   AND (
-    :tags IS NULL
+    CAST(:tags AS text[]) IS NULL
     OR EXISTS (
       SELECT 1
       FROM note_tags nt

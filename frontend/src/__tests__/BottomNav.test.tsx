@@ -59,10 +59,10 @@ describe('BottomNav (Task 5 / 3.1)', () => {
 
   // --- Four tabs ---
 
-  it('renders exactly four nav tab links', () => {
+  it('renders exactly five nav tab links', () => {
     renderBottomNav();
     const links = screen.getAllByRole('link');
-    expect(links.length).toBe(4);
+    expect(links.length).toBe(5);
   });
 
   it('has a Capture tab', () => {
@@ -83,6 +83,31 @@ describe('BottomNav (Task 5 / 3.1)', () => {
   it('has a Create tab', () => {
     renderBottomNav();
     expect(screen.getByRole('link', { name: /create/i })).toBeInTheDocument();
+  });
+
+  it('has an Ask tab (PR 4.2)', () => {
+    renderBottomNav();
+    expect(screen.getByRole('link', { name: /^ask$/i })).toBeInTheDocument();
+  });
+
+  it('Ask tab links to /ask (PR 4.2)', () => {
+    renderBottomNav();
+    const link = screen.getByRole('link', { name: /^ask$/i });
+    expect(link.getAttribute('href')).toBe('/ask');
+  });
+
+  it('Ask tab is active when at /ask (PR 4.2)', () => {
+    renderBottomNav('/ask');
+    const link = screen.getByRole('link', { name: /^ask$/i });
+    const isActive =
+      link.getAttribute('aria-current') === 'page' || link.className.includes('active');
+    expect(isActive).toBe(true);
+  });
+
+  it('Ask tab renders an icon (PR 4.2)', () => {
+    renderBottomNav();
+    const link = screen.getByRole('link', { name: /^ask$/i });
+    expect(link.querySelector('svg')).not.toBeNull();
   });
 
   // --- Route links ---
@@ -153,7 +178,7 @@ describe('BottomNav (Task 5 / 3.1)', () => {
     const nav = screen.getByRole('navigation');
     // Lucide icons render as SVG elements
     const icons = nav.querySelectorAll('svg');
-    expect(icons.length).toBeGreaterThanOrEqual(4);
+    expect(icons.length).toBeGreaterThanOrEqual(5);
   });
 
   // --- Accessibility ---

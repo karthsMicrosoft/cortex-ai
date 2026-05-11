@@ -56,10 +56,10 @@ SEED_JSON_PATH = Path(__file__).parent / "seed_data" / "notes.json"
 
 async def seed(email: str) -> int:
     """Seed dummy notes for ``email``. Returns process exit code."""
-    from sqlalchemy import select
+    from sqlalchemy import insert as sql_insert, select
     from app.database import SessionLocal
     from app.models.note import Note
-    from app.models.tag import Tag
+    from app.models.tag import Tag, note_tags
     from app.models.user import User
 
     if not SEED_JSON_PATH.exists():
@@ -122,9 +122,6 @@ async def seed(email: str) -> int:
             )
             db.add(note)
             await db.flush()  # populate note.id
-            # Avoid the async lazy-load that "if tag not in note.tags" would trigger:
-            # the note was just created, so tags is empty by definition.
-            note.tags = []
 
             # Back-date created_at to spread the corpus across time.
             days_ago = int(rec.get("days_ago", 0))
@@ -145,9 +142,19 @@ async def seed(email: str) -> int:
             if SEED_TAG not in tag_names:
                 tag_names.append(SEED_TAG)
 
+            # Bypass the ORM relationship (which would trigger an async
+            # lazy-load of note.tags). Insert directly into the note_tags
+            # association table. Dedupe in Python since the same tag could
+            # appear twice in the seed JSON.
+            seen_tag_ids: set = set()
             for tag_name in tag_names:
                 tag = await get_or_create_tag(tag_name)
-                note.tags.append(tag)
+                if tag.id in seen_tag_ids:
+                    continue
+                seen_tag_ids.add(tag.id)
+                await db.execute(
+                    sql_insert(note_tags).values(note_id=note.id, tag_id=tag.id)
+                )
 
             seeded += 1
 

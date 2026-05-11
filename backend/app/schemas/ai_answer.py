@@ -33,12 +33,15 @@ class AnswerFilters(BaseModel):
 class PriorMessage(BaseModel):
     """A turn from earlier in the conversation.
 
-    Accepted for forward compatibility but NOT forwarded to OpenAI in this PR;
-    PR 4.5 will wire prior_messages into a multi-turn prompt.
+    Forwarded to the OpenAI prompt by PR 4.5 so the model can ground follow-up
+    answers in earlier turns. Only ``user`` / ``assistant`` are accepted —
+    ``system`` is reserved for the server-controlled system prompt.
     """
 
-    role: Literal["user", "assistant", "system"]
-    content: str = Field(..., max_length=4000)
+    role: Literal["user", "assistant"]
+    # Generous schema cap — the API truncates per-message content to 1000
+    # chars (see _PRIOR_CONTENT_CHARS in api/ai_answer.py).
+    content: str = Field(..., max_length=10000)
 
 
 class AnswerRequest(BaseModel):

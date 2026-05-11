@@ -1,0 +1,602 @@
+[
+  {
+    "client_id": "seed-r16-L01",
+    "category": "Learning",
+    "content": "Spent an hour reading about transformer attention this morning. The big aha was that the attention scores are basically learned soft-lookups - you can think of Q/K/V as a tiny content-addressable memory that the model rebuilds at every layer. Going to try sketching this out in a notebook tomorrow with a toy 4-token example.",
+    "tags": ["ml", "transformers", "study"],
+    "source_type": "text",
+    "days_ago": 88
+  },
+  {
+    "client_id": "seed-r16-L02",
+    "category": "Learning",
+    "content": "Atomic Habits takeaway: the goal isn't to set goals, it's to build systems. Identity-based habits stick because you're not trying to RUN, you're trying to BE a runner. Simple but it reframes everything. Going to apply this to my writing routine.",
+    "tags": ["books", "habits", "self-improvement"],
+    "source_type": "text",
+    "days_ago": 82
+  },
+  {
+    "client_id": "seed-r16-L03",
+    "category": "Learning",
+    "content": "Listened to a great leadership podcast on the drive in. The host kept hammering the point that leaders are dealers in hope. Reminded me of something Eric said last month about how the tone you set in the first five minutes of a meeting basically writes the rest of it. Need to start being more intentional about how I open my 1:1s.",
+    "tags": ["leadership", "podcast", "eric"],
+    "source_type": "text",
+    "days_ago": 76
+  },
+  {
+    "client_id": "seed-r16-L04",
+    "category": "Learning",
+    "content": "Started reading The Calm Mind tonight. First chapter is about how anxious thinking is just a trained reflex - the same neural pathway firing over and over. The author argues you can interrupt the loop by noticing the very first sensation of tension before the story starts. I want to try this for a week and see if it changes anything.",
+    "tags": ["books", "the-calm-mind", "mindfulness"],
+    "source_type": "text",
+    "days_ago": 70
+  },
+  {
+    "client_id": "seed-r16-L05",
+    "category": "Learning",
+    "content": "Read a long-form article on RAG systems. Key insight: the retriever is doing 80% of the work and the LLM is mostly a fancy formatter. If your retrieval is bad, no amount of prompt engineering saves you. Re-ranking with a cross-encoder before the LLM sees anything seems to be the cheapest big win.",
+    "tags": ["rag", "llm", "engineering"],
+    "source_type": "text",
+    "days_ago": 65
+  },
+  {
+    "client_id": "seed-r16-L06",
+    "category": "Learning",
+    "content": "Re-reading the original CAP theorem paper. Funny how everyone quotes it but the actual paper is way more nuanced - Brewer himself walked back the strong reading. In practice you choose between latency and consistency, not between availability and consistency. Latency is the silent third axis.",
+    "tags": ["distributed-systems", "study"],
+    "source_type": "text",
+    "days_ago": 60
+  },
+  {
+    "client_id": "seed-r16-L07",
+    "category": "Learning",
+    "content": "The Calm Mind, chapter 4. The author talks about 'the witness' - the part of you that watches your thoughts without grabbing them. Tried sitting with this for ten minutes after dinner and noticed how often I get pulled back into planning. The witness is there but it's quiet; the planner is loud.",
+    "tags": ["books", "the-calm-mind", "meditation"],
+    "source_type": "text",
+    "days_ago": 54
+  },
+  {
+    "client_id": "seed-r16-L08",
+    "category": "Learning",
+    "content": "Stoicism podcast episode. The bit that landed: Marcus Aurelius wrote his Meditations only for himself, never meant to publish. The whole book is essentially his personal note-taking app. Made me feel less weird about all the journaling I've been doing.",
+    "tags": ["philosophy", "podcast", "journaling"],
+    "source_type": "text",
+    "days_ago": 48
+  },
+  {
+    "client_id": "seed-r16-L09",
+    "category": "Learning",
+    "content": "Deep dive into Postgres pgvector this evening. The HNSW index is essentially a navigable small-world graph - you start at a high layer with few nodes, do greedy nearest-neighbor descent, and refine as you go down. Tradeoff: build time goes up, but query time stays roughly log(n). Worth it for our use case.",
+    "tags": ["postgres", "pgvector", "engineering"],
+    "source_type": "text",
+    "days_ago": 42
+  },
+  {
+    "client_id": "seed-r16-L10",
+    "category": "Learning",
+    "content": "Eric forwarded me a paper on servant leadership over coffee today. The thesis is that the leader's job is to remove obstacles, not to issue directives. He pointed out that the best part isn't the framework - it's the humility you have to practice to actually live it. I'm going to try to use my next 1:1s as listening sessions only.",
+    "tags": ["leadership", "eric", "career"],
+    "source_type": "text",
+    "days_ago": 35
+  },
+  {
+    "client_id": "seed-r16-L11",
+    "category": "Learning",
+    "content": "Working through a system design course module on rate limiting. Token bucket vs leaky bucket: token bucket allows bursts up to capacity then degrades to refill rate; leaky bucket is constant outflow regardless of input. For our API, token bucket is the right choice because we want to forgive sporadic spikes from voice notes.",
+    "tags": ["system-design", "study", "engineering"],
+    "source_type": "text",
+    "days_ago": 28
+  },
+  {
+    "client_id": "seed-r16-L12",
+    "category": "Learning",
+    "content": "Halfway through Deep Work by Cal Newport. The shutdown ritual idea is the one I want to actually adopt - a deliberate end-of-day review and a verbal 'shutdown complete' to tell your brain it's allowed to stop turning the wheel. Going to try it tomorrow night.",
+    "tags": ["books", "focus", "self-improvement"],
+    "source_type": "text",
+    "days_ago": 22
+  },
+  {
+    "client_id": "seed-r16-L13",
+    "category": "Learning",
+    "content": "Read the Kubernetes operators design doc end to end. Operator = custom controller + custom resource. The reconcile loop is the entire mental model: watch desired state, observe actual state, take action to close the gap. Surprisingly elegant. The complexity is all in the edge cases of 'what happens during partial failure'.",
+    "tags": ["kubernetes", "engineering", "study"],
+    "source_type": "text",
+    "days_ago": 16
+  },
+  {
+    "client_id": "seed-r16-L14",
+    "category": "Learning",
+    "content": "TypeScript generics deep dive tonight. Conditional types with infer are basically pattern matching on the type level. ReturnType<T> is just T extends (...a) => infer R ? R : never. Once that clicked the rest of the utility types stopped feeling like magic.",
+    "tags": ["typescript", "engineering"],
+    "source_type": "text",
+    "days_ago": 10
+  },
+  {
+    "client_id": "seed-r16-L15",
+    "category": "Learning",
+    "content": "Watched a lecture on linear algebra refresher - eigenvectors as the directions a transformation doesn't rotate, only scales. Beautiful framing. Makes PCA make immediate sense: you're finding the axes of maximum variance, which are the eigenvectors of the covariance matrix.",
+    "tags": ["math", "study", "ml"],
+    "source_type": "text",
+    "days_ago": 4
+  },
+  {
+    "client_id": "seed-r16-J01",
+    "category": "Journal",
+    "content": "Tough Monday. Slept badly, woke up with that low-grade dread feeling I haven't had in a while. Pushed through the morning standup but I was clearly not present. Going to give myself permission to call it early today and just walk for an hour. Sometimes the best productivity move is to stop.",
+    "tags": ["mood", "monday"],
+    "source_type": "text",
+    "days_ago": 89
+  },
+  {
+    "client_id": "seed-r16-J02",
+    "category": "Journal",
+    "content": "Quiet Sunday. Made pancakes, read on the porch, took the dog out. No agenda, no inbox, no Slack. I forget how rare these days are and how restorative they feel. Going to try to defend one of these per week as non-negotiable.",
+    "tags": ["mood", "weekend"],
+    "source_type": "text",
+    "days_ago": 80
+  },
+  {
+    "client_id": "seed-r16-J03",
+    "category": "Journal",
+    "content": "Hard conversation with my manager today about scope. Walked away frustrated and called Eric on the way home. He didn't try to fix it - just listened, then asked what I actually wanted out of the role this year. That question reframed the whole thing. The frustration was a symptom, not the problem.",
+    "tags": ["mood", "work", "eric"],
+    "source_type": "text",
+    "days_ago": 71
+  },
+  {
+    "client_id": "seed-r16-J04",
+    "category": "Journal",
+    "content": "Small win today: finally fixed the deploy script bug that's been haunting me for two sprints. Took maybe 40 minutes once I sat down and actually read the logs instead of guessing. Note to self: when stuck, the fastest path is almost always to read more, not type more.",
+    "tags": ["mood", "work"],
+    "source_type": "text",
+    "days_ago": 62
+  },
+  {
+    "client_id": "seed-r16-J05",
+    "category": "Journal",
+    "content": "Low energy week. Three days in a row of feeling like I'm dragging through molasses. Sleep is fine, food is fine, exercise is fine - but something is off. Wondering if it's seasonal. Going to try getting outside in the morning light for a week and see if it shifts anything.",
+    "tags": ["mood", "energy"],
+    "source_type": "text",
+    "days_ago": 55
+  },
+  {
+    "client_id": "seed-r16-J06",
+    "category": "Journal",
+    "content": "Took a road trip up the coast over the weekend. No phone signal for stretches of it. I noticed how much my brain wanted to check something every five minutes - a craving with no object. By Sunday afternoon the craving was gone and I was just looking at the water.",
+    "tags": ["weekend", "reflection"],
+    "source_type": "text",
+    "days_ago": 47
+  },
+  {
+    "client_id": "seed-r16-J07",
+    "category": "Journal",
+    "content": "Frustrated with my own focus today. Six hours at my desk, maybe two of them productive. The rest was tab-switching and pretending. Honest answer: I haven't slept well in three days and I'm trying to brute-force my way through it. Going to bed early tonight, period.",
+    "tags": ["mood", "focus", "sleep"],
+    "source_type": "text",
+    "days_ago": 39
+  },
+  {
+    "client_id": "seed-r16-J08",
+    "category": "Journal",
+    "content": "Peaceful evening. Cooked something slow, didn't open the laptop after dinner, sat outside with a book until the streetlights came on. The simplicity of it was the whole point. I don't need a productivity system to feel okay - I just need to actually do the things I already know help.",
+    "tags": ["mood", "peace"],
+    "source_type": "text",
+    "days_ago": 31
+  },
+  {
+    "client_id": "seed-r16-J09",
+    "category": "Journal",
+    "content": "Tough conversation with a friend about something that's been quietly bothering me for months. We didn't resolve it but we named it, which felt like ninety percent of the work. I keep relearning that the avoidance was always heavier than the conversation.",
+    "tags": ["mood", "relationships"],
+    "source_type": "text",
+    "days_ago": 24
+  },
+  {
+    "client_id": "seed-r16-J10",
+    "category": "Journal",
+    "content": "Gave a presentation to the broader team today and it went well. People asked good questions and a couple of folks pinged me afterward to dig in. I want to remember this feeling the next time I'm catastrophizing about a future talk - the anticipation is always worse than the event.",
+    "tags": ["mood", "work", "win"],
+    "source_type": "text",
+    "days_ago": 17
+  },
+  {
+    "client_id": "seed-r16-J11",
+    "category": "Journal",
+    "content": "Woke up with that quiet anxiety again. Not about anything specific - just a hum under everything. I'm getting better at not assigning a story to it. It's a body state, not a verdict. Walking and water usually take the edge off within an hour.",
+    "tags": ["mood", "anxiety"],
+    "source_type": "text",
+    "days_ago": 9
+  },
+  {
+    "client_id": "seed-r16-J12",
+    "category": "Journal",
+    "content": "Good day. Got through my list, had a long lunch with someone I hadn't seen in a year, ended the day with a run. Nothing dramatic - just the ordinary version of a good day, which I'm trying to learn to actually appreciate.",
+    "tags": ["mood", "gratitude"],
+    "source_type": "text",
+    "days_ago": 2
+  },
+  {
+    "client_id": "seed-r16-I01",
+    "category": "Ideas",
+    "content": "App idea: voice-first journaling that auto-clusters entries by theme over time. The pitch: you don't have to organize anything, you just talk, and the app surfaces patterns weekly. The hard part is making the clustering feel like a friend noticing things, not a robot tagging things.",
+    "tags": ["product-idea", "voice", "journal-app"],
+    "source_type": "text",
+    "days_ago": 87
+  },
+  {
+    "client_id": "seed-r16-I02",
+    "category": "Ideas",
+    "content": "Product sketch: a meeting summarizer that doesn't transcribe - it just captures decisions and owners. Most meeting tools fail because they give you a wall of text nobody reads. What people actually want is 'what did we decide and who's doing what'. That's it. Three bullets, max.",
+    "tags": ["product-idea", "meetings"],
+    "source_type": "text",
+    "days_ago": 78
+  },
+  {
+    "client_id": "seed-r16-I03",
+    "category": "Ideas",
+    "content": "Business idea: subscription habit tracker that bills you only when you fail. Reverse incentive - the better you do, the cheaper it gets. Probably has obvious failure modes (gaming the streak) but the framing is interesting. Worth a prototype on paper before throwing code at it.",
+    "tags": ["business", "product-idea"],
+    "source_type": "text",
+    "days_ago": 69
+  },
+  {
+    "client_id": "seed-r16-I04",
+    "category": "Ideas",
+    "content": "Side project sketch: a tiny garden sensor that just tells you when to water. No app, no graphs, no AI - one LED that turns from green to yellow to red. The whole product is a refusal of features. Could be a fun winter weekend build with an ESP32.",
+    "tags": ["side-project", "hardware"],
+    "source_type": "text",
+    "days_ago": 61
+  },
+  {
+    "client_id": "seed-r16-I05",
+    "category": "Ideas",
+    "content": "Eric pushed me again to actually write the book outline. He's been right about a lot of things, so I'm taking the nudge. Working title is something like 'Notes from a Slow Career'. Five sections, each one about a deliberate slow-down that turned out to be an acceleration in disguise. Need to draft a one-pager this weekend.",
+    "tags": ["writing", "book", "eric"],
+    "source_type": "text",
+    "days_ago": 52
+  },
+  {
+    "client_id": "seed-r16-I06",
+    "category": "Ideas",
+    "content": "Automation idea: a weekly cron that scans my calendar for the next two weeks and emails me a single 'what looks heavy' digest. Not a planner - just a heads-up. Helps me preempt the bad weeks instead of being surprised by them. Could be a 50-line Python script.",
+    "tags": ["automation", "productivity"],
+    "source_type": "text",
+    "days_ago": 44
+  },
+  {
+    "client_id": "seed-r16-I07",
+    "category": "Ideas",
+    "content": "Blog series outline: 'Things I changed my mind about in engineering this year'. Five posts, each on a position I held strongly five years ago and have since softened on. Microservices, ORMs, type systems, code review, on-call rotation. Could double as a job-interview talking-points cache.",
+    "tags": ["writing", "blog"],
+    "source_type": "text",
+    "days_ago": 37
+  },
+  {
+    "client_id": "seed-r16-I08",
+    "category": "Ideas",
+    "content": "App idea: a 'practice mode' for musical instruments that listens through the laptop mic and gives you a single number per session - your in-tune percentage. No gamification, no streaks. Just an honest mirror. The product hypothesis is that adults practice less because they don't get feedback, not because they don't have time.",
+    "tags": ["product-idea", "music"],
+    "source_type": "text",
+    "days_ago": 29
+  },
+  {
+    "client_id": "seed-r16-I09",
+    "category": "Ideas",
+    "content": "Workshop curriculum sketch: a one-day session on writing for engineers. Three modules: writing as thinking, the inverted pyramid for technical docs, and the art of the short status update. Could be a fun internal pilot before trying to take it external.",
+    "tags": ["teaching", "writing"],
+    "source_type": "text",
+    "days_ago": 21
+  },
+  {
+    "client_id": "seed-r16-I10",
+    "category": "Ideas",
+    "content": "Investing thesis fragment: index funds for compounding, individual positions only when you actually use the product and could explain its moat in one sentence to a child. The second filter is the one most people skip. If you can't pass it, you're guessing.",
+    "tags": ["finance", "investing"],
+    "source_type": "text",
+    "days_ago": 14
+  },
+  {
+    "client_id": "seed-r16-I11",
+    "category": "Ideas",
+    "content": "Bedtime story idea for the kids: a small mountain that's tired of being climbed and decides to walk somewhere quieter. Probably a metaphor for taking time off but the kids don't need to know that. Could illustrate it myself with stick figures - they don't care about the art.",
+    "tags": ["writing", "kids", "story"],
+    "source_type": "text",
+    "days_ago": 7
+  },
+  {
+    "client_id": "seed-r16-I12",
+    "category": "Ideas",
+    "content": "Newsletter format idea: weekly, three sections, each capped at 100 words. One thing I learned, one thing I made, one thing I'm wrestling with. The constraint is the whole product. Most newsletters fail because they try to be magazines. This would try to be a postcard.",
+    "tags": ["writing", "newsletter"],
+    "source_type": "text",
+    "days_ago": 1
+  },
+  {
+    "client_id": "seed-r16-F01",
+    "category": "Fitness",
+    "content": "Baseline: 78kg, resting HR 62, can hold a plank for ~75 seconds. Starting a 12-week strength block today. Three lifts a week, two easy runs, one mobility session. Keeping it simple on purpose - I always over-program and then quit by week four. This time the rule is 'less than I think I can do'.",
+    "tags": ["strength", "baseline", "training"],
+    "source_type": "text",
+    "days_ago": 90
+  },
+  {
+    "client_id": "seed-r16-F02",
+    "category": "Fitness",
+    "content": "Leg day. Squats 5x5 at 80kg, RDLs 3x8 at 70kg, walking lunges. Form felt clean today, especially on the squats - I think the cue 'spread the floor' is finally landing. Hips were complaining a little by the end so I added an extra ten minutes of stretching.",
+    "tags": ["strength", "legs"],
+    "source_type": "text",
+    "days_ago": 84
+  },
+  {
+    "client_id": "seed-r16-F03",
+    "category": "Fitness",
+    "content": "Decided today: I'm signing up for a marathon in the spring. It's been on my list for three years and I keep finding reasons to defer. Going to draft a 16-week training plan this week and start the base build immediately. Goal is to finish, not to PR. Strength work stays in but drops to twice a week.",
+    "tags": ["marathon", "running", "training", "decision"],
+    "source_type": "text",
+    "days_ago": 75
+  },
+  {
+    "client_id": "seed-r16-F04",
+    "category": "Fitness",
+    "content": "Strength is moving up nicely. Bench finally felt easy at 70kg for 5x5, which is a number I've been stuck at for months. The unlock was just being consistent for six weeks instead of switching programs every two. Boring works.",
+    "tags": ["strength", "progress"],
+    "source_type": "text",
+    "days_ago": 68
+  },
+  {
+    "client_id": "seed-r16-F05",
+    "category": "Fitness",
+    "content": "Continuing the marathon training I committed to a few weeks ago - first long run today, 18km at an easy pace. Felt great until about kilometer 14 when my left calf started complaining. Walked the last kilometer to be safe. Lesson: the long run is not the place to prove anything.",
+    "tags": ["marathon", "running", "long-run"],
+    "source_type": "text",
+    "days_ago": 58
+  },
+  {
+    "client_id": "seed-r16-F06",
+    "category": "Fitness",
+    "content": "Tweaked my lower back lifting on Wednesday. Took two days off, did some easy mobility today and it's already 80% better. The honest assessment is I went too heavy too fast on deadlifts. The marathon block is the priority right now - pulling back the lifting weights to 70% for the next two weeks.",
+    "tags": ["recovery", "injury"],
+    "source_type": "text",
+    "days_ago": 50
+  },
+  {
+    "client_id": "seed-r16-F07",
+    "category": "Fitness",
+    "content": "Cross-training day - 45 minutes on the bike, easy zone 2. The HR strap and the cadence sensor finally talked to each other today, which made the data way more useful. Aerobic base is where the money is right now and the bike lets me build it without pounding the legs.",
+    "tags": ["cycling", "cross-training", "zone-2"],
+    "source_type": "text",
+    "days_ago": 41
+  },
+  {
+    "client_id": "seed-r16-F08",
+    "category": "Fitness",
+    "content": "Long run, 26km. Followed up on the marathon plan I've been building since the decision in week one. Pace was conservative, took two gels, and the calf held up this time. The last 5km were a mental game more than a physical one. Reminded me that the marathon is mostly an attention-management problem.",
+    "tags": ["marathon", "running", "long-run"],
+    "source_type": "text",
+    "days_ago": 33
+  },
+  {
+    "client_id": "seed-r16-F09",
+    "category": "Fitness",
+    "content": "Taper week for the marathon. Cutting volume by about 40% and keeping intensity short and sharp. The hardest part of the taper is psychological - the brain insists you're losing fitness when actually you're banking it. Going to trust the plan and stop adding 'just one more' easy run.",
+    "tags": ["marathon", "running", "taper"],
+    "source_type": "text",
+    "days_ago": 25
+  },
+  {
+    "client_id": "seed-r16-F10",
+    "category": "Fitness",
+    "content": "Race-day plan for Sunday: out the door by 5:30, oats and coffee at 6, at the start by 7. Targeting 5:30/km for the first half, 5:20/km if I feel good after kilometer 25. Three gels - 10, 20, 30. The mantra is 'patience early, courage late'. Everything I've trained for has been for the last 10km.",
+    "tags": ["marathon", "running", "race-day", "plan"],
+    "source_type": "text",
+    "days_ago": 19
+  },
+  {
+    "client_id": "seed-r16-F11",
+    "category": "Fitness",
+    "content": "Marathon recovery week. Finished, which was the goal. Legs are wrecked but in the good way. Walking only this week, no running. Going to write up a longer reflection later but the headline is: the months of patient base-building did exactly what the books said they would. The race itself was almost calm.",
+    "tags": ["marathon", "running", "recovery"],
+    "source_type": "text",
+    "days_ago": 13
+  },
+  {
+    "client_id": "seed-r16-F12",
+    "category": "Fitness",
+    "content": "Back to the gym for the first proper session post-marathon. Light squats, light push, just to wake everything up. Body feels almost back to normal. The plan from here is a strength-focused block for eight weeks before thinking about the next running goal.",
+    "tags": ["strength", "post-marathon"],
+    "source_type": "text",
+    "days_ago": 6
+  },
+  {
+    "client_id": "seed-r16-M01",
+    "category": "Music",
+    "content": "Lyric sketch: 'Sunday morning / nothing waiting / coffee gone cold while I find my hands again'. Wrote it on a napkin at the cafe. The 'find my hands again' line might be the chorus hook. Not sure where it's going yet but the feeling is there.",
+    "tags": ["lyrics", "songwriting", "draft"],
+    "source_type": "text",
+    "days_ago": 86
+  },
+  {
+    "client_id": "seed-r16-M02",
+    "category": "Music",
+    "content": "Chord progression in G minor: i - VI - III - VII (Gm - Eb - Bb - F). Classic but it never gets old. Capo on the third would put it in Bb minor which sits nicer for my voice. Going to track a quick demo this weekend.",
+    "tags": ["chords", "songwriting"],
+    "source_type": "text",
+    "days_ago": 79
+  },
+  {
+    "client_id": "seed-r16-M03",
+    "category": "Music",
+    "content": "Hummed a melody fragment in the car this afternoon and managed to record it on the phone before I lost it. Six notes, ascending, with a little turn at the end. Hummed it back over breakfast and it still works. Filing it under 'maybe a bridge for something later'.",
+    "tags": ["melody", "fragment", "songwriting"],
+    "source_type": "text",
+    "days_ago": 72
+  },
+  {
+    "client_id": "seed-r16-M04",
+    "category": "Music",
+    "content": "Song idea about leaving home for the first time. Working title 'Door That Closed Easy'. The conceit is that the leaving felt undramatic at the time and only meant something in retrospect. Trying to avoid every cliche of the 'leaving home' song. Specificity is the only defense.",
+    "tags": ["songwriting", "concept"],
+    "source_type": "text",
+    "days_ago": 64
+  },
+  {
+    "client_id": "seed-r16-M05",
+    "category": "Music",
+    "content": "Started lyrics about marathon training. Not the race - the long quiet hours nobody sees. 'Five in the morning / nobody watching / nobody clapping for the work I'm not done yet'. Could be a folk thing with fingerpicked acoustic. Connects to the running theme I've been living in for months.",
+    "tags": ["lyrics", "songwriting", "marathon"],
+    "source_type": "text",
+    "days_ago": 56
+  },
+  {
+    "client_id": "seed-r16-M06",
+    "category": "Music",
+    "content": "Tried drop D tuning today on the Martin. The low D opens up so much space - chord shapes that felt boring suddenly have a new bottom. Wrote a 30-second loop in D that I want to keep. Also a reminder that small physical changes (tuning, capo) often unlock more than 'try harder to write'.",
+    "tags": ["guitar", "tuning", "experiment"],
+    "source_type": "text",
+    "days_ago": 49
+  },
+  {
+    "client_id": "seed-r16-M07",
+    "category": "Music",
+    "content": "Studio session with the band tonight. Tracked scratch vocals for the new song - we did six takes, kept two. Producer wants to move the bridge earlier in the arrangement, which I resisted at first but listening back he's right. The song needs the lift before the second chorus, not after.",
+    "tags": ["studio", "band", "production"],
+    "source_type": "text",
+    "days_ago": 40
+  },
+  {
+    "client_id": "seed-r16-M08",
+    "category": "Music",
+    "content": "Bridge structure idea: instead of the usual key-change-and-yell approach, drop everything to just voice and one note, hold it for eight bars, then come back. Negative space as the surprise. Tried it on the demo and it works - the chorus after feels twice as big.",
+    "tags": ["arrangement", "songwriting"],
+    "source_type": "text",
+    "days_ago": 32
+  },
+  {
+    "client_id": "seed-r16-M09",
+    "category": "Music",
+    "content": "Cover song reharm idea: take a major-key pop song and rewrite the chords in relative minor with a slower tempo. Same melody, completely different emotional weight. Going to try it on a song everyone knows so the contrast is obvious. Could be a fun set opener.",
+    "tags": ["covers", "arrangement"],
+    "source_type": "text",
+    "days_ago": 26
+  },
+  {
+    "client_id": "seed-r16-M10",
+    "category": "Music",
+    "content": "Drum groove demo on the pad - half-time shuffle at 78 bpm. The kick on 1 and the 'and of 2' is doing all the work, the rest is decoration. Sent it to the drummer to see if it's playable as written or if we need to simplify for the live show.",
+    "tags": ["drums", "groove", "demo"],
+    "source_type": "text",
+    "days_ago": 18
+  },
+  {
+    "client_id": "seed-r16-M11",
+    "category": "Music",
+    "content": "Vocal harmony stack experiment: lead, third above, fifth below, octave doubled on the lead. Mixed the harmonies way back, like 20% of the lead. Adds glue without anyone noticing the harmony is there. The trick is making it feel like one voice, not a choir.",
+    "tags": ["vocals", "harmony", "production"],
+    "source_type": "text",
+    "days_ago": 11
+  },
+  {
+    "client_id": "seed-r16-M12",
+    "category": "Music",
+    "content": "New song coming together. Working title 'Quiet River'. Verse-chorus-verse-chorus-bridge-chorus, 3 minutes 20 seconds. The whole thing is built around a single guitar figure that never resolves until the very last bar. Need to live with it for a week before deciding it's actually finished.",
+    "tags": ["songwriting", "new-song"],
+    "source_type": "text",
+    "days_ago": 3
+  },
+  {
+    "client_id": "seed-r16-S01",
+    "category": "Spiritual",
+    "content": "Ten minutes of morning meditation. Mind was busy but I noticed it was busy, which is the whole game. The instruction I keep coming back to: you're not trying to stop thinking, you're practicing returning. Each return is the rep.",
+    "tags": ["meditation", "morning"],
+    "source_type": "text",
+    "days_ago": 85
+  },
+  {
+    "client_id": "seed-r16-S02",
+    "category": "Spiritual",
+    "content": "Gratitude list before bed: the dog, hot water, the friend who texted out of nowhere today, the smell of rain that came through the open window. Small things. The list is always small things. The big things would be too much to actually feel.",
+    "tags": ["gratitude", "evening"],
+    "source_type": "text",
+    "days_ago": 77
+  },
+  {
+    "client_id": "seed-r16-S03",
+    "category": "Spiritual",
+    "content": "Sat with a chapter of The Calm Mind tonight. The line that landed: 'you are not the weather, you are the sky'. Held it through a 15-minute sit. The weather was loud today - lots of low-grade work anxiety - but the sky was right there underneath, unbothered. That's the practice.",
+    "tags": ["meditation", "the-calm-mind"],
+    "source_type": "text",
+    "days_ago": 73
+  },
+  {
+    "client_id": "seed-r16-S04",
+    "category": "Spiritual",
+    "content": "Took a silent walk this morning. No earbuds, no podcast, no phone. Just the route and the breath. Forty-five minutes. Came back with no insights to write down, which I'm choosing to count as the point. Not every practice produces a souvenir.",
+    "tags": ["walk", "silence"],
+    "source_type": "text",
+    "days_ago": 66
+  },
+  {
+    "client_id": "seed-r16-S05",
+    "category": "Spiritual",
+    "content": "Talked with Eric about meditation over lunch. He's been sitting daily for almost a decade and his framing was useful: it's not a hobby, it's a hygiene. You don't ask whether brushing your teeth is 'working'. You just keep doing it. Sat for 20 minutes when I got home, longer than usual.",
+    "tags": ["meditation", "eric"],
+    "source_type": "text",
+    "days_ago": 59
+  },
+  {
+    "client_id": "seed-r16-S06",
+    "category": "Spiritual",
+    "content": "Evening reflection. Noticed I spent most of today either rehearsing the past or rehearsing the future and almost none of it actually here. The simple thing I want to remember: the present moment is the only one I'm actually invited to.",
+    "tags": ["reflection", "evening", "presence"],
+    "source_type": "text",
+    "days_ago": 51
+  },
+  {
+    "client_id": "seed-r16-S07",
+    "category": "Spiritual",
+    "content": "Read a few psalms tonight. Not for the theology - for the rhythm. There's something about the cadence of those old lines that slows the whole nervous system down. The form is doing work the words alone couldn't.",
+    "tags": ["reading", "scripture"],
+    "source_type": "text",
+    "days_ago": 43
+  },
+  {
+    "client_id": "seed-r16-S08",
+    "category": "Spiritual",
+    "content": "Came back from a long run feeling unreasonable gratitude for legs that work, lungs that fill, a body that lets me do this. Easy to forget on the days nothing hurts. Wrote a quick gratitude in the kitchen before showering so I wouldn't lose it.",
+    "tags": ["gratitude", "running"],
+    "source_type": "text",
+    "days_ago": 36
+  },
+  {
+    "client_id": "seed-r16-S09",
+    "category": "Spiritual",
+    "content": "Started planning a small personal retreat for the spring. Three days, no agenda except sitting, walking, and reading slowly. Booked a tiny cabin two hours away. The booking itself felt like the first practice - choosing the absence on purpose.",
+    "tags": ["retreat", "planning"],
+    "source_type": "text",
+    "days_ago": 30
+  },
+  {
+    "client_id": "seed-r16-S10",
+    "category": "Spiritual",
+    "content": "Twenty-minute sit this evening. Hit a stretch of about three minutes where the usual noise just thinned out and there was nothing in particular happening. Not a 'state', just... quieter. Hard to describe and probably useless to chase. The chasing is the noise.",
+    "tags": ["meditation", "stillness"],
+    "source_type": "text",
+    "days_ago": 23
+  },
+  {
+    "client_id": "seed-r16-S11",
+    "category": "Spiritual",
+    "content": "Bedtime gratitude. Three things: the long conversation that ran past dinner, the rain that finally came after weeks of dry, and the realization that I've been less reactive at work since I started sitting again. The practice always pays back, just on its own timeline.",
+    "tags": ["gratitude", "evening", "meditation"],
+    "source_type": "text",
+    "days_ago": 15
+  },
+  {
+    "client_id": "seed-r16-S12",
+    "category": "Spiritual",
+    "content": "Broke my meditation streak yesterday. Old me would have spiraled. New me notices the streak was the wrong target in the first place. Sat for ten minutes today. The meaningful number isn't days in a row - it's whether I came back when I drifted.",
+    "tags": ["meditation", "self-compassion"],
+    "source_type": "text",
+    "days_ago": 8
+  }
+]

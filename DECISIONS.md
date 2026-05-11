@@ -665,3 +665,39 @@ Phase 3 (spec § 4.2 items 35-40) closed in a single session via 6 PRs (#22-#27)
 
 **Live verification with chrome-devtools.** Before/after screenshots captured for SettingsPage, CreatePage, CapturePage, LibraryPage. Service-worker cache had to be manually cleared after deploy via ``navigator.serviceWorker.getRegistrations() / unregister()`` + ``caches.delete()`` to see new bundles — this is a known PWA pattern, not a bug.
 
+
+
+## § 22af — Phase 4 closure: AI Search & Synthesis (2026-05-11, Round 16)
+
+10 PRs landed (#29-#41). NotebookLM-style "ask Cortex" RAG endpoint with citations + streaming + multi-turn follow-up + search filters. 75-note hand-curated seed dataset added so AI features have realistic corpus to validate against.
+
+### Per-PR decisions
+
+**PR 4.0a (#29) — Search NULL-embedding fix.** Discovered while planning RAG: `_HYBRID_SQL` did not exclude notes with `embedding IS NULL`, and Postgres' `ORDER BY ... DESC` puts NULLs first → broken/empty notes could top search results. Added `WHERE n.embedding IS NOT NULL` + `NULLS LAST`. Latent bug closed before exposing it via RAG.
+
+**PR 4.0b (#30) + 3 fix PRs (#31, #32, #34) — Seed dummy data.** Insert 75 hand-curated notes for one user via direct DB connection (no auth round-trip; the script connects via the live container's `DATABASE_URL`). Three iterations needed because asyncpg has stricter constraints than the test SQLite path: (a) `(:days || ' days')::interval` requires str not int → switched to `make_interval(days => :days)`; (b) `note.tags = []` then append still triggers SQLAlchemy collection lazy-load on commit → `note.tags = []` was insufficient; (c) bypass the ORM relationship entirely with a direct INSERT into `note_tags` association table. **Decision:** seed notes are inserted with `processing_status='enriched'` but `embedding=NULL` — the embedding step requires async OpenAI calls that the script context doesn't currently set up cleanly. Companion `backfill_embeddings.py` (PR #41) was added later to populate embeddings via the existing `AIPipeline.process_note` path. The two-step (seed + backfill) is the documented pattern.
+
+**PR 4.1 (#33) — RAG endpoint POST /api/ai/answer.** Inline copy of the canonical hybrid SQL from search.py (per scope: don't change search.py in the same PR). Strict GPT-4o-mini prompt: "cite each fact with [N]". Per-user 30/hour rate limit via slowapi (cost guard). One automatic retry on OpenAI failure → 502. `prior_messages` accepted but unused (PR 4.5 wired it).
+
+**Workspace contention with PR 4.1:** my fix branch (#34) was inadvertently created while HEAD was on the rag agent's branch — squash-merging #34 swept #33's content into the same commit. PR #33 was closed as "superseded". Final state on main is correct (rag endpoint + tests are present), but the chronology is messy. Mitigation: use `git worktree` per agent in future rounds.
+
+**PR 4.2 (#35) — Ask UI page.** New `/ask` route + 5th BottomNav tab (`MessageCircle` icon, 5-tab grid). `[N]` citations rendered as clickable chips that navigate to the cited note. Decision: separate page (not embedded in SearchPage) to avoid clutter and keep the search affordance simple.
+
+**PR 4.3 (#36) — Search filter sidebar.** Reuses existing `GET /api/tags` endpoint for the tag chip source (better than deriving from result hits). Filters live in URL query params for shareable searches. Decision: backend already supported filters via POST body — no backend changes needed; the spec's "GET with `tags[]` repeated params" was a misstatement, conformed to actual `POST /api/search` shape.
+
+**Live bug discovery + PR #38 — `AmbiguousParameterError`.** First live RAG call returned 503 "vector index not ready". Investigation via temporary `scripts/debug_search.py` revealed the actual error: asyncpg can't infer the data type of a parameter that only appears in `IS NULL OR = :p` patterns when bound as Python `None`. Fix: explicit `::text` / `::timestamptz` / `::text[]` casts on the LHS of the IS NULL check. **Pre-existing bug** — search.py was always broken when called without filters; the failure mode just shifted after PR 4.0a and was finally exercised by RAG.
+
+**PR 4.4 (#39) — Streaming.** NDJSON over `fetch()` + `ReadableStream`, NOT EventSource (EventSource can't carry bearer auth headers). Frame types: `meta`, `token`, `done`, `error`. Backward-compat: `Accept: application/json` returns the existing JSON shape unchanged. Cancel button via `AbortController.abort()`. **Streaming citation restriction:** when the streamed answer contains `[N]` markers, `done.citations` is restricted to those actually referenced (not all retrieved notes); when no `[N]` markers, all retrieved notes are cited.
+
+**PR 4.5 (#40) — Multi-turn.** Conversation state lives **client-side** in `useState` + `sessionStorage` (DECISIONS § 22ae: Container App `maxReplicas=3` makes sticky in-memory infeasible). `prior_messages` cap: 8 entries (4 user + 4 assistant turns), 1000 chars each (oldest truncated first). **Retrieval still uses the current query only** — prior turns inform synthesis, not retrieval. Per-turn retrieval is the chunk-level Phase 7+ work.
+
+**PR #41 — backfill_embeddings.py.** After seeding 75 NULL-embedding notes, this script runs `AIPipeline.process_note` over each one. Per-note `SessionLocal()` (rather than a shared session) avoids transaction-scope issues with the long-running loop. Idempotent: skips notes that already have embeddings.
+
+### Cross-cutting decisions
+
+**Seed-data + backfill is the documented pattern.** Rather than wiring up async OpenAI calls inside the seed script (which would require initializing the OpenAI client + handling its async context), the script intentionally leaves `embedding=NULL` and a separate backfill step populates them via the existing pipeline. This separation makes both scripts simpler and keeps embedding cost out of the seed-script's runtime.
+
+**asyncpg strict typing is now documented.** Multiple latent bugs (interval binding, parameter type inference, lazy-load greenlet) all surfaced when the seed script + RAG endpoint hit production paths. Test SQLite doesn't replicate these. Future SQL-pattern work should run an integration test against real Postgres before declaring done.
+
+**Live verification > test-only confidence.** Three of this round's bugs (interval binding, lazy-load, ambiguous-param) only surfaced live, not in CI. The chrome-devtools verification step continues to pay off.
+

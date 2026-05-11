@@ -2,7 +2,7 @@
 
 > **Chronological log of what's been done.** New work appends to the end. Use this to verify "we already did X" before re-doing.
 
-**Last updated:** 2026-05-08 (Round 15: Phase 3 closed via 6 PRs #22–#27)
+**Last updated:** 2026-05-11 (Round 16: Phase 4 AI Search + Synthesis closed via 10 PRs #29-#41)
 
 ---
 
@@ -872,4 +872,60 @@ PROGRESS.md, KNOWN_ISSUES.md, HANDOFF.md s 3b, PLAN.md s 3 + s 6, DECISIONS.md s
 ### Remaining open work after Round 15
 
 P3 JTI revocation in Redis or DB table, P3 `/api/auth/logout` server-side revoke, P4 strict CSP + KMS rotation. All independent of Phase 3.
+
+
+
+## 16 — Round 16 — Phase 4 AI Search & Synthesis (2026-05-11)
+
+User asked to start Phase 4+ feature build (knowledge graph, AI synthesis, web clipper). Plan reordered after rubber-duck critic (RAG first, then clipper, then graph) and seed-data PR added so AI features have realistic corpus to validate against.
+
+### PRs landed (10 total this round)
+
+| PR | Scope | Result |
+|---|---|---|
+| #29 | 4.0a search NULL-embedding fix (pre-req for RAG) | merged; +3 tests |
+| #30 | 4.0b seed dummy data script + 75 hand-curated notes | merged; +7 tests |
+| #31, #32, #34 | 3 fix-iterations on the seed script (asyncpg int->str interval, async lazy-load on note.tags, then bypass ORM relationship via direct INSERT into note_tags table) | all merged; live seed run succeeded with 75/0 |
+| #33 | 4.1 RAG endpoint POST /api/ai/answer | merged via #34 (workspace contention squashed it in); +15 tests |
+| #35 | 4.2 Ask UI page + /ask route + 5th BottomNav tab + api/ai.ts client | merged; +16 frontend tests |
+| #36 | 4.3 Search filter sidebar + URL-shareable state | merged; +24 frontend tests |
+| #37 | debug script (later removed in #38) | merged then removed |
+| #38 | fix asyncpg AmbiguousParameterError on NULL filter params (latent bug exposed by live run) | merged; debug script deleted |
+| #39 | 4.4 streaming via NDJSON over fetch + ReadableStream + Cancel button + AbortController | merged; +6 backend, +10 frontend tests |
+| #40 | 4.5 multi-turn chat-style conversation with sessionStorage persistence + New conversation button + prior_messages cap | merged; +5 backend, +8 frontend tests |
+| #41 | chore: backfill_embeddings.py for seed-data NULL embeddings | merged + run live (75 notes embedded, 0 failures) |
+
+### Live infrastructure changes
+
+- 75 dummy notes seeded for `karths@microsoft.com` (themed clusters: 5 Eric/leadership, 8 marathon, 3 The Calm Mind book) - reproducible via `backend/scripts/seed_dummy_data.py`, removable via `cleanup_seed_data.py`.
+- All 75 seed notes had embeddings backfilled via `scripts/backfill_embeddings.py` (per-note SessionLocal + AIPipeline.process_note).
+
+### Live verification (chrome-devtools)
+
+Saved screenshots in session `files/`:
+- `r16-after-seed-library.png` - Library showing seeded notes.
+- `r16-ask-empty.png` - Ask page initial state.
+- `r16-ask-leadership.png` - First successful RAG answer with 2 inline citations + full citations list.
+- `r16-ask-streaming-marathon.png` - Streaming answer rendering progressively.
+- `r16-ask-multiturn.png` - Two-turn conversation: leadership question -> follow-up about decentralized control. Follow-up correctly references the prior conversation's "podcast about leadership" without restating context.
+
+### Friction worth noting
+
+1. **Workspace contention** - parallel coder agents share working dir; PR #34 inadvertently squash-merged PR #33's commits because my fix branch was created while HEAD was on the rag agent's branch. Pattern still acceptable but `git worktree` per agent should be considered next round.
+2. **Backend deploy race** - `ContainerAppOperationInProgress` hit twice when back-to-back merges queued deploys within 3 min. Re-trigger via `gh workflow run` covers it. Filed as nit (concurrency group on workflow).
+3. **az containerapp exec WS errors + 429s** - Azure rate-limits exec to ~10/hour. Hit it once; had to wait 10 min. Ran subsequent invocations more sparingly.
+4. **Live discovery: AmbiguousParameterError** - search.py + ai_answer.py both returned 503 ('vector index not ready') when called without filters. Root cause was asyncpg failing to infer parameter type on `IS NULL OR = :p` pattern with Python None. Fixed by explicit type casts (`::text`, `::timestamptz`, `::text[]`). Pre-existing latent bug; tests on SQLite didn't catch because SQLite doesn't have asyncpg's strict type inference.
+
+### Final state
+
+- Backend: `676 passed, 6 skipped, 1 xfailed, 1 xpassed` (Round 15 baseline 640 + 36 added across PRs)
+- Frontend: `636 passed, 1 skipped` (Round 15 baseline 563 + 73 added)
+- TypeScript: clean
+- Live: `GET /api/health` 200; live container at PR #41 image
+- E2E nightly cron: still green
+- `karths@microsoft.com` library: 139 + 75 seed = ~214 notes, 75 fresh embeddings
+
+### Remaining open work
+
+Phase 5 (Web Clipper / External Ingest) and Phase 6 (Knowledge Graph + Bidirectional Linking) per plan.md. Plan unchanged - same scope, same ordering.
 

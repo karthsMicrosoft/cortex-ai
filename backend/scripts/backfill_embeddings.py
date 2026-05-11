@@ -25,8 +25,7 @@ async def backfill(email: str) -> int:
     from app.models.note import Note
     from app.models.user import User
     from app.pipeline.processor import AIPipeline
-
-    pipeline = AIPipeline()
+    from app.services.openai_client import get_openai_client
 
     async with SessionLocal() as db:
         user_row = (
@@ -51,7 +50,9 @@ async def backfill(email: str) -> int:
     failed = 0
     for nid in note_ids:
         try:
-            await pipeline.process_note(nid)
+            async with SessionLocal() as task_db:
+                pipeline = AIPipeline(openai_client=get_openai_client(), db=task_db)
+                await pipeline.process_note(nid)
             backfilled += 1
             if backfilled % 10 == 0:
                 logger.info("Progress: %d/%d", backfilled, len(note_ids))

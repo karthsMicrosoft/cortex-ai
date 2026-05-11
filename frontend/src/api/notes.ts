@@ -39,6 +39,10 @@ export interface NoteOut {
   shadow_reader_status?: ShadowReaderStatus;
   shadow_reader_questions?: string[];
   shadow_reader_answer?: string;
+  // Phase 5 / PR 5.0 — Source provenance (scaffold; populated in Phase 5.1+).
+  source_url?: string;
+  source_title?: string;
+  source_parent_id?: string;
   created_at: string;
   updated_at: string;
 }

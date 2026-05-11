@@ -10,10 +10,13 @@
  *   - Multi-turn / conversation history (PR 4.5)
  */
 
-import { useCallback, useMemo, useState } from 'react';
+import { useCallback, useMemo, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { MessageSquare, Sparkles, RefreshCw, AlertTriangle } from 'lucide-react';
-import { askCortex, type AnswerResponse, type AnswerCitation } from '../api/ai';
+import { MessageSquare, Sparkles, RefreshCw, AlertTriangle, X } from 'lucide-react';
+import {
+  askCortexStreaming,
+  type AnswerCitation,
+} from '../api/ai';
 import { ApiError } from '../api/client';
 
 const MAX_QUERY_CHARS = 1000;
@@ -102,28 +105,62 @@ export default function AskPage(): React.ReactElement {
   const navigate = useNavigate();
   const [query, setQuery] = useState('');
   const [inFlight, setInFlight] = useState(false);
-  const [result, setResult] = useState<AnswerResponse | null>(null);
+  const [streamedAnswer, setStreamedAnswer] = useState('');
+  const [citations, setCitations] = useState<AnswerCitation[]>([]);
+  const [meta, setMeta] = useState<{ model: string; retrieval_count: number } | null>(null);
+  const [elapsedMs, setElapsedMs] = useState<number | null>(null);
+  const [done, setDone] = useState(false);
   const [error, setError] = useState<ErrorView | null>(null);
+  const abortRef = useRef<AbortController | null>(null);
 
   const trimmedLength = query.trim().length;
   const overLimit = query.length > MAX_QUERY_CHARS;
   const canSubmit = trimmedLength > 0 && !overLimit && !inFlight;
+  const hasResult = done && streamedAnswer.length > 0;
+  const hasPartial = inFlight && streamedAnswer.length > 0;
 
   const handleAsk = useCallback(async () => {
     if (!canSubmit) return;
     const q = query.trim();
     setInFlight(true);
     setError(null);
-    setResult(null);
-    try {
-      const r = await askCortex(q);
-      setResult(r);
-    } catch (e) {
-      setError(describeError(e));
-    } finally {
-      setInFlight(false);
-    }
+    setStreamedAnswer('');
+    setCitations([]);
+    setMeta(null);
+    setElapsedMs(null);
+    setDone(false);
+
+    const ctrl = new AbortController();
+    abortRef.current = ctrl;
+
+    await askCortexStreaming(q, {
+      signal: ctrl.signal,
+      onMeta: (m) => setMeta({ model: m.model, retrieval_count: m.retrieval_count }),
+      onToken: (t) => setStreamedAnswer((prev) => prev + t),
+      onDone: (cits, ms) => {
+        setCitations(cits);
+        setElapsedMs(ms);
+        setDone(true);
+      },
+      onError: (detail) => {
+        // Mirror non-streaming describeError for rate-limit / server detail.
+        const looksRate = /rate|quota|429/i.test(detail);
+        if (looksRate) {
+          setError(describeError(new ApiError(429, 'rate_limited', detail)));
+        } else {
+          setError(describeError(new ApiError(500, 'server_error', detail)));
+        }
+      },
+    });
+    setInFlight(false);
+    abortRef.current = null;
   }, [canSubmit, query]);
+
+  const handleCancel = useCallback(() => {
+    abortRef.current?.abort();
+    abortRef.current = null;
+    setInFlight(false);
+  }, []);
 
   const goToNote = useCallback(
     (noteId: string) => navigate(`/note/${noteId}`),
@@ -131,9 +168,9 @@ export default function AskPage(): React.ReactElement {
   );
 
   const answerNodes = useMemo(() => {
-    if (!result) return null;
-    return renderAnswerWithChips(result.answer, result.citations, (c) => goToNote(c.note_id));
-  }, [result, goToNote]);
+    if (!streamedAnswer) return null;
+    return renderAnswerWithChips(streamedAnswer, citations, (c) => goToNote(c.note_id));
+  }, [streamedAnswer, citations, goToNote]);
 
   return (
     <div className="flex min-h-screen flex-col bg-[#0F172A] pb-24">
@@ -183,12 +220,24 @@ export default function AskPage(): React.ReactElement {
                 </>
               )}
             </button>
+            {inFlight && (
+              <button
+                type="button"
+                onClick={handleCancel}
+                data-testid="cancel-button"
+                aria-label="Cancel"
+                className="ml-2 flex items-center gap-1 rounded-xl border border-slate-600 bg-slate-800 px-3 py-2 text-xs font-medium text-slate-200 hover:bg-slate-700 focus:outline-none focus:ring-2 focus:ring-slate-400"
+              >
+                <X className="h-3.5 w-3.5" aria-hidden="true" />
+                Cancel
+              </button>
+            )}
           </div>
         </section>
 
         {/* Result panel */}
         <section aria-live="polite" className="flex flex-col gap-4">
-          {inFlight && (
+          {inFlight && !hasPartial && (
             <div
               className="flex items-center gap-2 text-sm text-slate-400"
               data-testid="loading"
@@ -198,7 +247,7 @@ export default function AskPage(): React.ReactElement {
             </div>
           )}
 
-          {!inFlight && !result && !error && (
+          {!inFlight && !hasResult && !error && streamedAnswer.length === 0 && (
             <div
               className="flex flex-col items-center justify-center gap-2 rounded-xl border border-dashed border-slate-700 px-4 py-10 text-center text-sm text-slate-500"
               data-testid="empty-state"
@@ -232,7 +281,7 @@ export default function AskPage(): React.ReactElement {
             </div>
           )}
 
-          {!inFlight && result && (
+          {(hasResult || hasPartial) && !error && (
             <>
               <article
                 className="rounded-xl border border-indigo-500/40 bg-slate-900/60 p-4"
@@ -243,13 +292,13 @@ export default function AskPage(): React.ReactElement {
                 </p>
               </article>
 
-              {result.citations.length > 0 && (
-                <div className="flex flex-col gap-2">
+              {done && citations.length > 0 && (
+                <div className="flex flex-col gap-2" data-testid="citations">
                   <h2 className="text-xs font-semibold uppercase tracking-wide text-slate-400">
                     Citations
                   </h2>
                   <ul className="flex flex-col gap-2">
-                    {result.citations.map((c, i) => {
+                    {citations.map((c, i) => {
                       const oneIdx = i + 1;
                       const pct = Math.round(Math.max(0, Math.min(1, c.relevance)) * 100);
                       return (
@@ -278,9 +327,12 @@ export default function AskPage(): React.ReactElement {
                 </div>
               )}
 
-              <p className="text-[11px] text-slate-500" data-testid="meta-footer">
-                Model: {result.model} • Retrieved {result.retrieval_count} notes • {result.elapsed_ms}ms
-              </p>
+              {done && meta && (
+                <p className="text-[11px] text-slate-500" data-testid="meta-footer">
+                  Model: {meta.model} • Retrieved {meta.retrieval_count} notes
+                  {elapsedMs !== null ? ` • ${elapsedMs}ms` : ''}
+                </p>
+              )}
             </>
           )}
         </section>

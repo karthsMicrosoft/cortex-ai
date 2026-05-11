@@ -13,12 +13,15 @@ Behaviour summary:
 - Per-user 30/hour rate limit (slowapi). 401 / 400 / 429 / 502 / 503 errors.
 - `prior_messages` is accepted but UNUSED in this PR (PR 4.5).
 """
+import json
 import logging
+import re
 import time
 import uuid
-from typing import Any, Optional
+from typing import Any, AsyncIterator, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
+from fastapi.responses import StreamingResponse
 from openai import AsyncAzureOpenAI
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -249,7 +252,122 @@ async def _call_openai_with_retry(
 # POST /answer
 # ---------------------------------------------------------------------------
 
-@router.post("/answer", response_model=AnswerResponse)
+_NDJSON_MEDIA_TYPE = "application/x-ndjson"
+
+
+def _wants_ndjson(request: Request) -> bool:
+    """True iff the client asked for NDJSON streaming via Accept header."""
+    accept = (request.headers.get("accept") or "").lower()
+    return _NDJSON_MEDIA_TYPE in accept
+
+
+def _ndjson(obj: dict) -> bytes:
+    return (json.dumps(obj, default=str) + "\n").encode("utf-8")
+
+
+async def _stream_openai_tokens(
+    openai_client: AsyncAzureOpenAI,
+    query: str,
+    notes: list[dict[str, Any]],
+) -> AsyncIterator[str]:
+    """Async-iterate token chunks from OpenAI streaming chat completion."""
+    user_prompt = _build_user_prompt(query, notes)
+    messages = [
+        {"role": "system", "content": _SYSTEM_PROMPT},
+        {"role": "user", "content": user_prompt},
+    ]
+    stream = await openai_client.chat.completions.create(
+        model=MODEL_NAME,
+        messages=messages,
+        max_tokens=600,
+        temperature=0.3,
+        stream=True,
+    )
+    async for chunk in stream:
+        try:
+            delta = chunk.choices[0].delta
+            text_piece = getattr(delta, "content", None)
+        except (AttributeError, IndexError):
+            text_piece = None
+        if text_piece:
+            yield text_piece
+
+
+async def _streaming_answer(
+    started: float,
+    openai_client: AsyncAzureOpenAI,
+    user_id: uuid.UUID,
+    query: str,
+    notes: list[dict[str, Any]],
+) -> AsyncIterator[bytes]:
+    """Yield NDJSON frames: meta → token* → done | error."""
+    yield _ndjson({
+        "type": "meta",
+        "retrieval_count": len(notes),
+        "model": MODEL_NAME,
+    })
+
+    if not notes:
+        elapsed_ms = int((time.perf_counter() - started) * 1000)
+        yield _ndjson({
+            "type": "token",
+            "text": _NO_MATCH_ANSWER,
+        })
+        yield _ndjson({
+            "type": "done",
+            "citations": [],
+            "elapsed_ms": elapsed_ms,
+        })
+        return
+
+    collected: list[str] = []
+    try:
+        async for piece in _stream_openai_tokens(openai_client, query, notes):
+            collected.append(piece)
+            yield _ndjson({"type": "token", "text": piece})
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(
+            "ai_answer.stream: OpenAI failed error_class=%s",
+            type(exc).__name__,
+        )
+        yield _ndjson({
+            "type": "error",
+            "detail": f"Upstream LLM failed: {type(exc).__name__}",
+        })
+        return
+
+    answer_text = "".join(collected)
+    citations = _build_citations(notes)
+    # Restrict citations to those actually referenced via [N] markers when
+    # any are present; otherwise fall back to all retrieved notes (mirrors
+    # the non-streaming behaviour which returns one citation per row).
+    referenced = {int(m) for m in re.findall(r"\[(\d+)\]", answer_text)}
+    if referenced:
+        citations = [
+            c for i, c in enumerate(citations, start=1) if i in referenced
+        ] or citations
+
+    elapsed_ms = int((time.perf_counter() - started) * 1000)
+    logger.info(
+        "ai_answer.stream: user_id=%s retrieval_count=%d elapsed_ms=%d",
+        user_id, len(notes), elapsed_ms,
+    )
+    yield _ndjson({
+        "type": "done",
+        "citations": [
+            {
+                "note_id": str(c.note_id),
+                "title": c.title,
+                "snippet": c.snippet,
+                "relevance": c.relevance,
+            }
+            for c in citations
+        ],
+        "elapsed_ms": elapsed_ms,
+    })
+
+
+@router.post("/answer")
 @limiter.limit("30/hour")
 async def answer(
     request: Request,
@@ -258,8 +376,13 @@ async def answer(
     current_user_id: uuid.UUID = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
     openai_client: AsyncAzureOpenAI = Depends(get_openai),
-) -> AnswerResponse:
-    """Answer a natural-language question using the user's notes (RAG)."""
+):
+    """Answer a natural-language question using the user's notes (RAG).
+
+    Content negotiation:
+      * Accept: application/x-ndjson  → NDJSON token stream
+      * Anything else (default)       → single JSON AnswerResponse
+    """
     started = time.perf_counter()
 
     # Defensive cap: pydantic already enforces <=20, but if a future change
@@ -274,6 +397,18 @@ async def answer(
         max_results=max_results,
         filters=payload.filters,
     )
+
+    if _wants_ndjson(request):
+        return StreamingResponse(
+            _streaming_answer(
+                started=started,
+                openai_client=openai_client,
+                user_id=current_user_id,
+                query=payload.query,
+                notes=notes,
+            ),
+            media_type=_NDJSON_MEDIA_TYPE,
+        )
 
     if not notes:
         elapsed_ms = int((time.perf_counter() - started) * 1000)

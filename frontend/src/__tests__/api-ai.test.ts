@@ -20,7 +20,7 @@ vi.mock('../store/authStore', () => ({
   },
 }));
 
-import { askCortex } from '../api/ai';
+import { askCortex, askCortexStreaming } from '../api/ai';
 import { ApiError } from '../api/client';
 
 // ---------------------------------------------------------------------------
@@ -132,5 +132,156 @@ describe('askCortex', () => {
     expect(caught).toBeInstanceOf(ApiError);
     expect((caught as ApiError).status).toBe(429);
     expect((caught as ApiError & { retryAfter?: number }).retryAfter).toBe(120);
+  });
+});
+
+// streaming tests appended below
+
+// ---------------------------------------------------------------------------
+// PR 4.4 — askCortexStreaming
+// ---------------------------------------------------------------------------
+
+/** Build a fetch that returns a ReadableStream from a sequence of UTF-8 chunks. */
+function makeStreamingFetch(chunks: string[], opts: { status?: number } = {}) {
+  const enc = new TextEncoder();
+  const stream = new ReadableStream<Uint8Array>({
+    start(controller) {
+      for (const c of chunks) controller.enqueue(enc.encode(c));
+      controller.close();
+    },
+  });
+  return vi.fn(async (_url: string, _init?: RequestInit) => {
+    return {
+      ok: (opts.status ?? 200) >= 200 && (opts.status ?? 200) < 300,
+      status: opts.status ?? 200,
+      statusText: 'OK',
+      headers: { get: () => null },
+      body: stream,
+      json: async () => ({ detail: 'err' }),
+    } as unknown as Response;
+  });
+}
+
+describe('askCortexStreaming', () => {
+  let originalFetch: typeof globalThis.fetch;
+  beforeEach(() => {
+    originalFetch = globalThis.fetch;
+  });
+  afterEach(() => {
+    globalThis.fetch = originalFetch;
+    vi.clearAllMocks();
+  });
+
+  it('parses NDJSON and dispatches meta → tokens → done', async () => {
+    globalThis.fetch = makeStreamingFetch([
+      '{"type":"meta","retrieval_count":1,"model":"gpt-4o-mini"}\n',
+      '{"type":"token","text":"Hi"}\n',
+      '{"type":"token","text":" there"}\n',
+      '{"type":"token","text":"."}\n',
+      '{"type":"done","citations":[{"note_id":"n1","title":"t","snippet":"s","relevance":0.9}],"elapsed_ms":42}\n',
+    ]);
+    const tokens: string[] = [];
+    let metaSeen: { retrieval_count: number; model: string } | null = null;
+    let doneSeen: { count: number; ms: number } | null = null;
+
+    await askCortexStreaming('q', {
+      onMeta: (m) => { metaSeen = { retrieval_count: m.retrieval_count, model: m.model }; },
+      onToken: (t) => tokens.push(t),
+      onDone: (cits, ms) => { doneSeen = { count: cits.length, ms }; },
+    });
+
+    expect(metaSeen).toEqual({ retrieval_count: 1, model: 'gpt-4o-mini' });
+    expect(tokens).toEqual(['Hi', ' there', '.']);
+    expect(doneSeen).toEqual({ count: 1, ms: 42 });
+  });
+
+  it('handles partial chunks split across reads (1.5 lines per chunk)', async () => {
+    globalThis.fetch = makeStreamingFetch([
+      '{"type":"meta","retrieval_count":0,"model":"m"}\n{"type":"to',
+      'ken","text":"A"}\n{"type":"token","text":"B"}\n',
+      '{"type":"done","citations":[],"elapsed_ms":1}\n',
+    ]);
+    const tokens: string[] = [];
+    let done = false;
+    await askCortexStreaming('q', {
+      onToken: (t) => tokens.push(t),
+      onDone: () => { done = true; },
+    });
+    expect(tokens).toEqual(['A', 'B']);
+    expect(done).toBe(true);
+  });
+
+  it('ignores invalid JSON lines but keeps reading', async () => {
+    globalThis.fetch = makeStreamingFetch([
+      '{"type":"meta","retrieval_count":0,"model":"m"}\n',
+      'not-json-at-all\n',
+      '{"type":"token","text":"X"}\n',
+      '{"type":"done","citations":[],"elapsed_ms":0}\n',
+    ]);
+    const tokens: string[] = [];
+    let errored = false;
+    await askCortexStreaming('q', {
+      onToken: (t) => tokens.push(t),
+      onError: () => { errored = true; },
+      onDone: () => undefined,
+    });
+    expect(tokens).toEqual(['X']);
+    expect(errored).toBe(false);
+  });
+
+  it('handles premature stream end (no done frame)', async () => {
+    globalThis.fetch = makeStreamingFetch([
+      '{"type":"meta","retrieval_count":0,"model":"m"}\n',
+      '{"type":"token","text":"partial"}\n',
+    ]);
+    const tokens: string[] = [];
+    let doneCalled = false;
+    let errorCalled = false;
+    await askCortexStreaming('q', {
+      onToken: (t) => tokens.push(t),
+      onDone: () => { doneCalled = true; },
+      onError: () => { errorCalled = true; },
+    });
+    expect(tokens).toEqual(['partial']);
+    expect(doneCalled).toBe(false);
+    expect(errorCalled).toBe(false);
+  });
+
+  it('dispatches error frame to onError', async () => {
+    globalThis.fetch = makeStreamingFetch([
+      '{"type":"meta","retrieval_count":1,"model":"m"}\n',
+      '{"type":"error","detail":"upstream boom"}\n',
+    ]);
+    let errDetail = '';
+    await askCortexStreaming('q', {
+      onError: (d) => { errDetail = d; },
+    });
+    expect(errDetail).toBe('upstream boom');
+  });
+
+  it('sends Accept: application/x-ndjson and bearer token', async () => {
+    const mockFetch = makeStreamingFetch([
+      '{"type":"done","citations":[],"elapsed_ms":0}\n',
+    ]);
+    globalThis.fetch = mockFetch;
+    await askCortexStreaming('hello?', { onDone: () => undefined });
+    const [, init] = mockFetch.mock.calls[0] as [string, RequestInit];
+    const headers = init?.headers as Record<string, string>;
+    expect(headers['Accept']).toBe('application/x-ndjson');
+    expect(headers['Authorization']).toBe('Bearer test-access-token');
+    expect(init?.method).toBe('POST');
+    const body = JSON.parse(init?.body as string);
+    expect(body.query).toBe('hello?');
+  });
+
+  it('passes signal through to fetch for cancellation', async () => {
+    const mockFetch = makeStreamingFetch([
+      '{"type":"done","citations":[],"elapsed_ms":0}\n',
+    ]);
+    globalThis.fetch = mockFetch;
+    const ctrl = new AbortController();
+    await askCortexStreaming('q', { signal: ctrl.signal, onDone: () => undefined });
+    const [, init] = mockFetch.mock.calls[0] as [string, RequestInit];
+    expect(init?.signal).toBe(ctrl.signal);
   });
 });

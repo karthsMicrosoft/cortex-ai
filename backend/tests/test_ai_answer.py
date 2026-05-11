@@ -17,6 +17,7 @@ Mock strategy:
 """
 from __future__ import annotations
 
+import json
 import uuid
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -25,6 +26,69 @@ import pytest
 from httpx import AsyncClient
 
 pytestmark = pytest.mark.asyncio
+
+
+# ---------------------------------------------------------------------------
+# Streaming helpers (PR 4.4)
+# ---------------------------------------------------------------------------
+
+def _make_streaming_openai_mock(token_chunks: list[str]) -> AsyncMock:
+    """Build an AsyncMock whose chat.completions.create returns an async-iter
+    of fake OpenAI streaming chunks when stream=True."""
+
+    class _Delta:
+        def __init__(self, content: str | None) -> None:
+            self.content = content
+
+    class _Choice:
+        def __init__(self, content: str | None) -> None:
+            self.delta = _Delta(content)
+
+    class _Chunk:
+        def __init__(self, content: str | None) -> None:
+            self.choices = [_Choice(content)]
+
+    async def _stream():
+        for tok in token_chunks:
+            yield _Chunk(tok)
+
+    mock_openai = AsyncMock()
+
+    async def _create(*args: Any, **kwargs: Any):
+        if kwargs.get("stream"):
+            return _stream()
+        # Non-streaming fallback (not used by streaming tests)
+        resp = MagicMock()
+        resp.choices = [MagicMock()]
+        resp.choices[0].message.content = "".join(token_chunks)
+        return resp
+
+    mock_openai.chat.completions.create = _create
+    return mock_openai
+
+
+async def _consume_ndjson(client: AsyncClient, headers: dict, payload: dict) -> list[dict]:
+    """POST and parse NDJSON response body line-by-line."""
+    lines: list[dict] = []
+    async with client.stream(
+        "POST",
+        "/api/ai/answer",
+        json=payload,
+        headers={**headers, "Accept": "application/x-ndjson"},
+    ) as resp:
+        assert resp.status_code == 200, await resp.aread()
+        assert resp.headers["content-type"].startswith("application/x-ndjson"), resp.headers
+        buf = ""
+        async for chunk in resp.aiter_text():
+            buf += chunk
+            while "\n" in buf:
+                raw, buf = buf.split("\n", 1)
+                raw = raw.strip()
+                if raw:
+                    lines.append(json.loads(raw))
+        if buf.strip():
+            lines.append(json.loads(buf.strip()))
+    return lines
 
 
 # ---------------------------------------------------------------------------
@@ -485,3 +549,166 @@ class TestAnswerPriorMessagesUnused:
         assert "earlier assistant reply" not in msg_blob, (
             "prior_messages must NOT be forwarded to OpenAI in this PR"
         )
+
+# ---------------------------------------------------------------------------
+# 13. Streaming (PR 4.4)
+# ---------------------------------------------------------------------------
+
+
+class TestStreamingResponse:
+    async def test_streaming_response_when_accept_header_set(
+        self, client: AsyncClient, auth_headers: dict
+    ):
+        rows = [_make_retrieval_row(content="content one")]
+        mock_openai = _make_streaming_openai_mock(["Hello", " world", "."])
+        _override_openai(mock_openai)
+        try:
+            with patch(
+                "app.api.ai_answer._retrieve_notes",
+                new=AsyncMock(return_value=rows),
+            ):
+                lines = await _consume_ndjson(
+                    client, auth_headers, {"query": "hi?"}
+                )
+        finally:
+            _clear_openai_override()
+
+        assert lines, "stream produced no NDJSON lines"
+        assert lines[0]["type"] == "meta"
+        assert lines[0]["retrieval_count"] == 1
+        assert lines[0]["model"] == "gpt-4o-mini"
+
+    async def test_streaming_emits_tokens_then_done(
+        self, client: AsyncClient, auth_headers: dict
+    ):
+        rows = [_make_retrieval_row(content="abc")]
+        mock_openai = _make_streaming_openai_mock(["Hi", " there", "."])
+        _override_openai(mock_openai)
+        try:
+            with patch(
+                "app.api.ai_answer._retrieve_notes",
+                new=AsyncMock(return_value=rows),
+            ):
+                lines = await _consume_ndjson(
+                    client, auth_headers, {"query": "greet"}
+                )
+        finally:
+            _clear_openai_override()
+
+        token_lines = [l for l in lines if l.get("type") == "token"]
+        done_lines = [l for l in lines if l.get("type") == "done"]
+        assert len(token_lines) == 3, lines
+        assert [t["text"] for t in token_lines] == ["Hi", " there", "."]
+        assert len(done_lines) == 1
+        # done is the LAST line.
+        assert lines[-1]["type"] == "done"
+
+    async def test_streaming_done_line_includes_citations(
+        self, client: AsyncClient, auth_headers: dict
+    ):
+        nid_a = str(uuid.uuid4())
+        nid_b = str(uuid.uuid4())
+        rows = [
+            _make_retrieval_row(note_id=nid_a, combined_score=0.91),
+            _make_retrieval_row(note_id=nid_b, combined_score=0.42),
+        ]
+        mock_openai = _make_streaming_openai_mock(["Ans [1][2]"])
+        _override_openai(mock_openai)
+        try:
+            with patch(
+                "app.api.ai_answer._retrieve_notes",
+                new=AsyncMock(return_value=rows),
+            ):
+                lines = await _consume_ndjson(
+                    client, auth_headers, {"query": "tell me"}
+                )
+        finally:
+            _clear_openai_override()
+
+        done = lines[-1]
+        assert done["type"] == "done"
+        assert "elapsed_ms" in done and isinstance(done["elapsed_ms"], int)
+        assert isinstance(done["citations"], list)
+        cit_ids = {c["note_id"] for c in done["citations"]}
+        assert cit_ids == {nid_a, nid_b}
+
+    async def test_streaming_emits_error_on_openai_failure(
+        self, client: AsyncClient, auth_headers: dict
+    ):
+        rows = [_make_retrieval_row(content="boom note")]
+
+        async def _create_boom(*args: Any, **kwargs: Any):
+            raise RuntimeError("OpenAI exploded")
+
+        mock_openai = AsyncMock()
+        mock_openai.chat.completions.create = _create_boom
+        _override_openai(mock_openai)
+        try:
+            with patch(
+                "app.api.ai_answer._retrieve_notes",
+                new=AsyncMock(return_value=rows),
+            ):
+                lines = await _consume_ndjson(
+                    client, auth_headers, {"query": "fail please"}
+                )
+        finally:
+            _clear_openai_override()
+
+        # Last line should be an error frame.
+        assert lines[-1]["type"] == "error", lines
+        assert "detail" in lines[-1]
+
+    async def test_non_streaming_when_accept_json(
+        self, client: AsyncClient, auth_headers: dict
+    ):
+        """Backward compatibility: Accept: application/json keeps JSON shape."""
+        rows = [_make_retrieval_row(content="x")]
+        mock_openai = _make_openai_mock("answer body [1]")
+        _override_openai(mock_openai)
+        try:
+            with patch(
+                "app.api.ai_answer._retrieve_notes",
+                new=AsyncMock(return_value=rows),
+            ):
+                resp = await client.post(
+                    "/api/ai/answer",
+                    json={"query": "what?"},
+                    headers={**auth_headers, "Accept": "application/json"},
+                )
+        finally:
+            _clear_openai_override()
+
+        assert resp.status_code == 200, resp.text
+        assert resp.headers["content-type"].startswith("application/json")
+        body = resp.json()
+        assert "answer" in body
+        assert "citations" in body
+        assert body["model"] == "gpt-4o-mini"
+
+    async def test_streaming_rate_limit_counts_as_one_call(
+        self, client: AsyncClient, auth_headers: dict
+    ):
+        """30 streaming requests must succeed; 31st returns 429."""
+        with patch(
+            "app.api.ai_answer._retrieve_notes",
+            new=AsyncMock(return_value=[]),
+        ):
+            for i in range(30):
+                async with client.stream(
+                    "POST",
+                    "/api/ai/answer",
+                    json={"query": f"call {i}"},
+                    headers={**auth_headers, "Accept": "application/x-ndjson"},
+                ) as resp:
+                    await resp.aread()
+                    assert resp.status_code == 200, (
+                        f"call #{i + 1} failed with {resp.status_code}"
+                    )
+
+            # 31st should be rate-limited.
+            resp = await client.post(
+                "/api/ai/answer",
+                json={"query": "one too many"},
+                headers={**auth_headers, "Accept": "application/x-ndjson"},
+            )
+            assert resp.status_code == 429, resp.text

@@ -109,6 +109,7 @@ from app.api.tags import router as tags_router       # B6 — dedicated tags mod
 from app.api.sync import router as sync_router
 from app.api.dictionary import router as dictionary_router  # US-7 — personal dictionary
 from app.api.insights import ai_router as ai_generate_router, insights_router  # US-6 — insights (daily/weekly summaries removed 2026-05-06)
+from app.api.ai_answer import router as ai_answer_router  # P4 PR 4.1 — RAG /api/ai/answer
 from app.api.export import router as export_router               # US-6 — export
 from app.api.shadow_reader import router as shadow_reader_router  # US-8 — shadow reader
 from app.api.users import router as users_router                  # US-8 — user settings
@@ -117,6 +118,7 @@ app.include_router(auth_router,           prefix="/api/auth",          tags=["au
 app.include_router(notes_router,          prefix="/api/notes",         tags=["notes"])
 app.include_router(ai_router,             prefix="/api/ai",            tags=["ai"])
 app.include_router(ai_generate_router,    prefix="/api/ai",            tags=["ai"])
+app.include_router(ai_answer_router,      prefix="/api/ai",            tags=["ai"])
 app.include_router(upload_router,         prefix="/api",               tags=["upload"])
 app.include_router(voice_router,          prefix="/api/voice",         tags=["voice"])
 app.include_router(search_router,         prefix="/api/search",        tags=["search"])

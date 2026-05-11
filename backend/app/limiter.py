@@ -25,4 +25,8 @@ def _get_user_or_ip(request: Request) -> str:
     return get_remote_address(request)
 
 
-limiter = Limiter(key_func=_get_user_or_ip, default_limits=["100/minute"])
+limiter = Limiter(
+    key_func=_get_user_or_ip,
+    default_limits=["100/minute"],
+    headers_enabled=True,  # P4 PR 4.1 — emit X-RateLimit-* + Retry-After on 429
+)

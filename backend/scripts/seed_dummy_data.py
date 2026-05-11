@@ -131,8 +131,8 @@ async def seed(email: str) -> int:
                 await db.execute(
                     sql_text(
                         "UPDATE notes "
-                        "SET created_at = NOW() - (:days || ' days')::interval, "
-                        "    updated_at = NOW() - (:days || ' days')::interval "
+                        "SET created_at = NOW() - make_interval(days => :days), "
+                        "    updated_at = NOW() - make_interval(days => :days) "
                         "WHERE id = :id"
                     ),
                     {"days": days_ago, "id": note.id},

@@ -122,6 +122,9 @@ async def seed(email: str) -> int:
             )
             db.add(note)
             await db.flush()  # populate note.id
+            # Avoid the async lazy-load that "if tag not in note.tags" would trigger:
+            # the note was just created, so tags is empty by definition.
+            note.tags = []
 
             # Back-date created_at to spread the corpus across time.
             days_ago = int(rec.get("days_ago", 0))
@@ -144,8 +147,7 @@ async def seed(email: str) -> int:
 
             for tag_name in tag_names:
                 tag = await get_or_create_tag(tag_name)
-                if tag not in note.tags:
-                    note.tags.append(tag)
+                note.tags.append(tag)
 
             seeded += 1
 

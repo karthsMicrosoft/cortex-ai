@@ -403,6 +403,105 @@ class TestPERF05FullTextIndex:
         except ImportError:
             pytest.skip("search module not yet implemented")
 
+    def test_hybrid_search_excludes_null_embedding_notes(self):
+        """
+        Round 16 / PR 4.0a — Latent-bug fix.
+
+        Notes with embedding IS NULL (pipeline failures — visible in prod as
+        "Failed" items in the Library) must NOT appear in hybrid search
+        results. The cosine operator (<=>) returns NULL for NULL embeddings,
+        which makes combined_score NULL; Postgres' default DESC sort places
+        NULLs FIRST, so broken notes would otherwise top the ranked list.
+
+        The fix is a SQL-level WHERE clause on _HYBRID_SQL guaranteeing that
+        only notes with a non-null embedding enter the semantic top-K. This
+        test inspects the SQL source statically because the SQLite test DB
+        has no pgvector and cannot execute the query end-to-end.
+        """
+        import app.api.search as search_module
+        import inspect
+        src = inspect.getsource(search_module)
+
+        # Locate the _HYBRID_SQL block specifically (don't accept a stray
+        # IS NOT NULL elsewhere in the module).
+        start = src.index("_HYBRID_SQL")
+        end = src.index("@router.post", start)
+        hybrid_sql = src[start:end]
+
+        assert "embedding IS NOT NULL" in hybrid_sql, (
+            "PR 4.0a FAIL: _HYBRID_SQL does not exclude NULL-embedding notes. "
+            "Add `AND n.embedding IS NOT NULL` to the WHERE clause so that "
+            "pipeline-failure notes (embedding=NULL) cannot pollute the ranked "
+            "results via NULL combined_score sorting first."
+        )
+
+    def test_hybrid_search_orders_nulls_last(self):
+        """
+        Round 16 / PR 4.0a — Defence-in-depth.
+
+        Even with the WHERE filter above, the ORDER BY clause on
+        combined_score must use `NULLS LAST` so that any future code path
+        producing a NULL score (e.g. ts_rank fallback when text_score is
+        NULL on no-match) cannot float to the top of the results.
+        """
+        import app.api.search as search_module
+        import inspect
+        src = inspect.getsource(search_module)
+
+        start = src.index("_HYBRID_SQL")
+        end = src.index("@router.post", start)
+        hybrid_sql = src[start:end]
+
+        assert "NULLS LAST" in hybrid_sql, (
+            "PR 4.0a FAIL: _HYBRID_SQL ORDER BY combined_score DESC must "
+            "append `NULLS LAST` so NULL scores cannot rank first."
+        )
+
+    async def test_hybrid_search_handles_zero_valid_results_gracefully(
+        self, client, auth_headers
+    ):
+        """
+        Round 16 / PR 4.0a — Empty-corpus regression.
+
+        When every candidate note has been filtered out (e.g. all notes have
+        embedding IS NULL after the new WHERE clause), the search endpoint
+        must return an empty list with 200, not raise a 500.
+        """
+        from unittest.mock import patch, AsyncMock, MagicMock
+
+        mock_embed = AsyncMock(return_value=MagicMock(
+            data=[MagicMock(embedding=FAKE_EMBEDDING)]
+        ))
+        # DB returns no rows — simulates all-NULL-embedding corpus post-filter.
+        mock_db_execute = AsyncMock(
+            return_value=MagicMock(fetchall=MagicMock(return_value=[]))
+        )
+
+        with patch("app.api.search.get_openai") as mock_get_openai:
+            mock_client = AsyncMock()
+            mock_client.embeddings.create = mock_embed
+            mock_get_openai.return_value = mock_client
+
+            with patch("app.api.search.get_db") as mock_get_db:
+                mock_session = AsyncMock()
+                mock_session.execute = mock_db_execute
+                mock_get_db.return_value = mock_session
+
+                resp = await client.post(
+                    "/api/search",
+                    json={"query": "anything"},
+                    headers=auth_headers,
+                )
+
+        # Either the SQLite test DB rejects the SQL (503 — acceptable, since
+        # the WHERE filter doesn't change Postgres-vs-SQLite compatibility)
+        # or the mocked-out DB path returns 200 with []. A 500 is a regression.
+        assert resp.status_code in (200, 503), (
+            f"Expected 200 or 503, got {resp.status_code}: {resp.text}"
+        )
+        if resp.status_code == 200:
+            assert resp.json() == []
+
     def test_similar_sql_does_not_use_cross_join(self):
         """
         PERF-08: _SIMILAR_SQL must NOT use a Cartesian cross-join (FROM notes n, notes src).

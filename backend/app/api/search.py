@@ -42,6 +42,7 @@ SELECT
                 plainto_tsquery('english', :q_text))                            AS combined_score
 FROM notes n
 WHERE n.user_id = :user_id
+  AND n.embedding IS NOT NULL
   AND (:category   IS NULL OR n.category   = :category)
   AND (:date_from  IS NULL OR n.created_at >= :date_from)
   AND (:date_to    IS NULL OR n.created_at <= :date_to)
@@ -56,7 +57,7 @@ WHERE n.user_id = :user_id
         AND t.name     = ANY(:tags)
     )
   )
-ORDER BY combined_score DESC
+ORDER BY combined_score DESC NULLS LAST
 LIMIT :limit
 OFFSET :offset
 """)

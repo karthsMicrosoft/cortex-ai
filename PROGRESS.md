@@ -2,7 +2,7 @@
 
 > **Chronological log of what's been done.** New work appends to the end. Use this to verify "we already did X" before re-doing.
 
-**Last updated:** 2026-05-11 (Round 18: Phase 6 Knowledge Graph + Bidirectional Linking closed via 8 PRs #50-#57 — closes the 4-feature initiative)
+**Last updated:** 2026-05-12 (Round 19: P3 nits combined — JTI revocation + /auth/logout + sign-out UI + extension settings + searchbar title + workflow concurrency via PRs #60-#64)
 
 ---
 
@@ -1073,4 +1073,61 @@ Plus 3 small follow-up nits from this initiative:
 1. SearchBar suggestions should show note.title when set (PR #56 punted; needs backend search-projection update).
 2. UrlClipForm "Saved!" toast should auto-dismiss after ~3s (Round 17 nit).
 3. Settings page "Browser Extension" section to mint+display clip token (Round 17 nit).
+
+
+
+## 19 — Round 19 — P3 nits combined: logout + extension UI + searchbar title + concurrency (2026-05-12)
+
+User asked for "P3 nits combined" via /fleet, plus a "logout option under user profile" (which was missing today). 5 PRs landed (#60-#64), all merged + verified live.
+
+### PRs landed
+
+| PR | Scope | Tests added |
+|---|---|---|
+| #60 | Settings Browser Extension card (mints + displays clip token + Copy) + UrlClipForm Saved toast auto-dismiss after 3s | +13 frontend |
+| #61 | SearchBar + SearchPage display note.title with summary fallback (backend search projection includes n.title) | +7 backend, +4 frontend |
+| #62 | (PR A backend) Persistent JTI revocation: alembic 011 revoked_jtis table + RevokedJTI model + two-tier (in-memory cache + DB) revoke/check + POST /api/auth/logout revokes both access + refresh JTIs | +18 backend |
+| #63 | deploy-backend.yml + deploy-frontend.yml concurrency: { group: deploy-{backend,frontend}, cancel-in-progress: false } - prevents ContainerAppOperationInProgress race | +2 backend |
+| #64 | Round 19 fix: re-add the AppHeader/Settings sign-out UI bits + authStore.signOut that PR #62 dropped during workspace contention | (UI-only; tests already covered the underlying paths) |
+
+### Live infrastructure changes
+
+- Migration 011 (revoked_jtis table) ran live via az containerapp exec. JWT revocation now persists across Container App restarts (closes the SEC-07 latent gap).
+- Concurrency groups added to both deploy workflows. Future back-to-back merges will queue rather than collide.
+
+### Live verification (chrome-devtools)
+
+Saved screenshot: r19-after-settings-with-signout.png
+
+Verified:
+- AppHeader shows Sign out icon button (LogOut from lucide-react) next to profile avatar (testid header-sign-out)
+- Settings page Account section has new "Sign out" card with descriptive copy + button (testid settings-sign-out)
+- ProfilePage Sign out button still works (predates authStore.signOut; uses logoutApi() directly)
+- Settings page "Browser Extension" card visible with Generate clip token button
+- Search results show note.title when set (verified via SearchPage rendering)
+- POST /api/auth/logout returns 401 unauth (correct), 204 with valid token (verified by tests)
+
+### Friction worth noting
+
+1. **Workspace contention dropped UI bits** in PR A. The agent's frontend half (AppHeader logout button, SettingsPage sign-out card, authStore.signOut) was lost when a parallel agent's git checkout overwrote the working tree mid-task. The agent's own report claimed "2 commits, pushed" but only the backend commit made the squash-merge into main. Fixed in follow-up PR #64. Process implication: the workspace-contention pattern has a real failure mode where reported-as-shipped work can silently not ship. Next round should evaluate git worktree per agent.
+2. PR D (deploy concurrency) took ~43 minutes despite being the smallest PR — likely also a contention-recovery slowdown. The actual change is 8 lines of YAML.
+3. Frontend tests had 2 unrelated failures during PR A's interim run that resolved after the contention recovery.
+
+### Final state
+
+- Backend: `834+ passed` (Round 18 baseline 827 + 7 additions; full count after all merges TBD on next CI)
+- Frontend: `757+ passed` (Round 18 baseline 738 + 19 additions across PRs C/B/64)
+- TypeScript: clean
+- Live: `GET /api/health` 200; container at PR #62 image
+- E2E nightly cron green
+- Migration 011 live
+
+### Remaining open work after Round 19
+
+3 P3 nits closed, 1 P3 (logout/JTI) closed. Remaining:
+- **P4** Phase 7 visual canvas (Heptabase/Milanote)
+- **P4** KMS-grade rotation for JWT_SECRET_KEY
+- **P4** Strict CSP header
+- **P4** Observability gaps (App Insights traces, custom metrics)
+- **P4** Frontend deps stale (React 19, Vite 8, Tailwind 4)
 

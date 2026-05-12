@@ -91,8 +91,8 @@ az containerapp secret list --name cortexks-api --resource-group cortex-rg --sho
 | **P3** | ~~Phase 5 — Web Clipper / External Ingest (PWA share_target, URL import with SSRF hardening, PDF chunking, Chrome MV3 extension with limited-scope token)~~ ✅ Round 17 (2026-05-11) — 6 PRs landed (#43-#48): alembic 008 source provenance, share_target + /share, /api/import/url, PDF ingestion + chunking, Capture URL tab, MV3 extension + clip-token | `PROGRESS.md` § 17 |
 | **P3** | ~~Phase 6 — Knowledge Graph + Bidirectional Linking (note_links triple-uniqueness, title/aliases, backlinks, manual links, wiki-link `[[Title]]` parsing + backfill)~~ ✅ Round 18 (2026-05-11) — 8 PRs landed (#50-#57): foundation (alembic 009 + 010), backlinks API+UI, Brain View polish, manual links, title editing, wiki-link parser. **Closes the 4-feature initiative.** | `PROGRESS.md` § 18 |
 | **P4** | Phase 7 — Visual thinking (Heptabase / Milanote canvas with note cards + drawn arrows). Acknowledged in Round 16 plan; deferred. Will get its own audit when prioritized. | session `plan.md` |
-| **P3** | JTI revocation in Redis or DB table (in-memory now; lost on Container App restart) | `KNOWN_ISSUES.md` § "JTI revocation" |
-| **P3** | `/api/auth/logout` server-side revoke (currently client-only) | `KNOWN_ISSUES.md` § "/auth/logout" |
+| **P3** | ~~JTI revocation in Redis or DB table (in-memory now; lost on Container App restart)~~ ✅ Round 19 (2026-05-12) — alembic 011 revoked_jtis table + two-tier (cache + DB) revoke; persists across restarts | `KNOWN_ISSUES.md` § "JTI revocation" |
+| **P3** | ~~`/api/auth/logout` server-side revoke (currently client-only)~~ ✅ Round 19 (2026-05-12) — POST /api/auth/logout requires auth, revokes both access + refresh JTIs; logout button now visible in AppHeader + Settings + Profile | `KNOWN_ISSUES.md` § "/auth/logout" |
 | **P4** | KMS-grade rotation for `JWT_SECRET_KEY`, strict CSP header, observability gaps | `PLAN.md` § 6 P4 |
 
 ### 3c. To redeploy from scratch

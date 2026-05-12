@@ -33,7 +33,7 @@ router = APIRouter()
 # Includes tags EXISTS subquery against note_tags ⨝ tags.
 _HYBRID_SQL = text("""
 SELECT
-  n.id, n.content, n.summary, n.category, n.created_at,
+  n.id, n.title, n.content, n.summary, n.category, n.created_at,
   (1 - (n.embedding <=> CAST(:q_emb AS vector)))                               AS semantic_score,
   ts_rank(to_tsvector('english', n.content),
           plainto_tsquery('english', :q_text))                                  AS text_score,
@@ -112,6 +112,7 @@ async def search_notes(
     return [
         SearchResultItem(
             id=row.id,
+            title=row.title,
             content=row.content,
             summary=row.summary,
             category=row.category,
@@ -134,7 +135,7 @@ async def search_notes(
 # and prevented the query planner from using the HNSW index efficiently.
 _SIMILAR_SQL = text("""
 SELECT
-  n.id, n.content, n.summary, n.category, n.created_at,
+  n.id, n.title, n.content, n.summary, n.category, n.created_at,
   (1 - (n.embedding <=> CAST(:source_emb AS vector)))           AS semantic_score,
   0.0                                                            AS text_score,
   (1 - (n.embedding <=> CAST(:source_emb AS vector)))           AS combined_score
@@ -193,6 +194,7 @@ async def get_similar_notes(
     return [
         SearchResultItem(
             id=row.id,
+            title=row.title,
             content=row.content,
             summary=row.summary,
             category=row.category,

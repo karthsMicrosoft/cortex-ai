@@ -39,6 +39,7 @@ class SearchResultItem(BaseModel):
     """A single search result as returned by POST /api/search."""
 
     id: uuid.UUID
+    title: Optional[str] = None
     content: str
     summary: Optional[str] = None
     category: str

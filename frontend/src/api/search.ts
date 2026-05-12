@@ -17,6 +17,7 @@ export interface SearchRequest {
 
 export interface SearchResult {
   id: string;
+  title?: string | null;
   content: string;
   summary?: string;
   category: Category;

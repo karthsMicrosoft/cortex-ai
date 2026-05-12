@@ -2,7 +2,7 @@
 
 > **Chronological log of what's been done.** New work appends to the end. Use this to verify "we already did X" before re-doing.
 
-**Last updated:** 2026-05-11 (Round 17: Phase 5 Web Clipper / External Ingest closed via 6 PRs #43-#48)
+**Last updated:** 2026-05-11 (Round 18: Phase 6 Knowledge Graph + Bidirectional Linking closed via 8 PRs #50-#57 — closes the 4-feature initiative)
 
 ---
 
@@ -1004,4 +1004,73 @@ Phase 6 (Knowledge Graph + Bidirectional Linking) per session plan.md. Plan unch
 Plus 2 small follow-up nits:
 1. Settings page should add a "Browser Extension" section that mints + displays clip tokens (frontend-only; backend already shipped).
 2. UrlClipForm "Saved!" toast should auto-dismiss after ~3s.
+
+
+
+## 18 — Round 18 — Phase 6 Knowledge Graph + Bidirectional Linking (2026-05-11)
+
+Closes the 4-feature initiative the user proposed in Round 16: knowledge graph (Phase 6 here), AI search (Phase 4 / Round 16), web clipper (Phase 5 / Round 17), and bidirectional linking (Phase 6 here). Cortex now has Obsidian/NotebookLM/Notion-comparable functionality across all 4 axes.
+
+### PRs landed (8 total this round)
+
+| PR | Scope | Tests added |
+|---|---|---|
+| #50 | 6.0 Foundation: alembic 009 (note_links triple-uniqueness) + alembic 010 (notes.title varchar(120) + aliases TEXT[]) + ShadowReader scope-deletes to semantic only | +14 backend |
+| #51 | fix: shorten alembic revision ids to fit alembic_version.version_num varchar(32) | n/a |
+| #52 | fix: truncate title backfill to 120 chars (some summaries exceeded the new column limit) | n/a |
+| #53 | 6.2 Brain View polish: hover tooltip, window resize observer, search/category/date filters, per-link_type edge styling (semantic dashed, manual blue, wiki purple), category color legend | +7 backend, +10 frontend |
+| #54 | 6.1 Backlinks API GET /api/notes/{id}/links + NoteDetailPage Backlinks panel | +8 backend, +9 frontend |
+| #55 | 6.3 Manual link creation POST + DELETE /api/notes/{id}/links + LinkPicker component with debounced search modal | +9 backend, +12 frontend |
+| #56 | 6.4 Title + aliases editing on NoteDetailPage (H1 click-to-edit, aliases chips, debounced PATCH) | +9 backend, +9 frontend |
+| #57 | 6.5 Wiki-link [[Title]] parsing pipeline stage + clickable rendering via WikiContent component + backfill_wiki_links.py script | +12 backend, +7 frontend |
+
+### Live infrastructure changes
+
+- Migration 009 (note_links triple-uniqueness) + migration 010 (notes.title + aliases) ran live via az containerapp exec.
+- Wiki-link backfill ran for karths@microsoft.com: processed 93 notes, links_created=0 (no [[refs]] in existing content yet — user will see results once they start using the [[Title]] syntax).
+
+### Live verification
+
+- `GET /api/notes/{id}/links` returns {outgoing, incoming} arrays
+- `POST /api/notes/{id}/links` with link_type=manual creates idempotent edges
+- `DELETE /api/notes/{id}/links/{link_id}` allowed only for manual link_type
+- Brain View at /brain renders with new filter sidebar + hover tooltips + per-link_type edge styling
+- NoteDetailPage shows: editable title (H1), aliases chips section, BacklinksPanel with "+ Link to another note", remove ✕ on outgoing manual links, [[Title]] wiki-refs rendered as clickable links
+
+### Friction worth noting
+
+1. **Two latent bugs surfaced live during alembic migration** (PR #51, #52): (a) alembic_version.version_num is varchar(32) - new revision ids 36 chars long failed; shortened to 009_links_uq + 010_title_aliases. (b) Some summaries exceeded the new title varchar(120) column; backfill UPDATE failed; wrapped in substring(..., 1, 120).
+2. **Workspace contention** at every wave: 2a (PR 6.1 vs 6.2), then sequential PRs 6.3 + 6.4 + 6.5 on NoteDetailPage. All recovered via stash + branch re-checkout. Pattern reliable at this point but git worktree per agent should be evaluated.
+3. **Backend deploy race** hit twice on back-to-back merges; manual workflow_dispatch covered it.
+
+### Final state
+
+- Backend: `827 passed` (Round 17 baseline 767 + 60 added across PRs)
+- Frontend: `738 passed, 1 skipped` (Round 17 baseline 690 + 48 added)
+- Extension: `7 passed` (Phase 5 inheritance)
+- TypeScript: clean
+- Live: `GET /api/health` 200; container at PR #57 image
+- E2E nightly cron: still green
+
+### The 4-feature initiative — DONE
+
+The user's Round-16 ask was: "make Cortex the best second brain by adding (1) graph view with relationship visualization, (2) bidirectional linking, (3) web clipper, (4) AI search/summary."
+
+| Feature | Phase | Round | Closed |
+|---|---|---|---|
+| AI search/synthesis (NotebookLM-style) | 4 | 16 | ✅ |
+| Web clipper / external ingest | 5 | 17 | ✅ |
+| Bidirectional linking + knowledge graph polish | 6 | 18 | ✅ |
+| Knowledge graph relationships visualization | 6 | 18 | ✅ |
+
+24 feature PRs + 5 fix PRs + 3 doc PRs = 32 PRs across 3 rounds, all with TDD red→green + chrome-devtools live verify + before/after screenshots where applicable. Backend went from 640 (post-Round 15) to 827 (+187 tests). Frontend went from 563 to 738 (+175 tests).
+
+### Remaining open work after Round 18
+
+Phase 7 (visual thinking - Heptabase/Milanote) was acknowledged but deferred. The user can pick that up as a separate phase when ready.
+
+Plus 3 small follow-up nits from this initiative:
+1. SearchBar suggestions should show note.title when set (PR #56 punted; needs backend search-projection update).
+2. UrlClipForm "Saved!" toast should auto-dismiss after ~3s (Round 17 nit).
+3. Settings page "Browser Extension" section to mint+display clip token (Round 17 nit).
 

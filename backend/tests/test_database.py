@@ -291,6 +291,44 @@ class TestAlembicMigrationFile:
             "downgrade() must use op.drop_column"
         )
 
+    # ------------------------------------------------------------------
+    # Migration 009 — note_links uniqueness on (source, target, link_type)
+    # ------------------------------------------------------------------
+    def test_migration_009_exists_and_drops_old_uq(self):
+        """009 must drop uq_note_links_pair and create the triple-uniqueness."""
+        path = BACKEND_DIR / "alembic" / "versions" / "009_note_links_link_type_uniqueness.py"
+        assert path.exists(), f"Migration 009 not found: {path}"
+        body = path.read_text(encoding="utf-8")
+        assert "def upgrade()" in body
+        assert "def downgrade()" in body
+        assert 'down_revision = "008_source_provenance"' in body
+        assert "uq_note_links_pair" in body, (
+            "Migration 009 must reference the existing uq_note_links_pair constraint"
+        )
+        assert "drop_constraint" in body, (
+            "Migration 009 upgrade() must drop the old uniqueness constraint"
+        )
+        assert "link_type" in body
+        assert "create_unique_constraint" in body, (
+            "Migration 009 upgrade() must create the new unique constraint"
+        )
+
+    # ------------------------------------------------------------------
+    # Migration 010 — notes.title + notes.aliases
+    # ------------------------------------------------------------------
+    def test_migration_010_exists_and_adds_title_aliases(self):
+        """010 must add title (VARCHAR(120)) + aliases (ARRAY(Text)) and backfill title."""
+        path = BACKEND_DIR / "alembic" / "versions" / "010_notes_title_aliases.py"
+        assert path.exists(), f"Migration 010 not found: {path}"
+        body = path.read_text(encoding="utf-8")
+        assert "def upgrade()" in body
+        assert "def downgrade()" in body
+        assert 'down_revision = "009_note_links_link_type_uniqueness"' in body
+        assert "title" in body and "aliases" in body
+        assert "ARRAY" in body
+        assert "UPDATE notes SET title" in body
+        assert "idx_notes_title_lower" in body
+
 
 @pytest.mark.skipif(
     SKIP_MIGRATION,

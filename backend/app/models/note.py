@@ -22,6 +22,7 @@ from sqlalchemy import (
     Uuid,
     func,
 )
+from sqlalchemy.dialects.postgresql import ARRAY as PG_ARRAY
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.database import Base
@@ -123,6 +124,16 @@ class Note(Base):
         Uuid(as_uuid=True),
         ForeignKey("notes.id", ondelete="SET NULL"),
         nullable=True,
+    )
+
+    # Phase 6 / PR 6.0 — Title + aliases for wiki-link resolution.
+    # Production uses TEXT[] (postgres ARRAY); SQLite tests use JSON via
+    # with_variant so list semantics are preserved without a real array type.
+    title: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    aliases: Mapped[list[str]] = mapped_column(
+        PG_ARRAY(Text).with_variant(JSON, "sqlite"),
+        nullable=False,
+        default=list,
     )
 
     created_at: Mapped[datetime] = mapped_column(

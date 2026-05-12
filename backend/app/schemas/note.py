@@ -76,6 +76,9 @@ class NoteOut(BaseModel):
     source_url: Optional[str] = None
     source_title: Optional[str] = None
     source_parent_id: Optional[uuid.UUID] = None
+    # Phase 6 / PR 6.0 — Title + aliases (for wiki-style linking).
+    title: Optional[str] = None
+    aliases: list[str] = []
     created_at: datetime
     updated_at: datetime
 

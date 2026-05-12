@@ -43,6 +43,9 @@ export interface NoteOut {
   source_url?: string;
   source_title?: string;
   source_parent_id?: string;
+  // Phase 6 / PR 6.0 — Title + aliases (used by wiki-style linking).
+  title?: string;
+  aliases?: string[];
   created_at: string;
   updated_at: string;
 }

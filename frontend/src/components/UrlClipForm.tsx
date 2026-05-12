@@ -10,7 +10,7 @@
  * server-side rules live in `backend/app/api/import_url.py` (PR 5.2).
  */
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Link as LinkIcon, Loader2, Send, X } from 'lucide-react';
 import { importUrl } from '../api/import';
 import { ApiError } from '../api/client';
@@ -89,6 +89,17 @@ export function UrlClipForm({
   const [savedNoteId, setSavedNoteId] = useState<string | null>(null);
 
   const canSubmit = !isSaving && isLikelyValidUrl(url);
+
+  // Auto-dismiss the "Saved!" toast 3s after a successful save (Round 19).
+  // The onSuccess callback still fires immediately on save — only the visible
+  // toast auto-dismisses; parent navigation happens right away.
+  useEffect(() => {
+    if (!savedNoteId) return;
+    const handle = setTimeout(() => {
+      setSavedNoteId(null);
+    }, 3000);
+    return () => clearTimeout(handle);
+  }, [savedNoteId]);
 
   async function handleSubmit(e?: React.FormEvent): Promise<void> {
     e?.preventDefault();

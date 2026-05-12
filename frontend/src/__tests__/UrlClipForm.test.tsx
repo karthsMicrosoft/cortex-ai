@@ -201,6 +201,65 @@ describe('UrlClipForm — status-code → message mapping', () => {
   });
 });
 
+// ---------------------------------------------------------------------------
+// Round 19 / PR C — Saved toast auto-dismisses after 3000 ms
+// ---------------------------------------------------------------------------
+
+describe('UrlClipForm — Saved toast auto-dismiss (Round 19)', () => {
+  it('Saved toast auto-dismisses after 3000ms (schedules setTimeout, then clears state)', async () => {
+    const setTimeoutSpy = vi.spyOn(window, 'setTimeout');
+    try {
+      vi.mocked(importUrl).mockResolvedValueOnce({ id: 'n' } as never);
+      renderForm();
+      fireEvent.change(screen.getByLabelText(/url/i), {
+        target: { value: 'https://example.com' },
+      });
+      fireEvent.click(screen.getByRole('button', { name: /save link/i }));
+
+      await waitFor(() => {
+        expect(screen.getByText(/saved/i)).toBeInTheDocument();
+      });
+
+      // The component should have scheduled exactly one 3000ms dismissal.
+      const dismissCall = setTimeoutSpy.mock.calls.find(([, ms]) => ms === 3000);
+      expect(dismissCall).toBeTruthy();
+
+      // Wait long enough for the timer to fire and React to flush the state.
+      await waitFor(
+        () => {
+          expect(screen.queryByText(/saved/i)).not.toBeInTheDocument();
+        },
+        { timeout: 4500 },
+      );
+    } finally {
+      setTimeoutSpy.mockRestore();
+    }
+  }, 10000);
+
+  it('Saved toast cleared on unmount before timeout fires', async () => {
+    const clearTimeoutSpy = vi.spyOn(window, 'clearTimeout');
+    try {
+      vi.mocked(importUrl).mockResolvedValueOnce({ id: 'n' } as never);
+      const { unmount } = renderForm();
+      fireEvent.change(screen.getByLabelText(/url/i), {
+        target: { value: 'https://example.com' },
+      });
+      fireEvent.click(screen.getByRole('button', { name: /save link/i }));
+
+      await waitFor(() => {
+        expect(screen.getByText(/saved/i)).toBeInTheDocument();
+      });
+
+      const beforeUnmountClears = clearTimeoutSpy.mock.calls.length;
+      unmount();
+      // The useEffect cleanup must run on unmount and call clearTimeout.
+      expect(clearTimeoutSpy.mock.calls.length).toBeGreaterThan(beforeUnmountClears);
+    } finally {
+      clearTimeoutSpy.mockRestore();
+    }
+  });
+});
+
 describe('UrlClipForm — onCancel', () => {
   it('clicking Cancel calls onCancel', () => {
     const onCancel = vi.fn();

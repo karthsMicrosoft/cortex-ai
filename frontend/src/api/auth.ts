@@ -118,6 +118,31 @@ export async function changePassword(
   });
 }
 
+// ---------------------------------------------------------------------------
+// Browser-extension clip token (Round 17 / PR 5.5)
+// ---------------------------------------------------------------------------
+
+export interface ClipTokenResponse {
+  clip_token: string;
+  expires_in: number;
+  scope: string;
+}
+
+/**
+ * Mint a clip-scoped JWT for the browser extension.
+ *
+ * Calls `POST /api/auth/clip-token` using the user's current session token
+ * (forwarded by the shared client/fetchWithAuth wrapper). Throws `ApiError`
+ * on non-2xx responses.
+ *
+ * The returned token MUST NOT be persisted to localStorage / sessionStorage —
+ * callers should keep it in component state only and surface a fresh mint
+ * action when the user wants to revoke / rotate.
+ */
+export async function mintClipToken(): Promise<ClipTokenResponse> {
+  return apiPost<ClipTokenResponse>('/api/auth/clip-token');
+}
+
 /**
  * Logout — revoke the refresh JTI, clear the httpOnly cookie, and remove the
  * localStorage token (Round-7 fallback cleanup).

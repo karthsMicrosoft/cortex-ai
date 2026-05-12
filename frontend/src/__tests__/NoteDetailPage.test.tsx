@@ -22,6 +22,7 @@ const {
   mockGetNote,
   mockSearchSimilar,
   mockGetNoteLinks,
+  mockDeleteLink,
   mockDbGet,
   mockDbWhere,
 } = vi.hoisted(() => ({
@@ -29,6 +30,7 @@ const {
   mockGetNote: vi.fn(),
   mockSearchSimilar: vi.fn(),
   mockGetNoteLinks: vi.fn(),
+  mockDeleteLink: vi.fn(),
   mockDbGet: vi.fn(),
   mockDbWhere: vi.fn(),
 }));
@@ -55,6 +57,27 @@ vi.mock('../api/search', () => ({
 
 vi.mock('../api/links', () => ({
   getNoteLinks: mockGetNoteLinks,
+  deleteLink: mockDeleteLink,
+  createManualLink: vi.fn(),
+}));
+
+// Stub the LinkPicker so we can assert it gets opened without rendering its
+// internals (those are exercised by LinkPicker.test.tsx).
+vi.mock('../components/LinkPicker', () => ({
+  LinkPicker: ({
+    sourceNoteId,
+    onClose,
+  }: {
+    sourceNoteId: string;
+    onClose: () => void;
+    onCreated: () => void;
+  }) => (
+    <div data-testid="link-picker-stub" data-source-id={sourceNoteId}>
+      <button type="button" onClick={onClose}>
+        close-stub
+      </button>
+    </div>
+  ),
 }));
 
 vi.mock('../db', () => ({
@@ -210,6 +233,7 @@ describe('NoteDetailPage — Backlinks panel (PR 6.1)', () => {
       outgoing: [],
       incoming: [
         {
+          link_id: 'lnk-in-42',
           note_id: 'in-42',
           title: 'Click me',
           summary: null,
@@ -226,5 +250,100 @@ describe('NoteDetailPage — Backlinks panel (PR 6.1)', () => {
     const link = await screen.findByRole('button', { name: /click me/i });
     fireEvent.click(link);
     expect(mockNavigate).toHaveBeenCalledWith('/note/in-42');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// PR 6.3 — Manual link creation + removal
+// ---------------------------------------------------------------------------
+
+describe('NoteDetailPage — Manual link creation (PR 6.3)', () => {
+  it('renders a "Link to another note" button next to Backlinks', async () => {
+    renderPage();
+    await screen.findByTestId('note-editor-stub');
+    expect(
+      screen.getByRole('button', { name: /link to another note/i }),
+    ).toBeInTheDocument();
+  });
+
+  it('clicking the button opens the LinkPicker modal', async () => {
+    mockGetNoteLinks.mockResolvedValueOnce({ outgoing: [], incoming: [] });
+    renderPage();
+    await screen.findByTestId('note-editor-stub');
+    fireEvent.click(
+      screen.getByRole('button', { name: /link to another note/i }),
+    );
+    const stub = await screen.findByTestId('link-picker-stub');
+    expect(stub).toBeInTheDocument();
+    expect(stub.getAttribute('data-source-id')).toBe('srv-1');
+  });
+
+  it('shows a remove affordance only on outgoing manual links', async () => {
+    mockGetNoteLinks.mockResolvedValueOnce({
+      outgoing: [
+        {
+          link_id: 'lnk-man',
+          note_id: 'manual-target',
+          title: 'Manual target',
+          summary: null,
+          category: 'Ideas',
+          link_type: 'manual',
+          score: null,
+        },
+        {
+          link_id: 'lnk-sem',
+          note_id: 'sem-target',
+          title: 'Semantic target',
+          summary: null,
+          category: 'Ideas',
+          link_type: 'semantic',
+          score: 0.8,
+        },
+      ],
+      incoming: [],
+    });
+    renderPage();
+    await screen.findByTestId('note-editor-stub');
+    fireEvent.click(screen.getByRole('button', { name: /backlinks/i }));
+    await screen.findByText(/manual target/i);
+
+    // Exactly one remove button — for the manual one.
+    const removeButtons = screen.getAllByRole('button', { name: /remove manual link/i });
+    expect(removeButtons).toHaveLength(1);
+  });
+
+  it('clicking remove calls deleteLink and refreshes the panel', async () => {
+    // First load — has one manual outgoing link.
+    mockGetNoteLinks.mockResolvedValueOnce({
+      outgoing: [
+        {
+          link_id: 'lnk-man',
+          note_id: 'manual-target',
+          title: 'Manual target',
+          summary: null,
+          category: 'Ideas',
+          link_type: 'manual',
+          score: null,
+        },
+      ],
+      incoming: [],
+    });
+    // Refresh after delete — empty.
+    mockGetNoteLinks.mockResolvedValueOnce({ outgoing: [], incoming: [] });
+    mockDeleteLink.mockResolvedValueOnce(undefined);
+
+    renderPage();
+    await screen.findByTestId('note-editor-stub');
+    fireEvent.click(screen.getByRole('button', { name: /backlinks/i }));
+    await screen.findByText(/manual target/i);
+
+    fireEvent.click(screen.getByRole('button', { name: /remove manual link/i }));
+    await waitFor(() => {
+      expect(mockDeleteLink).toHaveBeenCalledWith('srv-1', 'lnk-man');
+    });
+    // After refresh the link is gone.
+    await waitFor(() => {
+      expect(screen.queryByText(/manual target/i)).not.toBeInTheDocument();
+    });
   });
 });

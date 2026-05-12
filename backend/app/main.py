@@ -113,6 +113,7 @@ from app.api.ai_answer import router as ai_answer_router  # P4 PR 4.1 — RAG /a
 from app.api.export import router as export_router               # US-6 — export
 from app.api.shadow_reader import router as shadow_reader_router  # US-8 — shadow reader
 from app.api.users import router as users_router                  # US-8 — user settings
+from app.api.import_url import router as import_url_router        # P5 PR 5.2 — URL import
 
 app.include_router(auth_router,           prefix="/api/auth",          tags=["auth"])
 app.include_router(notes_router,          prefix="/api/notes",         tags=["notes"])
@@ -129,3 +130,4 @@ app.include_router(insights_router,       prefix="/api/insights",      tags=["in
 app.include_router(export_router,         prefix="/api",               tags=["export"])
 app.include_router(shadow_reader_router,  prefix="/api/notes",         tags=["shadow_reader"])
 app.include_router(users_router,          prefix="/api/users",         tags=["users"])
+app.include_router(import_url_router,     prefix="/api/import",        tags=["import"])

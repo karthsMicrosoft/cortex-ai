@@ -24,37 +24,70 @@ import { MemoryRouter } from 'react-router-dom';
 // ---------------------------------------------------------------------------
 
 vi.mock('react-force-graph-2d', () => ({
-  default: ({
-    graphData,
-    nodeLabel,
-    nodeColor,
-    linkColor,
-    onNodeClick,
-    width,
-    height,
-  }: {
-    graphData: { nodes: { id: string; label: string; category: string }[]; links: { source: string; target: string; score: number }[] };
-    nodeLabel?: (node: { id: string; label: string; category: string }) => string;
-    nodeColor?: (node: { id: string; label: string; category: string }) => string;
-    linkColor?: () => string;
-    onNodeClick?: (node: { id: string; label: string; category: string }) => void;
+  default: (props: {
+    graphData: {
+      nodes: { id: string; label: string; category: string; title?: string; summary?: string }[];
+      links: { source: string; target: string; score: number; link_type?: string }[];
+    };
+    onNodeClick?: (node: unknown) => void;
+    onNodeHover?: (node: unknown | null) => void;
+    linkColor?: (link: unknown) => string;
+    linkWidth?: (link: unknown) => number;
+    linkLineDash?: (link: unknown) => number[] | null;
     width?: number;
     height?: number;
-  }) => (
-    <div
-      data-testid="force-graph"
-      data-node-count={graphData?.nodes?.length ?? 0}
-      data-link-count={graphData?.links?.length ?? 0}
-    >
-      <ul data-testid="graph-nodes">
-        {(graphData?.nodes ?? []).map((node) => (
-          <li key={node.id} data-testid={`node-${node.id}`} data-category={node.category}>
-            {node.label}
-          </li>
-        ))}
-      </ul>
-    </div>
-  ),
+  }) => {
+    const {
+      graphData,
+      onNodeClick,
+      onNodeHover,
+      linkColor,
+      linkWidth,
+      linkLineDash,
+      width,
+      height,
+    } = props;
+    return (
+      <div
+        data-testid="force-graph"
+        data-node-count={graphData?.nodes?.length ?? 0}
+        data-link-count={graphData?.links?.length ?? 0}
+        data-width={width ?? 0}
+        data-height={height ?? 0}
+      >
+        <ul data-testid="graph-nodes">
+          {(graphData?.nodes ?? []).map((node) => (
+            <li
+              key={node.id}
+              data-testid={`node-${node.id}`}
+              data-category={node.category}
+              data-title={node.title ?? ''}
+              onMouseEnter={() => onNodeHover?.(node)}
+              onMouseLeave={() => onNodeHover?.(null)}
+              onClick={() => onNodeClick?.(node)}
+            >
+              {node.label}
+            </li>
+          ))}
+        </ul>
+        <ul data-testid="graph-links">
+          {(graphData?.links ?? []).map((lnk, i) => {
+            const dash = linkLineDash ? linkLineDash(lnk) : null;
+            return (
+              <li
+                key={i}
+                data-testid={`link-${i}`}
+                data-link-type={lnk.link_type ?? ''}
+                data-link-color={linkColor ? linkColor(lnk) : ''}
+                data-link-width={linkWidth ? linkWidth(lnk) : 0}
+                data-link-dash={dash ? dash.join(',') : ''}
+              />
+            );
+          })}
+        </ul>
+      </div>
+    );
+  },
 }));
 
 // ---------------------------------------------------------------------------
@@ -367,5 +400,186 @@ describe('PERF-10 — BrainViewPage must lazy-load react-force-graph-2d', () => 
     expect(usesForceGraphDynamically).toBe(true);
     // If this fails: move `import ForceGraph2D from 'react-force-graph-2d'` to a
     // dynamic import() inside the component or use React.lazy() in App.tsx
+  });
+});
+
+// ---------------------------------------------------------------------------
+// PR 6.2 — Brain View polish: filters, hover tooltip, resize, edge styling,
+// category legend.
+// ---------------------------------------------------------------------------
+
+import { fireEvent } from '@testing-library/react';
+
+const POLISH_GRAPH = {
+  nodes: [
+    { id: 'n1', label: 'Jazz scales', category: 'Music', title: 'Jazz scales', summary: 'Practice notes about modes' },
+    { id: 'n2', label: 'Morning run', category: 'Fitness', title: 'Morning run', summary: '5k around the lake' },
+    { id: 'n3', label: 'Reading list', category: 'Learning', title: 'Reading list', summary: 'Books to read' },
+  ],
+  links: [
+    { source: 'n1', target: 'n2', score: 0.7, link_type: 'semantic' },
+    { source: 'n2', target: 'n3', score: 0.6, link_type: 'manual' },
+    { source: 'n1', target: 'n3', score: 0.5, link_type: 'wiki' },
+  ],
+};
+
+function setupPolishFetch(captureUrls?: string[]) {
+  vi.stubGlobal(
+    'fetch',
+    vi.fn().mockImplementation((url: string) => {
+      captureUrls?.push(url);
+      if (url.includes('insights/graph')) {
+        return Promise.resolve({ ok: true, status: 200, json: async () => POLISH_GRAPH });
+      }
+      return Promise.resolve({ ok: true, status: 200, json: async () => ({}) });
+    }),
+  );
+}
+
+describe('BrainViewPage polish — PR 6.2 (Round 18)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    setupPolishFetch();
+  });
+
+  it('renders search input + category filter + date picker', async () => {
+    renderBrainViewPage();
+    await waitFor(() => expect(screen.getByTestId('force-graph')).toBeInTheDocument());
+    expect(screen.getByPlaceholderText(/search/i)).toBeInTheDocument();
+    expect(screen.getByLabelText(/since/i)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /music/i })).toBeInTheDocument();
+  });
+
+  it('search input filters node labels (case-insensitive)', async () => {
+    renderBrainViewPage();
+    await waitFor(() => expect(screen.getByTestId('node-n1')).toBeInTheDocument());
+
+    const search = screen.getByPlaceholderText(/search/i) as HTMLInputElement;
+    fireEvent.change(search, { target: { value: 'JAZZ' } });
+
+    await waitFor(() => {
+      const n1 = screen.queryByTestId('node-n1');
+      const n2 = screen.queryByTestId('node-n2');
+      expect(n1).toBeInTheDocument();
+      const graph = screen.getByTestId('force-graph');
+      const count = parseInt(graph.getAttribute('data-node-count') ?? '0', 10);
+      expect(count).toBeLessThan(POLISH_GRAPH.nodes.length);
+      expect(n2).toBeNull();
+    });
+  });
+
+  it('category click toggles filter', async () => {
+    renderBrainViewPage();
+    await waitFor(() => expect(screen.getByTestId('force-graph')).toBeInTheDocument());
+
+    const musicBtn = screen.getByRole('button', { name: /music/i });
+    fireEvent.click(musicBtn);
+
+    await waitFor(() => {
+      const graph = screen.getByTestId('force-graph');
+      const count = parseInt(graph.getAttribute('data-node-count') ?? '0', 10);
+      expect(count).toBe(1);
+      expect(screen.getByTestId('node-n1')).toBeInTheDocument();
+      expect(screen.queryByTestId('node-n2')).toBeNull();
+    });
+  });
+
+  it('passes category and since to /api/insights/graph as query params', async () => {
+    const urls: string[] = [];
+    setupPolishFetch(urls);
+    renderBrainViewPage();
+    await waitFor(() => expect(screen.getByTestId('force-graph')).toBeInTheDocument());
+
+    const since = screen.getByLabelText(/since/i) as HTMLInputElement;
+    fireEvent.change(since, { target: { value: '2026-01-15' } });
+
+    fireEvent.click(screen.getByRole('button', { name: /learning/i }));
+
+    await waitFor(() => {
+      const hit = urls.find((u) =>
+        u.includes('insights/graph') && u.includes('since=2026-01-15') && u.includes('category=Learning'),
+      );
+      expect(hit).toBeDefined();
+    });
+  });
+
+  it('edge with link_type=semantic uses dashed gray stroke', async () => {
+    renderBrainViewPage();
+    await waitFor(() => expect(screen.getByTestId('link-0')).toBeInTheDocument());
+    const semantic = Array.from(document.querySelectorAll('[data-testid^="link-"]'))
+      .find((el) => el.getAttribute('data-link-type') === 'semantic')!;
+    expect(semantic).toBeDefined();
+    expect(semantic.getAttribute('data-link-dash')).not.toBe('');
+    expect((semantic.getAttribute('data-link-color') ?? '').toLowerCase()).toMatch(/#9|gray|94a3b8|cbd5e1|64748b/);
+  });
+
+  it('edge with link_type=manual uses solid blue stroke (>= 2px)', async () => {
+    renderBrainViewPage();
+    await waitFor(() => expect(screen.getByTestId('link-0')).toBeInTheDocument());
+    const manual = Array.from(document.querySelectorAll('[data-testid^="link-"]'))
+      .find((el) => el.getAttribute('data-link-type') === 'manual')!;
+    expect(manual).toBeDefined();
+    expect(manual.getAttribute('data-link-dash')).toBe('');
+    expect((manual.getAttribute('data-link-color') ?? '').toLowerCase()).toMatch(/#3b82f6|#60a5fa|blue|2563eb/);
+    expect(parseFloat(manual.getAttribute('data-link-width') ?? '0')).toBeGreaterThanOrEqual(2);
+  });
+
+  it('edge with link_type=wiki uses solid purple stroke (>= 2px)', async () => {
+    renderBrainViewPage();
+    await waitFor(() => expect(screen.getByTestId('link-0')).toBeInTheDocument());
+    const wiki = Array.from(document.querySelectorAll('[data-testid^="link-"]'))
+      .find((el) => el.getAttribute('data-link-type') === 'wiki')!;
+    expect(wiki).toBeDefined();
+    expect(wiki.getAttribute('data-link-dash')).toBe('');
+    expect((wiki.getAttribute('data-link-color') ?? '').toLowerCase()).toMatch(/#a855f7|#9333ea|purple|c084fc/);
+    expect(parseFloat(wiki.getAttribute('data-link-width') ?? '0')).toBeGreaterThanOrEqual(2);
+  });
+
+  it('node hover shows tooltip with title + summary', async () => {
+    renderBrainViewPage();
+    await waitFor(() => expect(screen.getByTestId('node-n1')).toBeInTheDocument());
+
+    fireEvent.mouseEnter(screen.getByTestId('node-n1'));
+
+    await waitFor(() => {
+      const tooltip = screen.getByTestId('node-tooltip');
+      expect(tooltip).toBeInTheDocument();
+      expect(tooltip.textContent).toMatch(/Jazz scales/);
+      expect(tooltip.textContent).toMatch(/Practice notes about modes/);
+      expect(tooltip.textContent).toMatch(/Music/);
+    });
+  });
+
+  it('window resize triggers graph re-measurement', async () => {
+    renderBrainViewPage();
+    await waitFor(() => expect(screen.getByTestId('force-graph')).toBeInTheDocument());
+
+    const before = screen.getByTestId('force-graph').getAttribute('data-width');
+
+    const container = document.querySelector('[data-testid="force-graph"]')?.parentElement;
+    if (container) {
+      Object.defineProperty(container, 'getBoundingClientRect', {
+        configurable: true,
+        value: () => ({ width: 1234, height: 567, top: 0, left: 0, right: 1234, bottom: 567, x: 0, y: 0, toJSON: () => '' }),
+      });
+    }
+    fireEvent(window, new Event('resize'));
+
+    await waitFor(() => {
+      const after = screen.getByTestId('force-graph').getAttribute('data-width');
+      expect(after).not.toBe(before);
+      expect(after).toBe('1234');
+    });
+  });
+
+  it('category legend renders with 6 categories', async () => {
+    renderBrainViewPage();
+    await waitFor(() => expect(screen.getByTestId('force-graph')).toBeInTheDocument());
+    const legend = screen.getByTestId('category-legend');
+    const swatches = legend.querySelectorAll('button');
+    expect(swatches.length).toBe(6);
+    for (const cat of ['Music', 'Fitness', 'Journal', 'Ideas', 'Spiritual', 'Learning']) {
+      expect(legend.textContent).toContain(cat);
+    }
   });
 });

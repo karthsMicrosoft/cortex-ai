@@ -16,9 +16,9 @@ from __future__ import annotations
 import json
 import logging
 import uuid
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -48,12 +48,14 @@ class GraphNode(BaseModel):
     id: str
     label: str
     category: str
+    title: str | None = None
 
 
 class GraphLink(BaseModel):
     source: str
     target: str
     score: float
+    link_type: str = "semantic"
 
 
 class GraphOut(BaseModel):
@@ -84,23 +86,47 @@ class GenerateOut(BaseModel):
 # ---------------------------------------------------------------------------
 
 _GRAPH_NODE_CAP = 200
+_GRAPH_NODE_MAX = 1000
+
+
+def _node_title(n) -> str:  # noqa: ANN001
+    """Title with fallback to summary, then content[:60]."""
+    if getattr(n, "title", None):
+        return n.title  # type: ignore[no-any-return]
+    if n.summary:
+        return n.summary
+    if n.content:
+        return n.content[:60]
+    return str(n.id)
 
 
 @insights_router.get("/graph", response_model=GraphOut)
 async def get_graph(
     current_user_id: uuid.UUID = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
+    category: str | None = Query(default=None),
+    since: date | None = Query(default=None),
+    limit: int = Query(default=_GRAPH_NODE_CAP, ge=1),
 ) -> GraphOut:
     """
     Return force-directed graph data from notes + note_links.
-    Nodes are capped at 200 (most recently created first).
+
+    Query params (PR 6.2):
+      - ``category`` — restrict to a single category.
+      - ``since`` — ISO date; only notes created on/after that date.
+      - ``limit`` — node cap (default 200, hard-capped at 1000).
     """
-    notes_result = await db.execute(
-        select(Note)
-        .where(Note.user_id == current_user_id)
-        .order_by(Note.created_at.desc())
-        .limit(_GRAPH_NODE_CAP)
-    )
+    effective_limit = min(max(1, limit), _GRAPH_NODE_MAX)
+
+    stmt = select(Note).where(Note.user_id == current_user_id)
+    if category:
+        stmt = stmt.where(Note.category == category)
+    if since is not None:
+        since_dt = datetime.combine(since, datetime.min.time(), tzinfo=timezone.utc)
+        stmt = stmt.where(Note.created_at >= since_dt)
+    stmt = stmt.order_by(Note.created_at.desc()).limit(effective_limit)
+
+    notes_result = await db.execute(stmt)
     notes = list(notes_result.scalars().all())
     note_ids = {n.id for n in notes}
 
@@ -109,6 +135,7 @@ async def get_graph(
             id=str(n.id),
             label=(n.summary or n.content[:60]) if (n.summary or n.content) else str(n.id),
             category=n.category,
+            title=_node_title(n),
         )
         for n in notes
     ]
@@ -129,6 +156,7 @@ async def get_graph(
             source=str(lnk.source_note_id),
             target=str(lnk.target_note_id),
             score=lnk.similarity_score,
+            link_type=lnk.link_type or "semantic",
         )
         for lnk in links_orm
     ]

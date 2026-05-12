@@ -15,7 +15,7 @@ Create Date: 2026-05-08
 from alembic import op
 
 
-revision = "009_note_links_link_type_uniqueness"
+revision = "009_links_uq"
 down_revision = "008_source_provenance"
 branch_labels = None
 depends_on = None

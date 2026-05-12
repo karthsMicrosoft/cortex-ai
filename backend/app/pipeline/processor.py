@@ -29,6 +29,7 @@ from app.models.note_link import NoteLink
 from app.models.tag import Tag, note_tags as note_tags_table
 from app.pipeline.music import process_music_note
 from app.pipeline.shadow_reader import run_shadow_reader_stage
+from app.pipeline.wiki_links import parse_and_link_wiki_refs
 from app.utils.db_helpers import get_or_create_tags_batch
 
 logger = logging.getLogger(__name__)
@@ -83,6 +84,20 @@ class AIPipeline:
             # Stage 2 — ORGANIZE: tag + embed + link
             if note.processing_status == ProcessingStage.PROCESSED:
                 await self._stage_organize(note)
+
+            # Phase 6 / PR 6.5 — Wiki-link parsing. Runs after Stage 2 so the
+            # note is enriched (status committed) but BEFORE music enrichment
+            # / Stage 1.5 hook. Failures are logged + swallowed so wiki-link
+            # extraction never fails the whole pipeline.
+            if note.processing_status == ProcessingStage.ENRICHED:
+                try:
+                    await parse_and_link_wiki_refs(self.db, note)
+                except Exception as exc:  # noqa: BLE001
+                    logger.error(
+                        "pipeline_wiki_links_failed: note_id=%s error_class=%s",
+                        note.id,
+                        type(exc).__name__,
+                    )
 
             # Music enrichment — called from process_note (not _stage_organize) so it
             # can be patched at the processor module level in tests.

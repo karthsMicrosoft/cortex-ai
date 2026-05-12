@@ -15,6 +15,7 @@ import { ProcessingBadge } from '../components/ProcessingBadge';
 import { MusicPlayer } from '../components/MusicPlayer';
 import type { MusicMetadata } from '../components/MusicPlayer';
 import { ShadowReaderPrompt } from '../components/ShadowReaderPrompt';
+import { WikiContent } from '../components/WikiContent';
 import { CATEGORY_COLORS, formatDateTime } from '../utils/formatters';
 
 // ---------------------------------------------------------------------------
@@ -132,6 +133,15 @@ function MusicLabelEditor({ noteId, metadata, onSaved }: MusicLabelEditorProps):
 
 interface BacklinksPanelProps {
   noteId: string;
+  /** Pre-fetched links data from parent. When provided, the panel skips its
+   *  own initial fetch and uses this instead. PR 6.5 — page-level eager fetch
+   *  so wiki refs in note.content can be rendered as clickable links without
+   *  waiting for the panel to expand. */
+  preloadedData?: NoteLinksResponse | null;
+  /** Optional callback to ask the parent to refresh the shared links data
+   *  (after manual link create/remove). When provided, the panel calls this
+   *  instead of fetching itself. */
+  onRefresh?: () => Promise<void>;
 }
 
 // ---------------------------------------------------------------------------
@@ -470,17 +480,42 @@ function BacklinkCard({
   );
 }
 
-function BacklinksPanel({ noteId }: BacklinksPanelProps): React.ReactElement {
+function BacklinksPanel({
+  noteId,
+  preloadedData,
+  onRefresh,
+}: BacklinksPanelProps): React.ReactElement {
   const navigate = useNavigate();
   const [expanded, setExpanded] = useState(false);
-  const [data, setData] = useState<NoteLinksResponse | null>(null);
+  const [data, setData] = useState<NoteLinksResponse | null>(preloadedData ?? null);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [pickerOpen, setPickerOpen] = useState(false);
   const [removingLinkId, setRemovingLinkId] = useState<string | null>(null);
   const [removeError, setRemoveError] = useState<string | null>(null);
 
+  // Mirror parent-provided data into local state so updates from the page
+  // (e.g. after a refresh) propagate into the panel.
+  useEffect(() => {
+    if (preloadedData !== undefined) {
+      setData(preloadedData);
+    }
+  }, [preloadedData]);
+
   const load = useCallback(async () => {
+    if (onRefresh) {
+      // Parent owns the data — delegate.
+      setIsLoading(true);
+      setError(null);
+      try {
+        await onRefresh();
+      } catch (err) {
+        setError(err instanceof Error ? err.message : 'Failed to load links');
+      } finally {
+        setIsLoading(false);
+      }
+      return;
+    }
     setIsLoading(true);
     setError(null);
     try {
@@ -491,7 +526,7 @@ function BacklinksPanel({ noteId }: BacklinksPanelProps): React.ReactElement {
     } finally {
       setIsLoading(false);
     }
-  }, [noteId]);
+  }, [noteId, onRefresh]);
 
   const handleToggle = useCallback(() => {
     const next = !expanded;
@@ -669,8 +704,32 @@ export default function NoteDetailPage(): React.ReactElement {
   const [localNote, setLocalNote] = useState<LocalNote | null>(null);
   const [serverNote, setServerNote] = useState<NoteOut | null>(null);
   const [similar, setSimilar] = useState<SearchResult[]>([]);
+  const [linksData, setLinksData] = useState<NoteLinksResponse | null>(null);
+  const [wikiLinks, setWikiLinks] = useState<Map<string, { id: string; title: string }>>(
+    new Map(),
+  );
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+
+  // PR 6.5 — shared link loader. Builds both the BacklinksPanel data and
+  // the wiki-resolution map from a single API call.
+  const refreshLinks = useCallback(
+    async (sId: string): Promise<void> => {
+      const resp = await getNoteLinks(sId);
+      setLinksData(resp);
+      const map = new Map<string, { id: string; title: string }>();
+      for (const item of resp.outgoing) {
+        if (item.link_type === 'wiki' && item.title) {
+          map.set(item.title.toLowerCase(), {
+            id: item.note_id,
+            title: item.title,
+          });
+        }
+      }
+      setWikiLinks(map);
+    },
+    [],
+  );
 
   // Load note
   useEffect(() => {
@@ -707,6 +766,13 @@ export default function NoteDetailPage(): React.ReactElement {
           } catch {
             // Non-critical
           }
+          // PR 6.5 — fetch outgoing wiki links so [[Title]] refs render as
+          // clickable links via WikiContent. Failure is non-critical.
+          try {
+            await refreshLinks(sId);
+          } catch {
+            // Non-critical — refs will render as plain [[text]] when missing.
+          }
         }
       } catch (err) {
         setError(err instanceof Error ? err.message : 'Failed to load note');
@@ -714,7 +780,7 @@ export default function NoteDetailPage(): React.ReactElement {
         setIsLoading(false);
       }
     })();
-  }, [id]);
+  }, [id, refreshLinks]);
 
   const handleSaved = useCallback((updated: NoteOut) => {
     setServerNote(updated);
@@ -937,15 +1003,30 @@ export default function NoteDetailPage(): React.ReactElement {
 
         {/* Editor — available when serverId is known */}
         {serverNote ? (
-          <NoteEditor
-            note={serverNote}
-            onSave={handleEditorSave}
-            onCancel={handleEditorCancel}
-          />
+          <>
+            {/* PR 6.5 — Rendered preview with clickable [[wiki refs]] */}
+            <div className="rounded-xl border border-slate-700 bg-slate-800/40 p-4">
+              <p
+                className="whitespace-pre-wrap text-sm leading-relaxed text-slate-200"
+                data-testid="wiki-rendered-content"
+              >
+                <WikiContent content={serverNote.content} wikiLinks={wikiLinks} />
+              </p>
+            </div>
+            <NoteEditor
+              note={serverNote}
+              onSave={handleEditorSave}
+              onCancel={handleEditorCancel}
+            />
+          </>
         ) : (
           <div className="rounded-xl border border-slate-700 bg-slate-800/60 p-4">
             <p className="whitespace-pre-wrap text-sm leading-relaxed text-slate-200">
-              {localNote?.content || '(recording pending transcription…)'}
+              {localNote?.content ? (
+                <WikiContent content={localNote.content} wikiLinks={wikiLinks} />
+              ) : (
+                '(recording pending transcription…)'
+              )}
             </p>
             {localNote?.syncStatus === 'pending' && (
               <p className="mt-3 text-xs text-amber-400">
@@ -984,7 +1065,13 @@ export default function NoteDetailPage(): React.ReactElement {
           </section>
         )}
         {/* Backlinks (PR 6.1) — collapsed by default; rendered below similar notes. */}
-        {serverNote && <BacklinksPanel noteId={serverNote.id} />}
+        {serverNote && (
+          <BacklinksPanel
+            noteId={serverNote.id}
+            preloadedData={linksData}
+            onRefresh={() => refreshLinks(serverNote.id)}
+          />
+        )}
 
         {/* Shadow Reader prompt (US-8) — Bug 16 (2026-05-01): auto-renders a
             bottom-sheet when status='asked'; component returns null otherwise.

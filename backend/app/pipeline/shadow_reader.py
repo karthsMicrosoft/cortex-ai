@@ -232,6 +232,19 @@ async def merge_answer_into_note(note, answer: str, openai_client, db: AsyncSess
     # Re-run semantic linking
     await _relink_similar_notes(note, new_embedding, db)
 
+    # PR 6.5 — re-parse wiki refs so any [[Title]] references introduced by
+    # the reflection get linked. Failures are logged + swallowed.
+    try:
+        from app.pipeline.wiki_links import parse_and_link_wiki_refs
+
+        await parse_and_link_wiki_refs(db, note)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(
+            "merge_answer_wiki_links_failed: note_id=%s error_class=%s",
+            note.id,
+            type(exc).__name__,
+        )
+
     await db.commit()
 
     logger.info("merge_answer_complete: note_id=%s", note.id)

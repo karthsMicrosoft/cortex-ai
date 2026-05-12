@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { ArrowLeft, ChevronDown, ChevronRight, Music, Pencil, Plus, Check, X, Trash2 } from 'lucide-react';
 import { db } from '../db';
@@ -132,6 +132,287 @@ function MusicLabelEditor({ noteId, metadata, onSaved }: MusicLabelEditorProps):
 
 interface BacklinksPanelProps {
   noteId: string;
+}
+
+// ---------------------------------------------------------------------------
+// Title editor (PR 6.4) — H1 with click-to-edit inline input.
+// ---------------------------------------------------------------------------
+
+const TITLE_MAX = 120;
+
+interface TitleEditorProps {
+  noteId: string;
+  title: string | null | undefined;
+  onSaved: (updated: NoteOut) => void;
+}
+
+function TitleEditor({ noteId, title, onSaved }: TitleEditorProps): React.ReactElement {
+  const [isEditing, setIsEditing] = useState(false);
+  const [draft, setDraft] = useState(title ?? '');
+  const [isSaving, setIsSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    if (isEditing && inputRef.current) {
+      inputRef.current.focus();
+      inputRef.current.select();
+    }
+  }, [isEditing]);
+
+  const enterEdit = () => {
+    setDraft(title ?? '');
+    setError(null);
+    setIsEditing(true);
+  };
+
+  const cancel = () => {
+    setError(null);
+    setIsEditing(false);
+  };
+
+  const save = async () => {
+    const next = draft.trim();
+    setIsSaving(true);
+    setError(null);
+    try {
+      const updated = await updateNote(noteId, { title: next.length > 0 ? next : null });
+      onSaved(updated);
+      setIsEditing(false);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Save failed');
+    } finally {
+      setIsSaving(false);
+    }
+  };
+
+  if (!isEditing) {
+    const hasTitle = !!(title && title.trim().length > 0);
+    return (
+      <h1
+        role="heading"
+        aria-level={1}
+        tabIndex={0}
+        onClick={enterEdit}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter' || e.key === ' ') enterEdit();
+        }}
+        className={[
+          'cursor-text text-2xl font-semibold leading-tight focus:outline-none focus:ring-2 focus:ring-indigo-400 rounded-md px-1 -mx-1',
+          hasTitle ? 'text-slate-100' : 'text-slate-500 italic',
+        ].join(' ')}
+        title="Click to edit title"
+      >
+        {hasTitle ? title : 'Untitled note'}
+      </h1>
+    );
+  }
+
+  return (
+    <div className="flex flex-col gap-1">
+      <div className="flex items-center gap-2">
+        <input
+          ref={inputRef}
+          type="text"
+          role="textbox"
+          aria-label="Edit note title"
+          maxLength={TITLE_MAX}
+          value={draft}
+          onChange={(e) => setDraft(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') {
+              e.preventDefault();
+              void save();
+            } else if (e.key === 'Escape') {
+              e.preventDefault();
+              cancel();
+            }
+          }}
+          disabled={isSaving}
+          placeholder="Untitled note"
+          className="flex-1 rounded-md border border-slate-600 bg-slate-800 px-2 py-1 text-2xl font-semibold text-slate-100 focus:border-indigo-500 focus:outline-none"
+        />
+        <button
+          type="button"
+          aria-label="Save title"
+          onClick={() => void save()}
+          disabled={isSaving}
+          className="rounded-md bg-indigo-600 px-3 py-1 text-xs font-medium text-white hover:bg-indigo-500 disabled:opacity-50"
+        >
+          {isSaving ? 'Saving…' : 'Save'}
+        </button>
+        <button
+          type="button"
+          aria-label="Cancel title edit"
+          onClick={cancel}
+          disabled={isSaving}
+          className="rounded-md border border-slate-700 px-3 py-1 text-xs text-slate-300 hover:text-slate-100"
+        >
+          Cancel
+        </button>
+      </div>
+      {error && <p className="text-xs text-red-400">{error}</p>}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Aliases editor (PR 6.4) — collapsible chip list with debounced PATCH.
+// ---------------------------------------------------------------------------
+
+const ALIAS_MAX_LEN = 120;
+const ALIAS_MAX_COUNT = 20;
+const ALIAS_DEBOUNCE_MS = 500;
+
+interface AliasesEditorProps {
+  noteId: string;
+  aliases: string[];
+  onSaved: (updated: NoteOut) => void;
+}
+
+function AliasesEditor({ noteId, aliases, onSaved }: AliasesEditorProps): React.ReactElement {
+  const [open, setOpen] = useState(false);
+  const [items, setItems] = useState<string[]>(aliases);
+  const [draft, setDraft] = useState('');
+  const [error, setError] = useState<string | null>(null);
+  const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const initialKey = useRef(JSON.stringify(aliases));
+
+  // Sync when the prop changes from the outside (e.g. server refresh).
+  useEffect(() => {
+    const key = JSON.stringify(aliases);
+    if (key !== initialKey.current) {
+      setItems(aliases);
+      initialKey.current = key;
+    }
+  }, [aliases]);
+
+  const persist = useCallback(
+    (next: string[]) => {
+      if (timerRef.current) clearTimeout(timerRef.current);
+      timerRef.current = setTimeout(() => {
+        void (async () => {
+          try {
+            const updated = await updateNote(noteId, { aliases: next });
+            onSaved(updated);
+            setError(null);
+          } catch (err) {
+            setError(err instanceof Error ? err.message : 'Save failed');
+          }
+        })();
+      }, ALIAS_DEBOUNCE_MS);
+    },
+    [noteId, onSaved],
+  );
+
+  useEffect(() => {
+    return () => {
+      if (timerRef.current) clearTimeout(timerRef.current);
+    };
+  }, []);
+
+  const addAlias = () => {
+    const value = draft.trim();
+    if (!value) return;
+    if (value.length > ALIAS_MAX_LEN) {
+      setError(`Alias must be ${ALIAS_MAX_LEN} characters or fewer.`);
+      return;
+    }
+    if (items.some((a) => a.toLowerCase() === value.toLowerCase())) {
+      setDraft('');
+      return;
+    }
+    if (items.length >= ALIAS_MAX_COUNT) {
+      setError(`Maximum ${ALIAS_MAX_COUNT} aliases.`);
+      return;
+    }
+    const next = [...items, value];
+    setItems(next);
+    setDraft('');
+    setError(null);
+    persist(next);
+  };
+
+  const removeAlias = (alias: string) => {
+    const next = items.filter((a) => a !== alias);
+    setItems(next);
+    setError(null);
+    persist(next);
+  };
+
+  return (
+    <section className="flex flex-col gap-2">
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        className="flex items-center gap-1 self-start text-xs font-semibold uppercase tracking-wide text-slate-400 hover:text-slate-200"
+        aria-expanded={open}
+      >
+        {open ? (
+          <ChevronDown className="h-3 w-3" aria-hidden="true" />
+        ) : (
+          <ChevronRight className="h-3 w-3" aria-hidden="true" />
+        )}
+        Aliases {items.length > 0 && <span className="text-slate-500">({items.length})</span>}
+      </button>
+      {open && (
+        <div className="flex flex-col gap-2 rounded-lg border border-slate-800 bg-slate-900/40 p-3">
+          {items.length === 0 && (
+            <p className="text-xs text-slate-500">
+              No aliases yet. Add other names this note can be linked under.
+            </p>
+          )}
+          {items.length > 0 && (
+            <div className="flex flex-wrap gap-2">
+              {items.map((alias) => (
+                <span
+                  key={alias}
+                  className="inline-flex items-center gap-1 rounded-full bg-slate-700 px-2 py-0.5 text-xs text-slate-200"
+                >
+                  {alias}
+                  <button
+                    type="button"
+                    aria-label={`Remove alias ${alias}`}
+                    onClick={() => removeAlias(alias)}
+                    className="rounded-full text-slate-400 hover:text-red-300 focus:outline-none"
+                  >
+                    <X className="h-3 w-3" aria-hidden="true" />
+                  </button>
+                </span>
+              ))}
+            </div>
+          )}
+          <div className="flex items-center gap-2">
+            <input
+              type="text"
+              role="textbox"
+              aria-label="Add alias"
+              value={draft}
+              maxLength={ALIAS_MAX_LEN}
+              onChange={(e) => setDraft(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') {
+                  e.preventDefault();
+                  addAlias();
+                }
+              }}
+              placeholder="+ Add alias"
+              className="flex-1 rounded-md border border-slate-700 bg-slate-800 px-2 py-1 text-xs text-slate-100 focus:border-indigo-500 focus:outline-none"
+            />
+            <button
+              type="button"
+              onClick={addAlias}
+              disabled={!draft.trim()}
+              className="rounded-md bg-indigo-600 px-2 py-1 text-xs text-white hover:bg-indigo-500 disabled:opacity-50"
+            >
+              Add
+            </button>
+          </div>
+          {error && <p className="text-xs text-red-400">{error}</p>}
+        </div>
+      )}
+    </section>
+  );
 }
 
 function _displayLabel(item: NoteLinkItem): string {
@@ -572,6 +853,24 @@ export default function NoteDetailPage(): React.ReactElement {
       </header>
 
       <main className="flex flex-1 flex-col gap-5 px-4 py-5">
+        {/* Title (PR 6.4) — H1, click-to-edit. Falls back to "Untitled note". */}
+        {(serverNote || localNote?.serverId) && (
+          <TitleEditor
+            noteId={serverNote?.id ?? (localNote?.serverId as string)}
+            title={serverNote?.title ?? null}
+            onSaved={handleSaved}
+          />
+        )}
+
+        {/* Aliases (PR 6.4) — collapsible chip editor; debounced PATCH. */}
+        {serverNote && (
+          <AliasesEditor
+            noteId={serverNote.id}
+            aliases={serverNote.aliases ?? []}
+            onSaved={handleSaved}
+          />
+        )}
+
         {/* Timestamps */}
         <div className="flex gap-4 text-xs text-slate-500">
           <span>Created: {formatDateTime(createdAt)}</span>

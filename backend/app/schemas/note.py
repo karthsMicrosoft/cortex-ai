@@ -8,7 +8,7 @@ import uuid
 from datetime import datetime
 from typing import Literal, Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 _CATEGORY_TYPE = Literal["Music", "Fitness", "Journal", "Ideas", "Spiritual", "Learning"]
 _SOURCE_TYPE = Literal["voice", "text", "image"]
@@ -49,6 +49,39 @@ class NoteUpdate(BaseModel):
     music_metadata: Optional[dict] = None  # manual music-metadata override (mitigation #6)
     image_url: Optional[str] = None
     audio_url: Optional[str] = None
+    # Phase 6 / PR 6.4 — Title + aliases editing.
+    # title: nullable (matches DB column notes.title VARCHAR(120)).
+    # aliases: optional; when provided we strip empty entries and dedupe
+    # case-insensitively in the validator below.
+    title: Optional[str] = Field(default=None, max_length=120)
+    aliases: Optional[list[str]] = Field(default=None, max_length=20)
+
+    @field_validator("aliases")
+    @classmethod
+    def _normalize_aliases(cls, v: Optional[list[str]]) -> Optional[list[str]]:
+        if v is None:
+            return v
+        # Strip whitespace, drop empties, validate per-entry length.
+        cleaned: list[str] = []
+        for item in v:
+            if not isinstance(item, str):
+                raise ValueError("aliases entries must be strings")
+            stripped = item.strip()
+            if not stripped:
+                continue
+            if len(stripped) > 120:
+                raise ValueError("aliases entries must be <= 120 characters")
+            cleaned.append(stripped)
+        # Dedupe case-insensitively, preserve first-occurrence order.
+        seen: set[str] = set()
+        out: list[str] = []
+        for item in cleaned:
+            key = item.lower()
+            if key in seen:
+                continue
+            seen.add(key)
+            out.append(item)
+        return out
 
 
 class NoteOut(BaseModel):

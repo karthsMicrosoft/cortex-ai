@@ -25,6 +25,7 @@ const {
   mockDeleteLink,
   mockDbGet,
   mockDbWhere,
+  mockUpdateNote,
 } = vi.hoisted(() => ({
   mockNavigate: vi.fn(),
   mockGetNote: vi.fn(),
@@ -33,6 +34,7 @@ const {
   mockDeleteLink: vi.fn(),
   mockDbGet: vi.fn(),
   mockDbWhere: vi.fn(),
+  mockUpdateNote: vi.fn(),
 }));
 
 vi.mock('react-router-dom', async () => {
@@ -47,7 +49,7 @@ vi.mock('react-router-dom', async () => {
 
 vi.mock('../api/notes', () => ({
   getNote: mockGetNote,
-  updateNote: vi.fn(),
+  updateNote: mockUpdateNote,
   deleteNote: vi.fn(),
 }));
 
@@ -347,3 +349,150 @@ describe('NoteDetailPage — Manual link creation (PR 6.3)', () => {
     });
   });
 });
+
+// ---------------------------------------------------------------------------
+// PR 6.4 — Title editing UI + Aliases chips
+// ---------------------------------------------------------------------------
+
+describe('NoteDetailPage — Title editing (PR 6.4)', () => {
+  it('renders title when set', async () => {
+    mockGetNote.mockResolvedValueOnce({ ...SERVER_NOTE, title: 'My Cool Note' });
+    renderPage();
+    expect(
+      await screen.findByRole('heading', { level: 1, name: /my cool note/i }),
+    ).toBeInTheDocument();
+  });
+
+  it('renders Untitled placeholder when title is null', async () => {
+    mockGetNote.mockResolvedValueOnce({ ...SERVER_NOTE, title: null });
+    renderPage();
+    expect(
+      await screen.findByRole('heading', { level: 1, name: /untitled note/i }),
+    ).toBeInTheDocument();
+  });
+
+  it('clicking the title enters edit mode with autofocus', async () => {
+    mockGetNote.mockResolvedValueOnce({ ...SERVER_NOTE, title: 'Initial' });
+    renderPage();
+    const heading = await screen.findByRole('heading', { level: 1, name: /initial/i });
+    fireEvent.click(heading);
+    const input = await screen.findByRole('textbox', { name: /edit note title/i });
+    expect(input).toHaveFocus();
+    expect(input).toHaveValue('Initial');
+    expect(input).toHaveAttribute('maxLength', '120');
+  });
+
+  it('Save button calls updateNote with the new title', async () => {
+    mockGetNote.mockResolvedValueOnce({ ...SERVER_NOTE, title: 'Old' });
+    mockUpdateNote.mockResolvedValueOnce({ ...SERVER_NOTE, title: 'New title' });
+    renderPage();
+    fireEvent.click(await screen.findByRole('heading', { level: 1, name: /old/i }));
+    const input = await screen.findByRole('textbox', { name: /edit note title/i });
+    fireEvent.change(input, { target: { value: 'New title' } });
+    fireEvent.click(screen.getByRole('button', { name: /save title/i }));
+    await waitFor(() => {
+      expect(mockUpdateNote).toHaveBeenCalledWith('srv-1', { title: 'New title' });
+    });
+    expect(
+      await screen.findByRole('heading', { level: 1, name: /new title/i }),
+    ).toBeInTheDocument();
+  });
+
+  it('Esc key cancels edit and restores the original title', async () => {
+    mockGetNote.mockResolvedValueOnce({ ...SERVER_NOTE, title: 'Keep' });
+    renderPage();
+    fireEvent.click(await screen.findByRole('heading', { level: 1, name: /keep/i }));
+    const input = await screen.findByRole('textbox', { name: /edit note title/i });
+    fireEvent.change(input, { target: { value: 'Discard' } });
+    fireEvent.keyDown(input, { key: 'Escape' });
+    expect(
+      await screen.findByRole('heading', { level: 1, name: /keep/i }),
+    ).toBeInTheDocument();
+    expect(mockUpdateNote).not.toHaveBeenCalled();
+  });
+
+  it('Enter key saves the title', async () => {
+    mockGetNote.mockResolvedValueOnce({ ...SERVER_NOTE, title: 'Old' });
+    mockUpdateNote.mockResolvedValueOnce({ ...SERVER_NOTE, title: 'Saved by enter' });
+    renderPage();
+    fireEvent.click(await screen.findByRole('heading', { level: 1, name: /old/i }));
+    const input = await screen.findByRole('textbox', { name: /edit note title/i });
+    fireEvent.change(input, { target: { value: 'Saved by enter' } });
+    fireEvent.keyDown(input, { key: 'Enter' });
+    await waitFor(() => {
+      expect(mockUpdateNote).toHaveBeenCalledWith('srv-1', { title: 'Saved by enter' });
+    });
+  });
+});
+
+describe('NoteDetailPage — Aliases section (PR 6.4)', () => {
+  it('renders existing alias chips', async () => {
+    mockGetNote.mockResolvedValueOnce({
+      ...SERVER_NOTE,
+      title: 'Note',
+      aliases: ['Alpha', 'Beta'],
+    });
+    renderPage();
+    // Expand aliases section
+    fireEvent.click(await screen.findByRole('button', { name: /aliases/i }));
+    expect(await screen.findByText('Alpha')).toBeInTheDocument();
+    expect(screen.getByText('Beta')).toBeInTheDocument();
+  });
+
+  it('adds an alias and persists via updateNote after debounce', async () => {
+    vi.useFakeTimers();
+    try {
+      mockGetNote.mockResolvedValueOnce({
+        ...SERVER_NOTE,
+        title: 'Note',
+        aliases: ['Alpha'],
+      });
+      mockUpdateNote.mockResolvedValueOnce({
+        ...SERVER_NOTE,
+        title: 'Note',
+        aliases: ['Alpha', 'Gamma'],
+      });
+      renderPage();
+      await vi.runAllTimersAsync();
+      fireEvent.click(screen.getByRole('button', { name: /aliases/i }));
+      const input = screen.getByRole('textbox', { name: /add alias/i });
+      fireEvent.change(input, { target: { value: 'Gamma' } });
+      fireEvent.keyDown(input, { key: 'Enter' });
+      // Debounce window
+      await vi.advanceTimersByTimeAsync(600);
+      expect(mockUpdateNote).toHaveBeenCalledWith('srv-1', {
+        aliases: ['Alpha', 'Gamma'],
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('removes an alias chip and persists via updateNote', async () => {
+    vi.useFakeTimers();
+    try {
+      mockGetNote.mockResolvedValueOnce({
+        ...SERVER_NOTE,
+        title: 'Note',
+        aliases: ['Alpha', 'Beta'],
+      });
+      mockUpdateNote.mockResolvedValueOnce({
+        ...SERVER_NOTE,
+        title: 'Note',
+        aliases: ['Beta'],
+      });
+      renderPage();
+      await vi.runAllTimersAsync();
+      fireEvent.click(screen.getByRole('button', { name: /aliases/i }));
+      fireEvent.click(screen.getByRole('button', { name: /remove alias alpha/i }));
+      await vi.advanceTimersByTimeAsync(600);
+      expect(mockUpdateNote).toHaveBeenCalledWith('srv-1', {
+        aliases: ['Beta'],
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
+

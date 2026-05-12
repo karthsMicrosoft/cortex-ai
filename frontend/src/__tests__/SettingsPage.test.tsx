@@ -26,8 +26,10 @@ import React from 'react';
 // ---------------------------------------------------------------------------
 
 const mockChangePassword = vi.fn();
+const mockMintClipToken = vi.fn();
 vi.mock('../api/auth', () => ({
   changePassword: (...args: unknown[]) => mockChangePassword(...args),
+  mintClipToken: (...args: unknown[]) => mockMintClipToken(...args),
 }));
 
 const mockDownloadExport = vi.fn();
@@ -274,6 +276,123 @@ describe('SettingsPage — change password section (Round 15 / PR #23)', () => {
       expect(screen.getByText(/passwords do not match/i)).toBeInTheDocument();
     });
     expect(mockChangePassword).not.toHaveBeenCalled();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Round 19 / PR C — Browser Extension section (clip-token mint UI)
+// ---------------------------------------------------------------------------
+
+describe('SettingsPage — Browser Extension section (Round 19 / PR C)', () => {
+  beforeEach(() => {
+    mockMintClipToken.mockReset();
+  });
+
+  it('renders Browser Extension section heading', async () => {
+    await renderSettingsPage();
+    await waitFor(() => {
+      expect(screen.getByText(/browser extension/i)).toBeInTheDocument();
+    });
+  });
+
+  it('renders Generate clip token button', async () => {
+    await renderSettingsPage();
+    await waitFor(() => {
+      expect(
+        screen.getByRole('button', { name: /generate clip token/i }),
+      ).toBeInTheDocument();
+    });
+  });
+
+  it('Generate click calls mintClipToken and renders the returned token in a code block', async () => {
+    mockMintClipToken.mockResolvedValueOnce({
+      clip_token: 'jwt.header.payload.sig',
+      expires_in: 2592000,
+      scope: 'clip',
+    });
+    await renderSettingsPage();
+    const btn = await screen.findByRole('button', { name: /generate clip token/i });
+    await act(async () => {
+      fireEvent.click(btn);
+    });
+    expect(mockMintClipToken).toHaveBeenCalledTimes(1);
+    await waitFor(() => {
+      const code = document.querySelector('code[aria-label="Clip token"]');
+      expect(code).toBeTruthy();
+      expect(code!.textContent).toBe('jwt.header.payload.sig');
+    });
+  });
+
+  it('Copy button copies token to clipboard', async () => {
+    mockMintClipToken.mockResolvedValueOnce({
+      clip_token: 'jwt.copy.me',
+      expires_in: 2592000,
+      scope: 'clip',
+    });
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, 'clipboard', {
+      value: { writeText },
+      configurable: true,
+      writable: true,
+    });
+    await renderSettingsPage();
+    await act(async () => {
+      fireEvent.click(await screen.findByRole('button', { name: /generate clip token/i }));
+    });
+    const copyBtn = await screen.findByRole('button', { name: /copy/i });
+    await act(async () => {
+      fireEvent.click(copyBtn);
+    });
+    expect(writeText).toHaveBeenCalledWith('jwt.copy.me');
+  });
+
+  it('Generating state shows loading text and disables button', async () => {
+    let resolve: (v: unknown) => void = () => {};
+    mockMintClipToken.mockReturnValueOnce(new Promise((r) => { resolve = r; }));
+    await renderSettingsPage();
+    const btn = await screen.findByRole('button', { name: /generate clip token/i });
+    await act(async () => {
+      fireEvent.click(btn);
+    });
+    const loadingBtn = screen.getByRole('button', { name: /generating/i });
+    expect((loadingBtn as HTMLButtonElement).disabled).toBe(true);
+    await act(async () => {
+      resolve({ clip_token: 't', expires_in: 1, scope: 'clip' });
+    });
+  });
+
+  it('error state shows retry button', async () => {
+    mockMintClipToken.mockRejectedValueOnce(new Error('boom'));
+    await renderSettingsPage();
+    await act(async () => {
+      fireEvent.click(await screen.findByRole('button', { name: /generate clip token/i }));
+    });
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: /retry/i })).toBeInTheDocument();
+    });
+  });
+
+  it('token is not persisted to localStorage or sessionStorage', async () => {
+    mockMintClipToken.mockResolvedValueOnce({
+      clip_token: 'jwt.secret.token',
+      expires_in: 2592000,
+      scope: 'clip',
+    });
+    const localSet = vi.spyOn(Storage.prototype, 'setItem');
+    await renderSettingsPage();
+    await act(async () => {
+      fireEvent.click(await screen.findByRole('button', { name: /generate clip token/i }));
+    });
+    await waitFor(() => {
+      expect(
+        document.querySelector('code[aria-label="Clip token"]')?.textContent,
+      ).toBe('jwt.secret.token');
+    });
+    const wroteToken = localSet.mock.calls.some(([, value]) =>
+      typeof value === 'string' && value.includes('jwt.secret.token'),
+    );
+    expect(wroteToken).toBe(false);
+    localSet.mockRestore();
   });
 });
 

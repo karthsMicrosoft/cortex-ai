@@ -10,10 +10,10 @@
  */
 import { useState, type FormEvent } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { ArrowLeft, Settings, Download } from 'lucide-react';
+import { ArrowLeft, Settings, Download, Puzzle, Copy } from 'lucide-react';
 import { PersonalDictionary } from '../components/PersonalDictionary';
 import { ShadowReaderSettings } from '../components/ShadowReaderSettings';
-import { changePassword } from '../api/auth';
+import { changePassword, mintClipToken } from '../api/auth';
 import { downloadExport } from '../api/export';
 
 export default function SettingsPage(): React.ReactElement {
@@ -67,6 +67,39 @@ export default function SettingsPage(): React.ReactElement {
       setPasswordMessage({ kind: 'err', text });
     } finally {
       setPasswordSaving(false);
+    }
+  }
+
+  // ------------------------------------------------------------------ clip token (Round 19)
+  // Token lives in component state only — never persisted to localStorage /
+  // sessionStorage (it's a JWT — leakage risk).
+  const [clipToken, setClipToken] = useState<string | null>(null);
+  const [clipMinting, setClipMinting] = useState(false);
+  const [clipError, setClipError] = useState<string | null>(null);
+  const [clipCopied, setClipCopied] = useState(false);
+
+  async function handleGenerateClipToken(): Promise<void> {
+    setClipError(null);
+    setClipCopied(false);
+    setClipMinting(true);
+    try {
+      const res = await mintClipToken();
+      setClipToken(res.clip_token);
+    } catch (err) {
+      const text = err instanceof Error ? err.message : 'Failed to generate clip token';
+      setClipError(text);
+    } finally {
+      setClipMinting(false);
+    }
+  }
+
+  async function handleCopyClipToken(): Promise<void> {
+    if (!clipToken) return;
+    try {
+      await navigator.clipboard.writeText(clipToken);
+      setClipCopied(true);
+    } catch {
+      setClipCopied(false);
     }
   }
 
@@ -174,6 +207,69 @@ export default function SettingsPage(): React.ReactElement {
 
         {/* Shadow Reader Settings — US-8 */}
         <ShadowReaderSettings />
+
+        {/* Browser Extension — Round 19 / PR C */}
+        <section className="rounded-2xl border border-slate-800 bg-slate-900 p-4 space-y-3">
+          <div className="flex items-center gap-2">
+            <Puzzle className="h-4 w-4 text-indigo-400" aria-hidden="true" />
+            <h2 className="text-sm font-semibold text-slate-200">Browser Extension</h2>
+          </div>
+          <p className="text-xs text-slate-400">
+            Save any web page to Cortex with one click. Install the extension and
+            paste the clip token below to authorize it.
+          </p>
+          <p className="text-[11px] text-slate-500">
+            Load the unpacked extension from the <code>extension/</code> folder in
+            your repo (Chrome → chrome://extensions → Developer mode → Load
+            unpacked).
+          </p>
+
+          {clipError ? (
+            <div className="space-y-2">
+              <p role="alert" className="text-xs text-red-400">{clipError}</p>
+              <button
+                type="button"
+                onClick={() => { void handleGenerateClipToken(); }}
+                className="inline-flex items-center gap-2 rounded-lg border border-slate-600 px-4 py-2 text-sm font-semibold text-slate-200 hover:border-slate-500 hover:text-white"
+              >
+                Retry
+              </button>
+            </div>
+          ) : (
+            <button
+              type="button"
+              onClick={() => { void handleGenerateClipToken(); }}
+              disabled={clipMinting}
+              className="inline-flex items-center gap-2 rounded-lg bg-indigo-600 px-4 py-2 text-sm font-semibold text-white hover:bg-indigo-500 disabled:opacity-50"
+            >
+              {clipMinting ? 'Generating…' : 'Generate clip token'}
+            </button>
+          )}
+
+          {clipToken && !clipError ? (
+            <div className="space-y-2">
+              <code
+                className="block w-full break-all rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 font-mono text-xs text-emerald-200"
+                aria-label="Clip token"
+              >
+                {clipToken}
+              </code>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => { void handleCopyClipToken(); }}
+                  className="inline-flex items-center gap-1.5 rounded-lg border border-slate-600 px-3 py-1.5 text-xs font-semibold text-slate-200 hover:border-slate-500 hover:text-white"
+                >
+                  <Copy className="h-3.5 w-3.5" aria-hidden="true" />
+                  {clipCopied ? 'Copied' : 'Copy'}
+                </button>
+                <p className="text-[11px] text-slate-500">
+                  Token expires in 30 days. Generate a new one to revoke this one.
+                </p>
+              </div>
+            </div>
+          ) : null}
+        </section>
       </main>
     </div>
   );

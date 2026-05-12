@@ -1,12 +1,13 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { v4 as uuidv4 } from 'uuid';
-import { Image as ImageIcon, Send, Loader2 } from 'lucide-react';
+import { Image as ImageIcon, Send, Loader2, Mic, Type, Link as LinkIcon } from 'lucide-react';
 import { db } from '../db';
 import type { LocalNote } from '../db';
 import { VoiceCapture } from '../components/VoiceCapture';
 import { SyncIndicator } from '../components/SyncIndicator';
 import { ImagePreview } from '../components/ImagePreview';
+import { UrlClipForm } from '../components/UrlClipForm';
 import { syncManager } from '../sync/syncManager';
 
 // ---------------------------------------------------------------------------
@@ -85,6 +86,10 @@ export function CapturePage(): React.ReactElement {
   const [textContent, setTextContent] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  // ---------------------------------------------------------------------- tab state (PR 5.3)
+  type CaptureTab = 'text' | 'voice' | 'image' | 'url';
+  const [activeTab, setActiveTab] = useState<CaptureTab>('text');
 
   // ---------------------------------------------------------------------- image-flow state
 
@@ -251,8 +256,62 @@ export function CapturePage(): React.ReactElement {
 
       {/* Body */}
       <main className="flex flex-1 flex-col gap-4 px-4 py-6">
-        {/* Text area */}
-        <div className="rounded-xl border border-slate-700 bg-slate-800/60 p-4">
+        {/* Capture-mode tabs (PR 5.3) */}
+        <div
+          aria-label="Capture mode"
+          className="flex flex-wrap items-center gap-2"
+        >
+          {(
+            [
+              { id: 'text', label: 'Text', Icon: Type },
+              { id: 'voice', label: 'Voice', Icon: Mic },
+              { id: 'image', label: 'Image', Icon: ImageIcon },
+              { id: 'url', label: 'URL', Icon: LinkIcon },
+            ] as const
+          ).map(({ id, label, Icon }) => {
+            const active = activeTab === id;
+            return (
+              <button
+                key={id}
+                type="button"
+                aria-pressed={active}
+                onClick={() => setActiveTab(id)}
+                className={
+                  'flex items-center gap-1.5 rounded-full border px-3 py-1 text-xs font-semibold transition-colors ' +
+                  (active
+                    ? 'border-indigo-500 bg-indigo-600 text-white'
+                    : 'border-slate-600 bg-slate-800/40 text-slate-300 hover:border-slate-500 hover:text-slate-100')
+                }
+              >
+                <Icon className="h-3.5 w-3.5" aria-hidden="true" />
+                {label}
+              </button>
+            );
+          })}
+        </div>
+
+        {/* URL tab — Clip-from-URL form (PR 5.3) */}
+        {activeTab === 'url' ? (
+          <UrlClipForm
+            onSuccess={(noteId) =>
+              navigate(`/note/${encodeURIComponent(noteId)}`)
+            }
+          />
+        ) : null}
+
+        {/* Voice tab — hint; the FAB stays mounted at the bottom */}
+        {activeTab === 'voice' ? (
+          <p className="rounded-xl border border-slate-700 bg-slate-800/60 p-4 text-center text-sm text-slate-300">
+            Hold the mic button below to record a voice note.
+          </p>
+        ) : null}
+
+        {/* Text + Image tabs share the legacy capture surface (text area +
+            image upload control) so existing workflows keep working. */}
+        {activeTab !== 'url' && activeTab !== 'voice' ? (
+          <>
+            {/* Text area */}
+            <div className="rounded-xl border border-slate-700 bg-slate-800/60 p-4">
           <label className="mb-2 block text-xs font-semibold uppercase tracking-wide text-slate-400">
             Quick Note
           </label>
@@ -359,7 +418,9 @@ export function CapturePage(): React.ReactElement {
                 )}
               </button>
             </div>
-          </div>
+            </div>
+          ) : null}
+          </>
         ) : null}
 
         {/* Hint */}

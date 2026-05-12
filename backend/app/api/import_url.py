@@ -16,7 +16,7 @@ from fastapi import APIRouter, Body, Depends, HTTPException, Request, Response, 
 from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.auth.jwt import get_current_user
+from app.auth.jwt import require_scope
 from app.database import get_db
 from app.limiter import limiter
 from app.models.note import Note
@@ -66,7 +66,7 @@ async def import_url(
     request: Request,
     response: Response,
     payload: ImportURLRequest = Body(...),
-    current_user_id: uuid.UUID = Depends(get_current_user),
+    current_user_id: uuid.UUID = Depends(require_scope({None, "clip"})),
     db: AsyncSession = Depends(get_db),
 ) -> ImportURLResponse:
     """Fetch *payload.url* and create a Note row from the extracted article."""

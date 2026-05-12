@@ -1,0 +1,57 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Cortex Clip</title>
+    <style>
+      :root { color-scheme: light dark; }
+      body {
+        font-family: -apple-system, "Segoe UI", Roboto, sans-serif;
+        width: 320px;
+        padding: 16px;
+        margin: 0;
+      }
+      h1 { font-size: 1.05rem; margin: 0 0 8px; }
+      #status {
+        font-size: 0.85rem;
+        color: #555;
+        min-height: 1.2em;
+        margin: 8px 0;
+      }
+      button {
+        width: 100%;
+        padding: 8px 12px;
+        font-size: 0.95rem;
+        cursor: pointer;
+      }
+      button[disabled] { cursor: not-allowed; opacity: 0.6; }
+      details { margin-top: 14px; font-size: 0.85rem; }
+      textarea {
+        width: 100%;
+        height: 70px;
+        font-family: ui-monospace, Menlo, Consolas, monospace;
+        font-size: 0.75rem;
+        box-sizing: border-box;
+        margin: 6px 0;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>Save current tab to Cortex</h1>
+    <p id="status">Loading…</p>
+    <button id="saveBtn" disabled>Save</button>
+
+    <details>
+      <summary>Set / replace clip token</summary>
+      <p style="margin: 4px 0; font-size: 0.78rem;">
+        Mint a clip token in the Cortex web app under Settings → Browser Extension,
+        then paste it here. The token only authorises saving links — it cannot
+        delete notes or change your password.
+      </p>
+      <textarea id="tokenInput" placeholder="paste clip token here"></textarea>
+      <button id="saveTokenBtn">Save token</button>
+    </details>
+
+    <script type="module" src="popup.js"></script>
+  </body>
+</html>

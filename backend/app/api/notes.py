@@ -24,7 +24,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.api._note_serializers import _note_to_out
-from app.auth.jwt import get_current_user
+from app.auth.jwt import get_current_user, require_scope
 from app.config import settings
 from app.database import get_db
 from app.models.note import Note
@@ -86,7 +86,7 @@ async def _fetch_note(
 async def create_note(
     payload: NoteCreate,
     background_tasks: BackgroundTasks,
-    current_user_id: uuid.UUID = Depends(get_current_user),
+    current_user_id: uuid.UUID = Depends(require_scope({None, "clip"})),
     db: AsyncSession = Depends(get_db),
 ) -> NoteOut:
     """Create a new note for the authenticated user.

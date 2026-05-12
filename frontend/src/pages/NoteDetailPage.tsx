@@ -1,12 +1,14 @@
 import { useCallback, useEffect, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
-import { ArrowLeft, Music, Pencil, Check, X, Trash2 } from 'lucide-react';
+import { ArrowLeft, ChevronDown, ChevronRight, Music, Pencil, Check, X, Trash2 } from 'lucide-react';
 import { db } from '../db';
 import type { LocalNote } from '../db';
 import { deleteNote, getNote, updateNote } from '../api/notes';
 import type { NoteOut } from '../api/notes';
 import { searchSimilar } from '../api/search';
 import type { SearchResult } from '../api/search';
+import { getNoteLinks } from '../api/links';
+import type { NoteLinkItem, NoteLinksResponse } from '../api/links';
 import { NoteEditor } from '../components/NoteEditor';
 import { ProcessingBadge } from '../components/ProcessingBadge';
 import { MusicPlayer } from '../components/MusicPlayer';
@@ -120,6 +122,163 @@ function MusicLabelEditor({ noteId, metadata, onSaved }: MusicLabelEditorProps):
         </button>
       </div>
     </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Backlinks panel (PR 6.1)
+// ---------------------------------------------------------------------------
+
+interface BacklinksPanelProps {
+  noteId: string;
+}
+
+function _displayLabel(item: NoteLinkItem): string {
+  if (item.title && item.title.trim().length > 0) return item.title;
+  return '(untitled note)';
+}
+
+function BacklinkCard({
+  item,
+  onClick,
+}: {
+  item: NoteLinkItem;
+  onClick: (id: string) => void;
+}): React.ReactElement {
+  return (
+    <button
+      type="button"
+      onClick={() => onClick(item.note_id)}
+      className="rounded-xl border border-slate-700 bg-slate-800/40 p-3 text-left transition-colors hover:border-indigo-500/50 focus:outline-none focus:ring-2 focus:ring-indigo-400"
+    >
+      <p className="line-clamp-2 text-sm text-slate-200">{_displayLabel(item)}</p>
+      <div className="mt-1 flex items-center gap-2 text-xs text-slate-500">
+        <span className="rounded bg-slate-700/60 px-1.5 py-0.5 text-[10px] uppercase tracking-wide text-slate-300">
+          via {item.link_type}
+        </span>
+        <span>{item.category}</span>
+        {item.link_type === 'semantic' && item.score !== null && (
+          <>
+            <span>·</span>
+            <span>{(item.score * 100).toFixed(0)}%</span>
+          </>
+        )}
+      </div>
+    </button>
+  );
+}
+
+function BacklinksPanel({ noteId }: BacklinksPanelProps): React.ReactElement {
+  const navigate = useNavigate();
+  const [expanded, setExpanded] = useState(false);
+  const [data, setData] = useState<NoteLinksResponse | null>(null);
+  const [isLoading, setIsLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const load = useCallback(async () => {
+    setIsLoading(true);
+    setError(null);
+    try {
+      const resp = await getNoteLinks(noteId);
+      setData(resp);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to load links');
+    } finally {
+      setIsLoading(false);
+    }
+  }, [noteId]);
+
+  const handleToggle = useCallback(() => {
+    const next = !expanded;
+    setExpanded(next);
+    if (next && data === null && !isLoading) {
+      void load();
+    }
+  }, [expanded, data, isLoading, load]);
+
+  return (
+    <section aria-label="Backlinks">
+      <button
+        type="button"
+        onClick={handleToggle}
+        aria-expanded={expanded}
+        className="flex w-full items-center gap-2 text-xs font-semibold uppercase tracking-wide text-slate-400 hover:text-slate-200"
+      >
+        {expanded ? (
+          <ChevronDown className="h-3 w-3" aria-hidden="true" />
+        ) : (
+          <ChevronRight className="h-3 w-3" aria-hidden="true" />
+        )}
+        Backlinks
+      </button>
+
+      {expanded && (
+        <div className="mt-3 flex flex-col gap-3" data-testid="backlinks-body">
+          {isLoading && (
+            <div className="flex flex-col gap-2" aria-label="Loading backlinks">
+              <div className="h-12 animate-pulse rounded-xl bg-slate-800/60" />
+              <div className="h-12 animate-pulse rounded-xl bg-slate-800/60" />
+            </div>
+          )}
+
+          {error && !isLoading && (
+            <div className="flex items-center justify-between rounded-xl border border-red-700/40 bg-red-900/20 p-3 text-xs text-red-300">
+              <span>{error}</span>
+              <button
+                type="button"
+                onClick={() => void load()}
+                className="rounded-md border border-red-700/60 px-2 py-1 text-red-200 hover:bg-red-900/40"
+              >
+                Retry
+              </button>
+            </div>
+          )}
+
+          {data && !isLoading && !error && (
+            <>
+              {/* Incoming first — Obsidian's primary backlinks UI */}
+              <div>
+                <h3 className="mb-2 text-[11px] font-semibold uppercase tracking-wide text-slate-500">
+                  Notes linking here ({data.incoming.length})
+                </h3>
+                {data.incoming.length === 0 ? (
+                  <p className="text-xs text-slate-500">
+                    No notes link to this one yet.
+                  </p>
+                ) : (
+                  <div className="flex flex-col gap-2">
+                    {data.incoming.map((item) => (
+                      <BacklinkCard
+                        key={`in-${item.note_id}-${item.link_type}`}
+                        item={item}
+                        onClick={(id) => navigate(`/note/${id}`)}
+                      />
+                    ))}
+                  </div>
+                )}
+              </div>
+
+              {data.outgoing.length > 0 && (
+                <div>
+                  <h3 className="mb-2 text-[11px] font-semibold uppercase tracking-wide text-slate-500">
+                    Links from this note ({data.outgoing.length})
+                  </h3>
+                  <div className="flex flex-col gap-2">
+                    {data.outgoing.map((item) => (
+                      <BacklinkCard
+                        key={`out-${item.note_id}-${item.link_type}`}
+                        item={item}
+                        onClick={(id) => navigate(`/note/${id}`)}
+                      />
+                    ))}
+                  </div>
+                </div>
+              )}
+            </>
+          )}
+        </div>
+      )}
+    </section>
   );
 }
 
@@ -438,6 +597,9 @@ export default function NoteDetailPage(): React.ReactElement {
             </div>
           </section>
         )}
+        {/* Backlinks (PR 6.1) — collapsed by default; rendered below similar notes. */}
+        {serverNote && <BacklinksPanel noteId={serverNote.id} />}
+
         {/* Shadow Reader prompt (US-8) — Bug 16 (2026-05-01): auto-renders a
             bottom-sheet when status='asked'; component returns null otherwise.
             The sheet is positioned above the BottomNav so it never overlaps. */}

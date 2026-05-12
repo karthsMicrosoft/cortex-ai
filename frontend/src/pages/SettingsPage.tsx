@@ -10,11 +10,12 @@
  */
 import { useState, type FormEvent } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { ArrowLeft, Settings, Download, Puzzle, Copy } from 'lucide-react';
+import { ArrowLeft, Settings, Download, Puzzle, Copy, LogOut } from 'lucide-react';
 import { PersonalDictionary } from '../components/PersonalDictionary';
 import { ShadowReaderSettings } from '../components/ShadowReaderSettings';
 import { changePassword, mintClipToken } from '../api/auth';
 import { downloadExport } from '../api/export';
+import { useAuthStore } from '../store/authStore';
 
 export default function SettingsPage(): React.ReactElement {
   const navigate = useNavigate();
@@ -43,6 +44,20 @@ export default function SettingsPage(): React.ReactElement {
   const [confirmPassword, setConfirmPassword] = useState('');
   const [passwordSaving, setPasswordSaving] = useState(false);
   const [passwordMessage, setPasswordMessage] = useState<{ kind: 'ok' | 'err'; text: string } | null>(null);
+
+  // ------------------------------------------------------------------ sign-out
+  const signOut = useAuthStore((s) => s.signOut);
+  const [signingOut, setSigningOut] = useState(false);
+
+  async function handleSignOut(): Promise<void> {
+    setSigningOut(true);
+    try {
+      await signOut();
+      navigate('/login', { replace: true });
+    } finally {
+      setSigningOut(false);
+    }
+  }
 
   async function handlePasswordSubmit(e: FormEvent<HTMLFormElement>): Promise<void> {
     e.preventDefault();
@@ -201,6 +216,27 @@ export default function SettingsPage(): React.ReactElement {
             {passwordSaving ? 'Changing…' : 'Change password'}
           </button>
         </form>
+
+        {/* Sign-out — Round 19 / PR A follow-up */}
+        <div className="rounded-2xl border border-slate-800 bg-slate-900 p-4 space-y-3">
+          <div className="flex items-center gap-2">
+            <LogOut className="h-4 w-4 text-rose-400" aria-hidden="true" />
+            <h2 className="text-sm font-semibold text-slate-200">Sign out</h2>
+          </div>
+          <p className="text-xs text-slate-400">
+            Sign out of this device. Your refresh token will be revoked on the
+            server, so other browsers will need to sign in again too.
+          </p>
+          <button
+            type="button"
+            data-testid="settings-sign-out"
+            onClick={() => { void handleSignOut(); }}
+            disabled={signingOut}
+            className="w-full rounded-lg border border-rose-500/40 bg-rose-500/10 py-2 text-sm font-semibold text-rose-300 hover:bg-rose-500/20 disabled:opacity-50"
+          >
+            {signingOut ? 'Signing out…' : 'Sign out'}
+          </button>
+        </div>
 
         {/* Personal Dictionary — US-7 */}
         <PersonalDictionary />

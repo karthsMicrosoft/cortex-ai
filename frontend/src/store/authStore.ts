@@ -1,4 +1,5 @@
 import { create } from 'zustand';
+import { logout as logoutApi } from '../api/auth';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -26,6 +27,13 @@ interface AuthState {
   // Actions
   login: (token: string, user: User) => void;
   logout: () => void;
+  /**
+   * Async sign-out — best-effort backend revoke (POST /api/auth/logout) AND
+   * always clear local auth state. Safe to call from any UI handler; never
+   * throws even if the network call fails (we still want the user signed out
+   * locally).
+   */
+  signOut: () => Promise<void>;
   setAccessToken: (token: string) => void;
   setRestoring: (value: boolean) => void;
   setUser: (user: User) => void;
@@ -45,6 +53,16 @@ export const useAuthStore = create<AuthState>()((set) => ({
   login: (token, user) => set({ accessToken: token, user, isRestoring: false }),
 
   logout: () => set({ accessToken: null, user: null, isRestoring: false }),
+
+  signOut: async () => {
+    try {
+      await logoutApi();
+    } catch {
+      // Best-effort — even if backend revoke fails we still clear local state
+      // (e.g. user is offline, token already expired, etc.)
+    }
+    set({ accessToken: null, user: null, isRestoring: false });
+  },
 
   setAccessToken: (token) => set({ accessToken: token }),
   setRestoring: (value) => set({ isRestoring: value }),

@@ -21,8 +21,8 @@ import sqlalchemy as sa
 from sqlalchemy.dialects import postgresql
 
 
-revision = "010_notes_title_aliases"
-down_revision = "009_note_links_link_type_uniqueness"
+revision = "010_title_aliases"
+down_revision = "009_links_uq"
 branch_labels = None
 depends_on = None
 

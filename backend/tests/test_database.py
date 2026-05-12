@@ -323,7 +323,7 @@ class TestAlembicMigrationFile:
         body = path.read_text(encoding="utf-8")
         assert "def upgrade()" in body
         assert "def downgrade()" in body
-        assert 'down_revision = "009_note_links_link_type_uniqueness"' in body
+        assert 'down_revision = "009_links_uq"' in body
         assert "title" in body and "aliases" in body
         assert "ARRAY" in body
         assert "UPDATE notes SET title" in body

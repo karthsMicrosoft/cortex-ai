@@ -7,14 +7,20 @@ Endpoints:
   POST /api/auth/refresh   → 200 new access_token (reads cookie or body)
   GET  /api/auth/me        → 200 UserOut
 """
+import logging
 import uuid
+from datetime import datetime, timezone
 from typing import Optional
 
 from fastapi import APIRouter, Cookie, Depends, HTTPException, Request, Response, status
+from fastapi.security import HTTPAuthorizationCredentials
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.auth.jwt import (
+    TOKEN_TYPE_ACCESS,
+    TOKEN_TYPE_REFRESH,
+    _bearer_scheme,
     create_access_token,
     create_refresh_token,
     decode_token,
@@ -29,6 +35,7 @@ from app.models.user import User
 from app.schemas.auth import (
     AccessTokenResponse,
     LoginRequest,
+    LogoutRequest,
     PasswordChangeRequest,
     ProfileUpdateRequest,
     RefreshRequest,
@@ -39,6 +46,8 @@ from app.schemas.auth import (
 )
 
 from app.limiter import limiter  # SEC-03 — per-route rate limiting on auth endpoints
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
@@ -200,7 +209,7 @@ async def refresh_token(
 
     # SEC-07: Reject revoked tokens (previous rotation or explicit logout).
     incoming_jti: Optional[str] = payload.get("jti")
-    if incoming_jti and is_jti_revoked(incoming_jti):
+    if incoming_jti and await is_jti_revoked(db, incoming_jti):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Refresh token has been revoked",
@@ -226,7 +235,15 @@ async def refresh_token(
 
     # SEC-07: Revoke the old JTI before issuing the new token (rotation).
     if incoming_jti:
-        revoke_jti(incoming_jti)
+        # The old refresh token's `exp` is what bounds the revocation row's
+        # useful lifetime — past that point it's safe to prune.
+        incoming_exp_ts = payload.get("exp")
+        incoming_exp = (
+            datetime.fromtimestamp(incoming_exp_ts, tz=timezone.utc)
+            if isinstance(incoming_exp_ts, (int, float))
+            else datetime.now(tz=timezone.utc)
+        )
+        await revoke_jti(db, incoming_jti, incoming_exp)
 
     new_access = create_access_token(user_id)
     new_refresh = create_refresh_token(user_id)
@@ -321,26 +338,94 @@ async def change_password(
 
 
 # ---------------------------------------------------------------------------
-# POST /api/auth/logout — clear refresh cookie + revoke its JTI
+# POST /api/auth/logout — revoke access + refresh JTIs and clear the cookie
 # ---------------------------------------------------------------------------
 
 @router.post("/logout", status_code=status.HTTP_204_NO_CONTENT)
 async def logout(
     request: Request,
     response: Response,
+    body: Optional[LogoutRequest] = None,
     refresh_cookie: Optional[str] = Cookie(default=None, alias=_REFRESH_COOKIE_NAME),
+    credentials: Optional[HTTPAuthorizationCredentials] = Depends(_bearer_scheme),
+    db: AsyncSession = Depends(get_db),
 ) -> Response:
-    """Revoke the current refresh token (if any) and clear the cookie.
-    Idempotent — silently succeeds if no cookie is present or the token is
-    already invalid (so a button click never exposes information to attackers)."""
-    if refresh_cookie:
+    """Round 19 / SEC-07 follow-up.
+
+    Behaviour:
+      * Requires a valid, NON-REVOKED access token in the ``Authorization``
+        header (401 otherwise).  We re-decode it here to recover the JTI/exp
+        rather than going through ``get_current_user``, so we don't need to
+        touch the users table.
+      * Revokes the access-token JTI (so a stolen token can't be replayed,
+        and a second logout call with the same token returns 401).
+      * Revokes the refresh-token JTI if a refresh token is supplied via
+        request body OR the ``refresh_token`` cookie.  Malformed refresh
+        tokens are silently skipped — logout from the user's perspective
+        must always succeed (idempotent on missing/bad refresh).
+      * Clears the ``refresh_token`` cookie.
+      * Returns 204 No Content.
+    """
+    if credentials is None:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Not authenticated",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
+    access_payload = decode_token(credentials.credentials)  # 401 on bad sig/expiry
+    if access_payload.get("type") != TOKEN_TYPE_ACCESS:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid token type",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
+    access_jti = access_payload.get("jti")
+    # Reject already-revoked access tokens — calling logout twice with the
+    # same token must 401 the second time (otherwise an attacker who's
+    # already triggered logout can keep silently confirming the JTI is dead).
+    if access_jti and await is_jti_revoked(db, access_jti):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Token has been revoked",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
+    if access_jti:
+        access_exp_ts = access_payload.get("exp")
+        access_exp = (
+            datetime.fromtimestamp(access_exp_ts, tz=timezone.utc)
+            if isinstance(access_exp_ts, (int, float))
+            else datetime.now(tz=timezone.utc)
+        )
+        await revoke_jti(db, access_jti, access_exp)
+
+    # Refresh token: prefer the body field (Round-7 localStorage path), fall
+    # back to the httpOnly cookie.  Both delivery paths are best-effort —
+    # a logout button click must never expose information to attackers.
+    refresh_token_str: Optional[str] = None
+    if body and body.refresh_token:
+        refresh_token_str = body.refresh_token
+    elif refresh_cookie:
+        refresh_token_str = refresh_cookie
+
+    if refresh_token_str:
         try:
-            payload = decode_token(refresh_cookie)
-            jti = payload.get("jti")
-            if jti:
-                revoke_jti(jti)
+            refresh_payload = decode_token(refresh_token_str)
         except HTTPException:
-            pass  # already invalid — idempotent
+            logger.info("logout: ignoring malformed refresh token (idempotent)")
+            refresh_payload = None
+        if refresh_payload is not None and refresh_payload.get("type") == TOKEN_TYPE_REFRESH:
+            r_jti = refresh_payload.get("jti")
+            if r_jti:
+                r_exp_ts = refresh_payload.get("exp")
+                r_exp = (
+                    datetime.fromtimestamp(r_exp_ts, tz=timezone.utc)
+                    if isinstance(r_exp_ts, (int, float))
+                    else datetime.now(tz=timezone.utc)
+                )
+                await revoke_jti(db, r_jti, r_exp)
 
     response.delete_cookie(
         key=_REFRESH_COOKIE_NAME,

@@ -5,6 +5,7 @@ Dependency resolutions (B2):
 - python-jose[cryptography]>=3.5,<4  — CVE-2024-33663/33664 fixed, same API.
 - passlib[bcrypt]>=1.7,<2 + bcrypt>=4.0,<4.1  — avoids __about__ AttributeError.
 """
+import logging
 import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Any
@@ -13,31 +14,101 @@ from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from jose import JWTError, jwt
 from passlib.context import CryptContext
-from sqlalchemy import select
+from sqlalchemy import delete, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
 from app.database import get_db
 
+logger = logging.getLogger(__name__)
+
 # ---------------------------------------------------------------------------
-# SEC-07: Refresh token revocation — in-memory JTI deny set (MVP)
+# SEC-07 / Round 19: Persistent JWT revocation
 #
-# On rotation (/api/auth/refresh) the old JTI is added here so it can never
-# be replayed.  The deny set lives for the lifetime of the process; a restart
-# clears it.  For production hardening, replace with a Redis / DB-backed store
-# with TTL equal to REFRESH_TOKEN_EXPIRE_DAYS (30 days).
+# A two-tier denylist:
+#   * `_revoked_jtis` is an in-memory cache (per-process) consulted first so
+#     hot-path requests don't hit the DB.  It is populated on every revoke
+#     and on every successful DB-hit lookup.
+#   * `revoked_jtis` table (Alembic 011) is the durable store.  Survives
+#     Container App restarts so explicit logout and refresh-rotation
+#     revocations can't be bypassed by waiting for a process recycle.
+#
+# Pruning: rows past their `expires_at` are safe to delete because the JWT
+# signature/expiry check would already reject those tokens.  Call
+# :func:`prune_expired_revoked_jtis` from a scheduled job (future).
 # ---------------------------------------------------------------------------
 _revoked_jtis: set[str] = set()
 
 
-def revoke_jti(jti: str) -> None:
-    """Add *jti* to the in-memory revocation set."""
+async def revoke_jti(db: AsyncSession, jti: str, expires_at: datetime) -> None:
+    """Persist *jti* in the revocation table and the in-memory cache.
+
+    Idempotent — a duplicate revoke for the same JTI is a no-op (we tolerate
+    the IntegrityError raised by the PRIMARY KEY constraint on a race).
+
+    Args:
+        db: Async SQLAlchemy session — typically request-scoped.
+        jti: The token's `jti` claim (uuid4 string).
+        expires_at: The token's `exp` claim (timezone-aware datetime).  Used
+            by the prune job to GC entries whose underlying JWT can no
+            longer be presented.
+    """
     _revoked_jtis.add(jti)
 
+    from app.models.revoked_jti import RevokedJTI  # noqa: PLC0415
 
-def is_jti_revoked(jti: str) -> bool:
-    """Return True if *jti* has been revoked."""
-    return jti in _revoked_jtis
+    # Cheap existence check first — avoids needlessly raising IntegrityError
+    # in the common (idempotent) case.
+    existing = await db.get(RevokedJTI, jti)
+    if existing is not None:
+        return
+
+    db.add(RevokedJTI(jti=jti, expires_at=expires_at))
+    try:
+        await db.flush()
+    except IntegrityError:
+        # Concurrent revoke for the same JTI from another worker — fine,
+        # the cache already reflects the revocation.
+        await db.rollback()
+
+
+async def is_jti_revoked(db: AsyncSession, jti: str) -> bool:
+    """Return True if *jti* has been revoked.
+
+    Fast-path: the in-memory `_revoked_jtis` cache is consulted first.  Only
+    on a cache miss do we hit the DB; a positive DB result is then promoted
+    into the cache so subsequent requests in this process avoid the round
+    trip.
+    """
+    if jti in _revoked_jtis:
+        return True
+
+    from app.models.revoked_jti import RevokedJTI  # noqa: PLC0415
+
+    result = await db.execute(select(RevokedJTI).where(RevokedJTI.jti == jti))
+    row = result.scalar_one_or_none()
+    if row is not None:
+        _revoked_jtis.add(jti)
+        return True
+    return False
+
+
+async def prune_expired_revoked_jtis(db: AsyncSession) -> int:
+    """Delete revoked-JTI rows whose `expires_at` has already passed.
+
+    Returns the number of rows deleted. Safe to run repeatedly — the JWT
+    signature+expiry check already rejects expired tokens, so removing the
+    revocation row does not re-enable replay.
+    """
+    from app.models.revoked_jti import RevokedJTI  # noqa: PLC0415
+
+    now = datetime.now(tz=timezone.utc)
+    result = await db.execute(
+        delete(RevokedJTI).where(RevokedJTI.expires_at < now)
+    )
+    await db.flush()
+    return result.rowcount or 0
 
 # ---------------------------------------------------------------------------
 # Password hashing
@@ -195,6 +266,15 @@ async def _resolve_user_from_credentials(
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid token type",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
+    # SEC-07 / Round 19: reject revoked access tokens (explicit logout, etc.).
+    access_jti = payload.get("jti")
+    if access_jti and await is_jti_revoked(db, access_jti):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Token has been revoked",
             headers={"WWW-Authenticate": "Bearer"},
         )
 

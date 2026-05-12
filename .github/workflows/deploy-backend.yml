@@ -1,5 +1,9 @@
 name: Deploy Backend
 
+concurrency:
+  group: deploy-backend
+  cancel-in-progress: false
+
 on:
   push:
     branches: [main]

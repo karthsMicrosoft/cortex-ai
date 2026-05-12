@@ -37,6 +37,21 @@ export default defineConfig({
             purpose: 'maskable',
           },
         ],
+        // Phase 5 / PR 5.1 — PWA share_target. Lets iOS Safari / Android Chrome
+        // share sheets dispatch text/URL payloads into the installed Cortex
+        // PWA. GET + URL params is the simplest contract; the /share route
+        // (public — auth not required) reads useSearchParams() and either
+        // imports/saves immediately (when authed) or stashes the payload in
+        // IndexedDB and redirects to /login (drain runs on auth).
+        share_target: {
+          action: '/share',
+          method: 'GET',
+          params: {
+            title: 'title',
+            text: 'text',
+            url: 'url',
+          },
+        },
       },
       workbox: {
         clientsClaim: true,

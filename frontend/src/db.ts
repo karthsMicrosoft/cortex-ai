@@ -62,6 +62,23 @@ export interface MetaEntry {
   value: string;
 }
 
+/**
+ * Phase 5 / PR 5.1 — Shared inbox.
+ *
+ * Stores share-target payloads received while the user is logged out. The
+ * SessionGate drains this table once the user authenticates (either via
+ * silent refresh on boot or a fresh login).
+ */
+export interface SharedInboxEntry {
+  /** Auto-incremented by Dexie (++id) */
+  id?: number;
+  title?: string;
+  text?: string;
+  url?: string;
+  /** ISO 8601 timestamp */
+  created_at: string;
+}
+
 // ---------------------------------------------------------------------------
 // CortexDB — Dexie database class
 // ---------------------------------------------------------------------------
@@ -71,6 +88,7 @@ export class CortexDB extends Dexie {
   syncQueue!: Table<SyncQueue, number>;
   deadLetter!: Table<DeadLetter, number>;
   meta!: Table<MetaEntry, string>;
+  shared_inbox!: Table<SharedInboxEntry, number>;
 
   constructor() {
     super('cortex-db');
@@ -88,6 +106,16 @@ export class CortexDB extends Dexie {
       syncQueue: '++id, operation, entityType, timestamp',
       deadLetter: '++id, operation, entityType, timestamp',
       meta: 'key',
+    });
+
+    // v3 (Phase 5 / PR 5.1) adds shared_inbox for the PWA share-target stash.
+    // Schema-only migration — no per-row transform required.
+    this.version(3).stores({
+      notes: 'localId, serverId, sourceType, category, syncStatus, createdAt',
+      syncQueue: '++id, operation, entityType, timestamp',
+      deadLetter: '++id, operation, entityType, timestamp',
+      meta: 'key',
+      shared_inbox: '++id, created_at',
     });
   }
 }

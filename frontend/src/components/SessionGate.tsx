@@ -2,6 +2,7 @@ import { useEffect, type ReactNode } from 'react';
 import { useAuthStore } from '../store/authStore';
 import { refresh, me } from '../api/auth';
 import { syncManager } from '../sync/syncManager';
+import { drain as drainShareInbox } from '../services/shareInbox';
 
 /**
  * SessionGate — runs ONCE at app boot.
@@ -55,9 +56,12 @@ export function SessionGate({ children }: { children: ReactNode }): React.ReactE
 
   // Step 2 — start sync engine whenever we transition to "authenticated".
   // This covers both paths: SessionGate-restored sessions AND fresh logins.
+  // Phase 5 / PR 5.1 also drains any share-target payloads that were stashed
+  // while the user was logged out.
   useEffect(() => {
     if (accessToken) {
       void syncManager.start();
+      void drainShareInbox();
     } else {
       syncManager.stop();
     }

@@ -20,6 +20,7 @@ const NoteDetailPage = lazy(() => import('./pages/NoteDetailPage'));
 const LibraryPage = lazy(() => import('./pages/LibraryPage'));
 const SearchPage = lazy(() => import('./pages/SearchPage'));
 const AskPage = lazy(() => import('./pages/AskPage'));
+const SharePage = lazy(() => import('./pages/SharePage'));
 
 import { BottomNav } from './components/BottomNav';
 import { AppHeader } from './components/AppHeader';
@@ -64,6 +65,10 @@ export default function App(): React.ReactElement {
         {/* Public routes */}
         <Route path="/login" element={<LoginPage />} />
         <Route path="/register" element={<RegisterPage />} />
+        {/* Phase 5 / PR 5.1 — /share is PUBLIC so the OS share sheet can land
+            here whether or not the user is logged in. SharePage stashes the
+            payload + redirects to /login when accessToken is null. */}
+        <Route path="/share" element={<SharePage />} />
 
         {/* Protected routes */}
         <Route

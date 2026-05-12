@@ -42,7 +42,7 @@ def upgrade() -> None:
         ),
     )
     op.execute(
-        "UPDATE notes SET title = COALESCE(NULLIF(summary, ''), substring(content, 1, 60)) "
+        "UPDATE notes SET title = substring(COALESCE(NULLIF(summary, ''), content), 1, 120) "
         "WHERE title IS NULL"
     )
     op.create_index(

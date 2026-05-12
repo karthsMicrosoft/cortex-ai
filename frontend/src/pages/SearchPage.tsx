@@ -157,6 +157,11 @@ export function SearchPage(): React.ReactElement {
                   result.content.length > 200
                     ? `${result.content.slice(0, 200)}…`
                     : result.content;
+                const heading =
+                  result.title ||
+                  result.summary ||
+                  snippet;
+                const showSecondary = Boolean(result.title || result.summary);
 
                 return (
                   <li
@@ -165,7 +170,7 @@ export function SearchPage(): React.ReactElement {
                     onClick={() => navigate(`/note/${result.id}`)}
                     role="listitem"
                     tabIndex={0}
-                    aria-label={`Note: ${snippet}`}
+                    aria-label={`Note: ${heading}`}
                     onKeyDown={(e) => {
                       if (e.key === 'Enter' || e.key === ' ') navigate(`/note/${result.id}`);
                     }}
@@ -190,13 +195,20 @@ export function SearchPage(): React.ReactElement {
                       </time>
                     </div>
 
-                    {/* Snippet */}
-                    <p className="mb-2 text-sm leading-relaxed text-slate-200">{snippet}</p>
+                    {/* Heading — title first, then summary, then snippet fallback */}
+                    <p className="mb-1 text-sm font-semibold leading-snug text-slate-100">
+                      {heading}
+                    </p>
+
+                    {/* Secondary snippet — show full content snippet when a title/summary heading was used */}
+                    {showSecondary && (
+                      <p className="mb-2 text-sm leading-relaxed text-slate-300">{snippet}</p>
+                    )}
 
                     {/* Relevance score */}
                     <div className="flex items-center gap-3 text-xs text-slate-500">
                       <span>Relevance: {(result.combined_score * 100).toFixed(0)}%</span>
-                      {result.summary && (
+                      {result.title && result.summary && (
                         <span className="truncate text-slate-400 italic">{result.summary}</span>
                       )}
                     </div>

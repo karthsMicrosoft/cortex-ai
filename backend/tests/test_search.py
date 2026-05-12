@@ -540,3 +540,123 @@ class TestPERF05FullTextIndex:
             )
         except ImportError:
             pytest.skip("search module not yet implemented")
+
+
+# ---------------------------------------------------------------------------
+# Round 19 - title in search results
+# ---------------------------------------------------------------------------
+
+class TestSearchResultsIncludeTitle:
+    """Round 19: /api/search and /api/search/similar must surface notes.title."""
+
+    def test_search_result_item_schema_has_title(self):
+        from app.schemas.search import SearchResultItem
+        assert "title" in SearchResultItem.model_fields, (
+            "Round 19: SearchResultItem must include a 'title' field"
+        )
+
+    def test_hybrid_sql_selects_title_column(self):
+        import app.api.search as search_module
+        import inspect
+        src = inspect.getsource(search_module)
+        start = src.index("_HYBRID_SQL")
+        end = src.index("@router.post", start)
+        hybrid_sql = src[start:end]
+        assert "n.title" in hybrid_sql, (
+            "Round 19: _HYBRID_SQL must SELECT n.title alongside the other note columns"
+        )
+
+    def test_similar_sql_selects_title_column(self):
+        import app.api.search as search_module
+        import inspect
+        src = inspect.getsource(search_module)
+        start = src.index("_SIMILAR_SQL")
+        end = src.index("@router.get", start)
+        similar_sql = src[start:end]
+        assert "n.title" in similar_sql, (
+            "Round 19: _SIMILAR_SQL must SELECT n.title alongside the other note columns"
+        )
+
+    def test_search_result_item_serializes_title_when_set(self):
+        """SearchResultItem(title='Foo') must round-trip through model_dump."""
+        from app.schemas.search import SearchResultItem
+        item = SearchResultItem(
+            id=uuid.uuid4(),
+            title="Foo",
+            content="body",
+            summary="sum",
+            category="Ideas",
+            created_at=datetime.utcnow(),
+            semantic_score=0.5,
+            text_score=0.2,
+            combined_score=0.41,
+        )
+        dumped = item.model_dump(mode="json")
+        assert dumped.get("title") == "Foo"
+
+    def test_search_result_item_title_null_when_unset(self):
+        """SearchResultItem with no title must serialize as title: null."""
+        from app.schemas.search import SearchResultItem
+        item = SearchResultItem(
+            id=uuid.uuid4(),
+            content="body",
+            summary="sum",
+            category="Ideas",
+            created_at=datetime.utcnow(),
+            semantic_score=0.5,
+            text_score=0.2,
+            combined_score=0.41,
+        )
+        dumped = item.model_dump(mode="json")
+        assert "title" in dumped
+        assert dumped["title"] is None
+
+    async def test_search_endpoint_passes_title_through(self, client, auth_headers):
+        """End-to-end: a mocked DB row with title=Foo must serialize through /api/search."""
+        from unittest.mock import patch as _patch
+        title_value = "Foo"
+        row = MagicMock()
+        row.id = uuid.uuid4()
+        row.title = title_value
+        row.content = "body"
+        row.summary = "sum"
+        row.category = "Ideas"
+        row.created_at = datetime.utcnow()
+        row.semantic_score = 0.5
+        row.text_score = 0.2
+        row.combined_score = 0.41
+
+        mock_embed = AsyncMock(return_value=MagicMock(
+            data=[MagicMock(embedding=FAKE_EMBEDDING)]
+        ))
+
+        # Patch the `db.execute` method on AsyncSession at runtime so auth-path
+        # DB calls keep using the real test session, but the search SQL returns
+        # our mocked row.
+        import app.api.search as search_module
+
+        async def fake_execute_for_search(self, statement, params=None):
+            sql = str(statement)
+            if "combined_score" in sql:
+                return MagicMock(fetchall=MagicMock(return_value=[row]))
+            # Fall through to the original implementation for non-search SQL.
+            return await _orig_execute(self, statement, params)
+
+        from sqlalchemy.ext.asyncio import AsyncSession
+        _orig_execute = AsyncSession.execute
+
+        with _patch("app.api.search.get_openai") as mock_get_openai:
+            mock_client = AsyncMock()
+            mock_client.embeddings.create = mock_embed
+            mock_get_openai.return_value = mock_client
+            with _patch.object(AsyncSession, "execute", fake_execute_for_search):
+                resp = await client.post(
+                    "/api/search",
+                    json={"query": "anything"},
+                    headers=auth_headers,
+                )
+
+        assert resp.status_code == 200, resp.text
+        body = resp.json()
+        assert isinstance(body, list) and len(body) == 1
+        assert body[0].get("title") == title_value

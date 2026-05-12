@@ -100,3 +100,54 @@ describe('api/search — listTags() (P4 / R16 / PR 4.3)', () => {
     expect(tags).toEqual(['mentorship', 'book']);
   });
 });
+
+// ---------------------------------------------------------------------------
+// Round 19 — title field on SearchResult
+// ---------------------------------------------------------------------------
+
+describe('api/search — title field (Round 19)', () => {
+  it('parses title field from /api/search response', async () => {
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      status: 200,
+      json: async () => [
+        {
+          id: 'n1',
+          title: 'My titled note',
+          content: 'body content',
+          summary: 'sum',
+          category: 'Ideas',
+          created_at: '2026-05-01T00:00:00Z',
+          semantic_score: 0.9,
+          text_score: 0.5,
+          combined_score: 0.78,
+        },
+      ],
+    });
+    const results = await search({ query: 'q' });
+    expect(results).toHaveLength(1);
+    expect(results[0].title).toBe('My titled note');
+  });
+
+  it('preserves null title from /api/search response', async () => {
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      status: 200,
+      json: async () => [
+        {
+          id: 'n2',
+          title: null,
+          content: 'body',
+          summary: null,
+          category: 'Ideas',
+          created_at: '2026-05-01T00:00:00Z',
+          semantic_score: 0.9,
+          text_score: 0.5,
+          combined_score: 0.78,
+        },
+      ],
+    });
+    const results = await search({ query: 'q' });
+    expect(results[0].title ?? null).toBeNull();
+  });
+});

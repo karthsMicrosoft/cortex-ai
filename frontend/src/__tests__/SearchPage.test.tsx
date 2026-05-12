@@ -347,4 +347,66 @@ describe('SearchPage (Task 3 / 3.4)', () => {
     expect(matching.length).toBeGreaterThan(0);
     expect(matching.at(-1).category).toBe('Music');
   });
+
+  // ---------------------------------------------------------------------------
+  // Round 19 — title in result cards
+  // ---------------------------------------------------------------------------
+
+  it('result card shows title when set', async () => {
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      json: async () => [
+        {
+          id: 'r1',
+          title: 'Brilliant idea',
+          content: 'long body content with more than enough text',
+          summary: 'short sum',
+          category: 'Ideas',
+          created_at: '2026-05-01T00:00:00Z',
+          semantic_score: 0.9,
+          text_score: 0.5,
+          combined_score: 0.78,
+        },
+      ],
+    });
+    vi.stubGlobal('fetch', mockFetch);
+
+    renderSearchPage();
+    fireEvent.change(screen.getByTestId('search-input'), { target: { value: 'idea' } });
+
+    await waitFor(() => {
+      expect(screen.getByText('Brilliant idea')).toBeInTheDocument();
+    });
+    // Snippet still visible as secondary
+    expect(
+      screen.getByText(/long body content with more than enough text/i),
+    ).toBeInTheDocument();
+  });
+
+  it('result card falls back to snippet when title is null', async () => {
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      json: async () => [
+        {
+          id: 'r2',
+          title: null,
+          content: 'untitled body content here',
+          summary: null,
+          category: 'Ideas',
+          created_at: '2026-05-01T00:00:00Z',
+          semantic_score: 0.9,
+          text_score: 0.5,
+          combined_score: 0.78,
+        },
+      ],
+    });
+    vi.stubGlobal('fetch', mockFetch);
+
+    renderSearchPage();
+    fireEvent.change(screen.getByTestId('search-input'), { target: { value: 'untitled' } });
+
+    await waitFor(() => {
+      expect(screen.getByText(/untitled body content here/i)).toBeInTheDocument();
+    });
+  });
 });

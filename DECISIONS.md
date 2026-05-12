@@ -735,3 +735,42 @@ Phase 3 (spec § 4.2 items 35-40) closed in a single session via 6 PRs (#22-#27)
 
 **Chunking for long sources is the answer to the 50k content cap.** PDFs > 45k chars get split into N notes via `source_parent_id`. RAG citations point at the chunk, not the parent. Brain View (Phase 6) will need to decide how to render parent + chunks — TBD when we get there.
 
+
+
+## § 22ah — Phase 6 closure: Knowledge Graph + Bidirectional Linking (2026-05-11, Round 18)
+
+8 PRs landed (#50-#57). Triple-uniqueness on note_links + ShadowReader scope-fix + title/aliases columns + backlinks API/UI + Brain View polish + manual link creation + title editing + wiki-link [[Title]] parsing & rendering. Closes the 4-feature initiative the user asked for in Round 16.
+
+### Per-PR decisions
+
+**PR 6.0 (#50) — Foundation.** Three concerns in one PR because they're tightly coupled. (a) note_links uniqueness expanded to include link_type so manual + semantic + wiki coexist for the same A->B pair. (b) ShadowReader merge_answer_into_note delete scoped to link_type='semantic' only — manual + wiki survive reflection re-runs. (c) New notes.title (varchar(120)) + notes.aliases (TEXT[]) with backfill from summary or content[:60]. Index on lower(title) for fast wiki resolution.
+
+**PR 6.1 (#54) — Backlinks API + panel.** GET /api/notes/{id}/links returns {outgoing, incoming}. Each item includes link_type so the UI can surface "via wiki / via manual / via semantic" badges. Sort: manual > wiki > semantic priority, then by score desc within semantic. Empty state on incoming only ("No notes link to this one yet"); outgoing empty silently.
+
+**PR 6.2 (#53) — Brain View polish.** 6 polish items: hover tooltip, window resize observer, search/category/date filters with backend filter pass-through (single category + since), per-link_type edge styling (semantic dashed gray 1px, manual blue 2px, wiki purple thick), category color legend. Multi-category filter is intentionally client-side (backend ?category= accepts single). Hover tooltip uses fixed-offset positioning (react-force-graph-2d doesn't surface mouse coords through onNodeHover).
+
+**PR 6.3 (#55) — Manual link create+delete.** Manual-only endpoint (link_type='manual'); other values rejected with 400. Idempotent (200 on duplicate, 201 on insert). Self-link rejected 400. DELETE allowed only for manual link_type; semantic + wiki links are pipeline-managed and can't be hand-deleted (403). LinkPicker uses 300ms debounced search of /api/notes (matching existing search UI debounce convention).
+
+**PR 6.4 (#56) — Title + aliases editing.** Title H1 click-to-edit with Enter-saves / Esc-cancels. Aliases as removable chips with debounced PATCH (500ms). Backend NoteUpdate schema validates title <=120 chars, aliases <=20 entries x <=120 chars each, deduplicates case-insensitively, strips empties. Reuses existing PATCH /api/notes/{id} endpoint.
+
+**PR 6.5 (#57) — Wiki-link parser.** Regex `\[\[([^\]\n]+)\]\]` runs as a NEW pipeline stage AFTER Stage 2 enrichment. Resolves matches by lower(title) OR lower(alias) for the SAME user. Idempotent (ON CONFLICT DO NOTHING via triple-uniqueness from PR 6.0). **Critic-driven decision: ambiguous (>=2 match) refs are unresolved, NOT "pick most recent"** — this would silently mis-link after later notes are created. Self-references are skipped. Failures swallowed in pipeline (log + continue) so a parser bug can't break note enrichment. Frontend WikiContent component splits content on the same regex; resolved refs become Link, unresolved stay as plain [[text]] with tooltip. NoteDetailPage pre-fetches links once on mount and passes preloadedData down to BacklinksPanel + WikiContent (avoids duplicate API calls).
+
+### Cross-cutting decisions
+
+**Two latent bugs surfaced live during alembic migrations** (PRs #51, #52). Both pre-existing constraints we didn't notice in CI: alembic_version.version_num is varchar(32), and notes.title is varchar(120). Tests against SQLite don't exercise these PostgreSQL-specific constraints. Future migrations: keep revision ids short, and any backfill UPDATE that targets a length-bound column should explicitly substring().
+
+**ShadowReader scope-delete preservation** (PR 6.0): the original delete-then-rebuild pattern would have nuked all the manual + wiki links the user added. Scoping the delete to `link_type='semantic'` only preserves user intent across reflection re-runs. Tests assert this explicitly.
+
+**Wiki-link ambiguity** (PR 6.5): rubber-duck critic flagged "pick most recent" as a data-integrity bug. Final decision: ambiguous matches are NEVER auto-linked; left unresolved + counted in `unresolved_titles`. Future UX (Phase 7+) could add a disambiguation popup; for now the user can disambiguate by adding aliases.
+
+**Workspace contention pattern continues to work but is fragile.** 4 incidents across this round; all recovered via stash + branch re-checkout. Should be the last round we do without `git worktree` per agent — file as a process improvement for any future multi-PR initiative.
+
+### The 4-feature initiative — closed
+
+Reference back to DECISIONS § 22af (Phase 4) and § 22ag (Phase 5). Together with this section, the user's Round-16 vision ("the best second brain") is now backed by:
+- NotebookLM-style RAG (Ask page) for AI synthesis with citations
+- Web clipper from share sheet, browser extension, URL paste, or PDF upload
+- Knowledge graph with backlinks + manual links + wiki-links + Brain View visualization
+
+Phase 7 (visual thinking — Heptabase/Milanote) is the only deferred item from the original plan.
+

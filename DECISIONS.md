@@ -774,3 +774,33 @@ Reference back to DECISIONS § 22af (Phase 4) and § 22ag (Phase 5). Together wi
 
 Phase 7 (visual thinking — Heptabase/Milanote) is the only deferred item from the original plan.
 
+
+
+## § 22ai — Round 19: P3 nits combined + logout option (2026-05-12)
+
+5 PRs landed (#60-#64) closing 1 P3 (JTI revocation + /auth/logout) and 4 small follow-up nits flagged in PROGRESS § 17 / § 18. Plus a sign-out option visible in the AppHeader/Settings (user reported it was missing today).
+
+### Per-PR decisions
+
+**PR #60 (C) — Settings extension card + UrlClipForm toast.** Browser Extension card placed BELOW PersonalDictionary + ShadowReader sections (separate from Account); avoids collision with PR A's Account-section sign-out. Token NEVER persisted to localStorage/sessionStorage (lives in component state only). UrlClipForm toast `setTimeout(..., 3000)` with cleanup on unmount.
+
+**PR #61 (B) — Search title display.** Backend `_HYBRID_SQL` + `_SIMILAR_SQL` SELECT add `n.title`. `SearchResultItem` schema gains `title: Optional[str] = None`. Frontend SearchBar + SearchPage use title-first fallback chain (`title || summary || content[:60]`). Existing relevance/tags/category rendering untouched.
+
+**PR #62 (A backend) — Persistent JTI revocation + /auth/logout.** **Two-tier revocation:** in-memory cache (fast path) + DB (persistent across Container App restarts). New `revoked_jtis` table (alembic 011, varchar(64) PK + expires_at index for prune). `revoke_jti` is async + idempotent (ON CONFLICT DO NOTHING). `is_jti_revoked` checks cache first, falls back to DB, promotes hit into cache. `_resolve_user_from_credentials` rejects revoked access tokens with 401. **POST /api/auth/logout** requires valid (non-revoked) access token, revokes BOTH access + refresh JTIs (refresh from body OR cookie), tolerates malformed refresh tokens (idempotent), clears refresh cookie via Set-Cookie expiry, returns 204. Closes the SEC-07 latent gap (in-memory denylist was lost on Container App restart).
+
+**PR #63 (D) — Workflow concurrency.** Both `deploy-backend.yml` and `deploy-frontend.yml` now have `concurrency: { group: deploy-{backend,frontend}, cancel-in-progress: false }`. **`cancel-in-progress: false`** is intentional — we never want to cancel a deploy in flight (could leave the Container App in a bad state). New deploys queue + wait. e2e.yml is left alone (concurrent runs are tolerable for tests).
+
+**PR #64 — UI follow-up for PR A.** Workspace contention during PR #62 dropped the frontend half of PR A. The agent reported "2 commits, pushed" but only the backend commit made the squash. Recovery: AppHeader sign-out icon button (LogOut icon, only visible when logged in), SettingsPage Account-area sign-out card, `authStore.signOut` async action that POSTs `/api/auth/logout` (best-effort) then always clears local state. ProfilePage already had its own sign-out button (predates this round) and works.
+
+### Cross-cutting decisions
+
+**Workspace contention has a real failure mode beyond "agent is slow".** Until this round, the pattern was "agent stashes/recovers + pushes; everything fine". This round PR #62 silently shipped with HALF its scope missing — the agent's report didn't catch it because they thought the second commit was on the branch. Catching this required visual verification post-merge. **Decision for next round: use git worktree per agent** (each agent gets its own working dir; no shared HEAD to contend over). Alternative: a post-merge verification script that diffs the merged squash against the agent's expected file scope.
+
+**Settings page is now organized around 5 cards in a stable order:** Your Data → Account (change-password + sign-out) → Personal Dictionary → Shadow Reader → Browser Extension. Adding cards in the middle was painful in this round (PR A landed Account first, PR C landed Browser Extension separately, PR #64 added the sign-out subsection inside Account). For future Settings additions, prefer to append a new card at the end rather than splitting an existing one.
+
+**Logout button placement:** redundant by design.
+- AppHeader (top-right, visible everywhere) — most discoverable, one-tap.
+- SettingsPage Account section — discoverable for users navigating to Settings.
+- ProfilePage — predates this round; kept for legacy bookmarks.
+All three call into authStore.signOut OR (in ProfilePage's case) the older logoutApi() pattern. Both call the new revocation endpoint.
+

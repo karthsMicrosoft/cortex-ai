@@ -15,7 +15,12 @@ from app.database import Base
 class NoteLink(Base):
     __tablename__ = "note_links"
     __table_args__ = (
-        UniqueConstraint("source_note_id", "target_note_id", name="uq_note_links_pair"),
+        UniqueConstraint(
+            "source_note_id",
+            "target_note_id",
+            "link_type",
+            name="uq_note_links_triple",
+        ),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(

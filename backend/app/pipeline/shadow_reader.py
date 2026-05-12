@@ -217,10 +217,14 @@ async def merge_answer_into_note(note, answer: str, openai_client, db: AsyncSess
     new_embedding = embed_response.data[0].embedding
     note.embedding = new_embedding
 
-    # Delete existing outgoing links so we can re-link with fresh embedding
+    # Delete only semantic outgoing links so user-curated manual/wiki links
+    # survive a reflection re-run (Round 18 rubber-duck fix / PR 6.0).
     try:
         await db.execute(
-            delete(NoteLink).where(NoteLink.source_note_id == note.id)
+            delete(NoteLink).where(
+                NoteLink.source_note_id == note.id,
+                NoteLink.link_type == "semantic",
+            )
         )
     except Exception:  # noqa: BLE001
         pass  # SQLite / mock — skip gracefully

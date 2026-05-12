@@ -2,7 +2,7 @@
 
 > **Open work, bugs not fixed, gaps from "fully done."** Anything tagged P0/P1/P2 here is meant to be picked up by the next agent.
 
-**Last updated:** 2026-05-11 (Round 16: Phase 4 AI Search + Synthesis closed via 10 PRs #29-#41)
+**Last updated:** 2026-05-11 (Round 17: Phase 5 Web Clipper / External Ingest closed via 6 PRs #43-#48)
 
 ---
 

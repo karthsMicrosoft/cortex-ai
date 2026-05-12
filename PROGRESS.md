@@ -2,7 +2,7 @@
 
 > **Chronological log of what's been done.** New work appends to the end. Use this to verify "we already did X" before re-doing.
 
-**Last updated:** 2026-05-11 (Round 16: Phase 4 AI Search + Synthesis closed via 10 PRs #29-#41)
+**Last updated:** 2026-05-11 (Round 17: Phase 5 Web Clipper / External Ingest closed via 6 PRs #43-#48)
 
 ---
 
@@ -928,4 +928,80 @@ Saved screenshots in session `files/`:
 ### Remaining open work
 
 Phase 5 (Web Clipper / External Ingest) and Phase 6 (Knowledge Graph + Bidirectional Linking) per plan.md. Plan unchanged - same scope, same ordering.
+
+
+
+## 17 — Round 17 — Phase 5 Web Clipper / External Ingest (2026-05-11)
+
+User-approved continuation from Round 16. 6 PRs landed (#43-#48) + 1 merge fix. Fully autonomous via /fleet pattern (3 waves: schema -> 3 disjoint backend/frontend -> 2 disjoint UI/extension).
+
+### PRs landed
+
+| PR | Scope | Tests added |
+|---|---|---|
+| #43 | 5.0 source provenance schema (alembic 008: source_url, source_title, source_parent_id) | +6 backend |
+| #44 | 5.1 PWA share_target manifest entry + public /share route + IndexedDB shared_inbox stash + drain on auth | +29 frontend |
+| #45 | 5.2 POST /api/import/url + url_ingest service (full SSRF hardening: private-IP/IMDS/redirect-rebind/content-type/size/timeout) | +53 backend |
+| #46 | 5.4 PDF ingestion via pypdf with paragraph-boundary chunking <=45k chars + parent/child notes via source_parent_id | +15 backend |
+| #47 | 5.3 Clip-from-URL UI (4th tab on Capture page + UrlClipForm component + status-code error mapping) | +25 frontend |
+| #48 | 5.5 Chrome MV3 extension (extension/ folder) + POST /api/auth/clip-token + scope claim on JWT + require_scope dependency | +17 backend, +7 extension |
+| (merge fix) | requirements.txt conflict resolution between PR 5.2 + 5.4 | n/a |
+
+### Live infrastructure changes
+
+- `alembic upgrade head` ran live → migration 008 applied (source_url, source_title, source_parent_id columns + idx_notes_source_parent index).
+- Manifest at `/manifest.json` and `/manifest.webmanifest` now declares `share_target` block (GET method, title/text/url params).
+- `/share` is a public route (auth not required); IndexedDB stash + drain pattern handles unauth shares.
+- New backend endpoints live: `POST /api/import/url` (SSRF-hardened), `POST /api/auth/clip-token` (mints scoped JWT, 30 day TTL).
+- `Authorization: Bearer <clip-token>` now allowed on `POST /api/import/url` + `POST /api/notes` only; rejected on every other route via `require_scope` dependency.
+
+### Live verification (chrome-devtools + curl)
+
+- `GET /manifest.json` → 200 with share_target block ✓
+- `GET /share?text=hello` → 200 (public route accessible without auth) ✓
+- `POST /api/import/url` (no token) → 401 ✓
+- `POST /api/auth/clip-token` (no token) → 401 ✓
+- `GET /api/health` → 200 ✓
+
+### SSRF hardening (PR 5.2)
+
+Per rubber-duck critique: SSRF was first-class scope. Implementation:
+- Scheme allowlist: http, https only.
+- DNS resolution → IPv4+IPv6 IP check; reject if private (10/8, 172.16/12, 192.168/16, 100.64/10), loopback, link-local (incl explicit `169.254.169.254` Azure IMDS), multicast, reserved.
+- Max 3 redirects with IP re-check at every hop (DNS rebinding mitigation).
+- Content-Length cap 5 MB + body-overflow short-circuit.
+- Content-Type allowlist (text/html, application/xhtml+xml).
+- 10s total timeout.
+- Identifying User-Agent.
+- Test coverage includes the IMDS literal address as a dedicated test case.
+
+### Browser extension scope (PR 5.5)
+
+Per rubber-duck critique: NEVER reuse the full session JWT in extension storage. Implementation:
+- New `POST /api/auth/clip-token` mints a 30-day JWT with `scope='clip'` claim.
+- New `require_scope({None, 'clip'})` dependency on `/api/import/url` + `POST /api/notes` allows BOTH full session tokens AND clip tokens.
+- ALL OTHER routes (delete-note, change-password, export, sync-pull, etc.) keep using `get_current_user` which now rejects scoped tokens (returns 403).
+- Extension popup pastes the token once; stores in `chrome.storage.local`; calls `/api/import/url` with `Authorization: Bearer <clip-token>`.
+- Extension is dev-mode-installable via README.
+
+### Workspace contention
+
+3 separate incidents this round (PRs 5.1↔5.4, 5.2↔5.4, 5.3↔5.5). All recovered via `git stash push -u --` with explicit pathspecs + `git diff --stat origin/main...HEAD` verification before push. All 6 PRs merged cleanly with no cross-contamination. Pattern still works but git worktree per agent should be evaluated next round (filed in DECISIONS § 22ag).
+
+### Final state
+
+- Backend: `767 passed` (Round 16 baseline 676 + 91 added across PRs)
+- Frontend: `690 passed, 1 skipped` (Round 16 baseline 636 + 54 added)
+- Extension: `7 passed` (new test surface, vitest + jsdom)
+- TypeScript: clean
+- Live: `GET /api/health` 200; container at PR #48 image
+- E2E nightly cron: still green (last 3 nights)
+
+### Remaining open work after Round 17
+
+Phase 6 (Knowledge Graph + Bidirectional Linking) per session plan.md. Plan unchanged - same 6 PRs, same ordering with foundation PR 6.0 first (note_links triple-uniqueness + ShadowReader scoped delete + title/aliases system).
+
+Plus 2 small follow-up nits:
+1. Settings page should add a "Browser Extension" section that mints + displays clip tokens (frontend-only; backend already shipped).
+2. UrlClipForm "Saved!" toast should auto-dismiss after ~3s.
 

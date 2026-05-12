@@ -231,3 +231,265 @@ async def test_get_links_filters_to_user_notes_only(
     assert str(mine_friend.id) in out_ids
     assert str(foreign.id) not in out_ids
     assert str(foreign.id) not in in_ids
+
+
+# ---------------------------------------------------------------------------
+# PR 6.3 — Manual link creation (POST) + deletion (DELETE)
+# ---------------------------------------------------------------------------
+#
+# Endpoints under test:
+#   POST   /api/notes/{note_id}/links
+#   DELETE /api/notes/{note_id}/links/{link_id}
+#
+# Behaviour summary:
+#   - Only link_type='manual' is allowed via these endpoints.
+#   - POST is idempotent for an existing (source, target, manual) row (200).
+#   - POST inserts return 201; the response carries id/source/target/link_type/
+#     score/created_at; score is null for manual links.
+#   - Self-links rejected with 400.
+#   - Other-user notes (source or target) → 404 (no existence leak).
+#   - DELETE returns 204 and removes only manual rows; semantic/wiki rows
+#     return 403; missing → 404.
+
+async def test_create_manual_link_201(
+    client: AsyncClient,
+    auth_headers: dict,
+    db_session: AsyncSession,
+):
+    """Successful manual link creation returns 201 with the new row."""
+    user_id = await _user_id_from_headers(client, auth_headers)
+    src = await _create_note_for_user(db_session, user_id, content="src")
+    tgt = await _create_note_for_user(db_session, user_id, content="tgt")
+    await db_session.commit()
+
+    resp = await client.post(
+        f"/api/notes/{src.id}/links",
+        headers=auth_headers,
+        json={"target_note_id": str(tgt.id), "link_type": "manual"},
+    )
+    assert resp.status_code == 201, resp.text
+    body = resp.json()
+    assert body["source_note_id"] == str(src.id)
+    assert body["target_note_id"] == str(tgt.id)
+    assert body["link_type"] == "manual"
+    assert body["score"] is None
+    assert "id" in body and body["id"]
+    assert "created_at" in body
+
+
+async def test_create_manual_link_idempotent_200(
+    client: AsyncClient,
+    auth_headers: dict,
+    db_session: AsyncSession,
+):
+    """A repeated POST with the same triple returns 200 + the existing row."""
+    user_id = await _user_id_from_headers(client, auth_headers)
+    src = await _create_note_for_user(db_session, user_id, content="src")
+    tgt = await _create_note_for_user(db_session, user_id, content="tgt")
+    await db_session.commit()
+
+    payload = {"target_note_id": str(tgt.id), "link_type": "manual"}
+    first = await client.post(f"/api/notes/{src.id}/links", headers=auth_headers, json=payload)
+    assert first.status_code == 201, first.text
+    first_id = first.json()["id"]
+
+    second = await client.post(f"/api/notes/{src.id}/links", headers=auth_headers, json=payload)
+    assert second.status_code == 200, second.text
+    assert second.json()["id"] == first_id
+
+
+async def test_create_manual_link_self_400(
+    client: AsyncClient,
+    auth_headers: dict,
+    db_session: AsyncSession,
+):
+    """Self-links (source == target) are rejected with 400."""
+    user_id = await _user_id_from_headers(client, auth_headers)
+    note = await _create_note_for_user(db_session, user_id, content="me")
+    await db_session.commit()
+
+    resp = await client.post(
+        f"/api/notes/{note.id}/links",
+        headers=auth_headers,
+        json={"target_note_id": str(note.id), "link_type": "manual"},
+    )
+    assert resp.status_code == 400, resp.text
+
+
+async def test_create_manual_link_other_user_404(
+    client: AsyncClient,
+    auth_headers: dict,
+    second_user_headers: dict,
+    db_session: AsyncSession,
+):
+    """If source OR target belongs to another user → 404 (no leak)."""
+    user_id = await _user_id_from_headers(client, auth_headers)
+    other_user_id = await _user_id_from_headers(client, second_user_headers)
+
+    mine = await _create_note_for_user(db_session, user_id, content="mine")
+    foreign = await _create_note_for_user(db_session, other_user_id, content="foreign")
+    await db_session.commit()
+
+    # Source mine, target foreign → 404.
+    resp1 = await client.post(
+        f"/api/notes/{mine.id}/links",
+        headers=auth_headers,
+        json={"target_note_id": str(foreign.id), "link_type": "manual"},
+    )
+    assert resp1.status_code == 404, resp1.text
+
+    # Source foreign (not mine) → 404.
+    resp2 = await client.post(
+        f"/api/notes/{foreign.id}/links",
+        headers=auth_headers,
+        json={"target_note_id": str(mine.id), "link_type": "manual"},
+    )
+    assert resp2.status_code == 404, resp2.text
+
+
+async def test_create_manual_link_invalid_type_400(
+    client: AsyncClient,
+    auth_headers: dict,
+    db_session: AsyncSession,
+):
+    """link_type must be 'manual' for this endpoint; 'semantic' → 400."""
+    user_id = await _user_id_from_headers(client, auth_headers)
+    src = await _create_note_for_user(db_session, user_id, content="src")
+    tgt = await _create_note_for_user(db_session, user_id, content="tgt")
+    await db_session.commit()
+
+    resp = await client.post(
+        f"/api/notes/{src.id}/links",
+        headers=auth_headers,
+        json={"target_note_id": str(tgt.id), "link_type": "semantic"},
+    )
+    assert resp.status_code == 400, resp.text
+
+
+async def test_create_manual_link_coexists_with_semantic(
+    client: AsyncClient,
+    auth_headers: dict,
+    db_session: AsyncSession,
+):
+    """Pre-existing (A,B,semantic) must not block POST (A,B,manual)."""
+    user_id = await _user_id_from_headers(client, auth_headers)
+    src = await _create_note_for_user(db_session, user_id, content="src")
+    tgt = await _create_note_for_user(db_session, user_id, content="tgt")
+    db_session.add(
+        NoteLink(
+            source_note_id=src.id,
+            target_note_id=tgt.id,
+            similarity_score=0.42,
+            link_type="semantic",
+        )
+    )
+    await db_session.commit()
+
+    resp = await client.post(
+        f"/api/notes/{src.id}/links",
+        headers=auth_headers,
+        json={"target_note_id": str(tgt.id), "link_type": "manual"},
+    )
+    assert resp.status_code == 201, resp.text
+    body = resp.json()
+    assert body["link_type"] == "manual"
+
+
+async def test_delete_manual_link_204(
+    client: AsyncClient,
+    auth_headers: dict,
+    db_session: AsyncSession,
+):
+    """DELETE on a manual link owned by the user returns 204."""
+    user_id = await _user_id_from_headers(client, auth_headers)
+    src = await _create_note_for_user(db_session, user_id, content="src")
+    tgt = await _create_note_for_user(db_session, user_id, content="tgt")
+    link = NoteLink(
+        source_note_id=src.id,
+        target_note_id=tgt.id,
+        similarity_score=0.0,
+        link_type="manual",
+    )
+    db_session.add(link)
+    await db_session.commit()
+
+    resp = await client.delete(
+        f"/api/notes/{src.id}/links/{link.id}",
+        headers=auth_headers,
+    )
+    assert resp.status_code == 204, resp.text
+
+    # Verify the row is gone via the GET endpoint.
+    list_resp = await client.get(f"/api/notes/{src.id}/links", headers=auth_headers)
+    assert list_resp.status_code == 200
+    assert list_resp.json()["outgoing"] == []
+
+
+async def test_delete_manual_link_404_for_nonexistent(
+    client: AsyncClient,
+    auth_headers: dict,
+    db_session: AsyncSession,
+):
+    """DELETE for a link id that doesn't exist (under an owned note) → 404."""
+    user_id = await _user_id_from_headers(client, auth_headers)
+    src = await _create_note_for_user(db_session, user_id, content="src")
+    await db_session.commit()
+
+    resp = await client.delete(
+        f"/api/notes/{src.id}/links/{uuid.uuid4()}",
+        headers=auth_headers,
+    )
+    assert resp.status_code == 404, resp.text
+
+
+async def test_delete_link_403_for_non_manual(
+    client: AsyncClient,
+    auth_headers: dict,
+    db_session: AsyncSession,
+):
+    """DELETE on a semantic/wiki link returns 403 (only manual is removable here)."""
+    user_id = await _user_id_from_headers(client, auth_headers)
+    src = await _create_note_for_user(db_session, user_id, content="src")
+    tgt = await _create_note_for_user(db_session, user_id, content="tgt")
+    link = NoteLink(
+        source_note_id=src.id,
+        target_note_id=tgt.id,
+        similarity_score=0.7,
+        link_type="semantic",
+    )
+    db_session.add(link)
+    await db_session.commit()
+
+    resp = await client.delete(
+        f"/api/notes/{src.id}/links/{link.id}",
+        headers=auth_headers,
+    )
+    assert resp.status_code == 403, resp.text
+
+
+async def test_delete_link_404_for_other_users_source_note(
+    client: AsyncClient,
+    auth_headers: dict,
+    second_user_headers: dict,
+    db_session: AsyncSession,
+):
+    """Trying to DELETE under a source note that isn't mine → 404 (no leak)."""
+    user_id = await _user_id_from_headers(client, auth_headers)
+    other_user_id = await _user_id_from_headers(client, second_user_headers)
+
+    other_src = await _create_note_for_user(db_session, other_user_id, content="other-src")
+    other_tgt = await _create_note_for_user(db_session, other_user_id, content="other-tgt")
+    link = NoteLink(
+        source_note_id=other_src.id,
+        target_note_id=other_tgt.id,
+        similarity_score=0.0,
+        link_type="manual",
+    )
+    db_session.add(link)
+    await db_session.commit()
+
+    resp = await client.delete(
+        f"/api/notes/{other_src.id}/links/{link.id}",
+        headers=auth_headers,
+    )
+    assert resp.status_code == 404, resp.text

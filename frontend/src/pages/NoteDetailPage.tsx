@@ -1,14 +1,15 @@
 import { useCallback, useEffect, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
-import { ArrowLeft, ChevronDown, ChevronRight, Music, Pencil, Check, X, Trash2 } from 'lucide-react';
+import { ArrowLeft, ChevronDown, ChevronRight, Music, Pencil, Plus, Check, X, Trash2 } from 'lucide-react';
 import { db } from '../db';
 import type { LocalNote } from '../db';
 import { deleteNote, getNote, updateNote } from '../api/notes';
 import type { NoteOut } from '../api/notes';
 import { searchSimilar } from '../api/search';
 import type { SearchResult } from '../api/search';
-import { getNoteLinks } from '../api/links';
+import { deleteLink, getNoteLinks } from '../api/links';
 import type { NoteLinkItem, NoteLinksResponse } from '../api/links';
+import { LinkPicker } from '../components/LinkPicker';
 import { NoteEditor } from '../components/NoteEditor';
 import { ProcessingBadge } from '../components/ProcessingBadge';
 import { MusicPlayer } from '../components/MusicPlayer';
@@ -141,30 +142,50 @@ function _displayLabel(item: NoteLinkItem): string {
 function BacklinkCard({
   item,
   onClick,
+  onRemove,
+  isRemoving,
 }: {
   item: NoteLinkItem;
   onClick: (id: string) => void;
+  onRemove?: () => void;
+  isRemoving?: boolean;
 }): React.ReactElement {
   return (
-    <button
-      type="button"
-      onClick={() => onClick(item.note_id)}
-      className="rounded-xl border border-slate-700 bg-slate-800/40 p-3 text-left transition-colors hover:border-indigo-500/50 focus:outline-none focus:ring-2 focus:ring-indigo-400"
-    >
-      <p className="line-clamp-2 text-sm text-slate-200">{_displayLabel(item)}</p>
-      <div className="mt-1 flex items-center gap-2 text-xs text-slate-500">
-        <span className="rounded bg-slate-700/60 px-1.5 py-0.5 text-[10px] uppercase tracking-wide text-slate-300">
-          via {item.link_type}
-        </span>
-        <span>{item.category}</span>
-        {item.link_type === 'semantic' && item.score !== null && (
-          <>
-            <span>·</span>
-            <span>{(item.score * 100).toFixed(0)}%</span>
-          </>
-        )}
-      </div>
-    </button>
+    <div className="group relative">
+      <button
+        type="button"
+        onClick={() => onClick(item.note_id)}
+        className="w-full rounded-xl border border-slate-700 bg-slate-800/40 p-3 text-left transition-colors hover:border-indigo-500/50 focus:outline-none focus:ring-2 focus:ring-indigo-400"
+      >
+        <p className="line-clamp-2 text-sm text-slate-200">{_displayLabel(item)}</p>
+        <div className="mt-1 flex items-center gap-2 text-xs text-slate-500">
+          <span className="rounded bg-slate-700/60 px-1.5 py-0.5 text-[10px] uppercase tracking-wide text-slate-300">
+            via {item.link_type}
+          </span>
+          <span>{item.category}</span>
+          {item.link_type === 'semantic' && item.score !== null && (
+            <>
+              <span>·</span>
+              <span>{(item.score * 100).toFixed(0)}%</span>
+            </>
+          )}
+        </div>
+      </button>
+      {onRemove && (
+        <button
+          type="button"
+          onClick={(e) => {
+            e.stopPropagation();
+            onRemove();
+          }}
+          disabled={isRemoving}
+          aria-label="Remove manual link"
+          className="absolute right-2 top-2 rounded-md p-1 text-slate-500 hover:bg-slate-700/60 hover:text-red-300 focus:opacity-100 disabled:opacity-50"
+        >
+          <X className="h-3 w-3" aria-hidden="true" />
+        </button>
+      )}
+    </div>
   );
 }
 
@@ -174,6 +195,9 @@ function BacklinksPanel({ noteId }: BacklinksPanelProps): React.ReactElement {
   const [data, setData] = useState<NoteLinksResponse | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [pickerOpen, setPickerOpen] = useState(false);
+  const [removingLinkId, setRemovingLinkId] = useState<string | null>(null);
+  const [removeError, setRemoveError] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     setIsLoading(true);
@@ -196,24 +220,71 @@ function BacklinksPanel({ noteId }: BacklinksPanelProps): React.ReactElement {
     }
   }, [expanded, data, isLoading, load]);
 
+  const handleOpenPicker = useCallback(() => {
+    // Make sure the panel is expanded so the user sees the new link land.
+    if (!expanded) {
+      setExpanded(true);
+      if (data === null && !isLoading) void load();
+    }
+    setPickerOpen(true);
+  }, [expanded, data, isLoading, load]);
+
+  const handleLinkCreated = useCallback(() => {
+    // Refresh the panel so the new manual link appears in outgoing.
+    void load();
+  }, [load]);
+
+  const handleRemove = useCallback(
+    async (item: NoteLinkItem) => {
+      if (!item.link_id || removingLinkId) return;
+      setRemovingLinkId(item.link_id);
+      setRemoveError(null);
+      try {
+        await deleteLink(noteId, item.link_id);
+        await load();
+      } catch (err) {
+        setRemoveError(err instanceof Error ? err.message : 'Could not remove link');
+      } finally {
+        setRemovingLinkId(null);
+      }
+    },
+    [noteId, removingLinkId, load],
+  );
+
   return (
     <section aria-label="Backlinks">
-      <button
-        type="button"
-        onClick={handleToggle}
-        aria-expanded={expanded}
-        className="flex w-full items-center gap-2 text-xs font-semibold uppercase tracking-wide text-slate-400 hover:text-slate-200"
-      >
-        {expanded ? (
-          <ChevronDown className="h-3 w-3" aria-hidden="true" />
-        ) : (
-          <ChevronRight className="h-3 w-3" aria-hidden="true" />
-        )}
-        Backlinks
-      </button>
+      <div className="flex items-center justify-between gap-2">
+        <button
+          type="button"
+          onClick={handleToggle}
+          aria-expanded={expanded}
+          className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wide text-slate-400 hover:text-slate-200"
+        >
+          {expanded ? (
+            <ChevronDown className="h-3 w-3" aria-hidden="true" />
+          ) : (
+            <ChevronRight className="h-3 w-3" aria-hidden="true" />
+          )}
+          Backlinks
+        </button>
+        <button
+          type="button"
+          onClick={handleOpenPicker}
+          className="flex items-center gap-1 rounded-md border border-slate-700 px-2 py-1 text-[11px] text-slate-300 hover:border-indigo-500/60 hover:text-indigo-200"
+        >
+          <Plus className="h-3 w-3" aria-hidden="true" />
+          Link to another note
+        </button>
+      </div>
 
       {expanded && (
         <div className="mt-3 flex flex-col gap-3" data-testid="backlinks-body">
+          {removeError && (
+            <p role="alert" className="text-xs text-red-400">
+              {removeError}
+            </p>
+          )}
+
           {isLoading && (
             <div className="flex flex-col gap-2" aria-label="Loading backlinks">
               <div className="h-12 animate-pulse rounded-xl bg-slate-800/60" />
@@ -249,7 +320,7 @@ function BacklinksPanel({ noteId }: BacklinksPanelProps): React.ReactElement {
                   <div className="flex flex-col gap-2">
                     {data.incoming.map((item) => (
                       <BacklinkCard
-                        key={`in-${item.note_id}-${item.link_type}`}
+                        key={`in-${item.link_id ?? item.note_id}-${item.link_type}`}
                         item={item}
                         onClick={(id) => navigate(`/note/${id}`)}
                       />
@@ -266,9 +337,17 @@ function BacklinksPanel({ noteId }: BacklinksPanelProps): React.ReactElement {
                   <div className="flex flex-col gap-2">
                     {data.outgoing.map((item) => (
                       <BacklinkCard
-                        key={`out-${item.note_id}-${item.link_type}`}
+                        key={`out-${item.link_id ?? item.note_id}-${item.link_type}`}
                         item={item}
                         onClick={(id) => navigate(`/note/${id}`)}
+                        onRemove={
+                          item.link_type === 'manual' && item.link_id
+                            ? () => void handleRemove(item)
+                            : undefined
+                        }
+                        isRemoving={
+                          item.link_id !== null && removingLinkId === item.link_id
+                        }
                       />
                     ))}
                   </div>
@@ -277,6 +356,14 @@ function BacklinksPanel({ noteId }: BacklinksPanelProps): React.ReactElement {
             </>
           )}
         </div>
+      )}
+
+      {pickerOpen && (
+        <LinkPicker
+          sourceNoteId={noteId}
+          onClose={() => setPickerOpen(false)}
+          onCreated={handleLinkCreated}
+        />
       )}
     </section>
   );

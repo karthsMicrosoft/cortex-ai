@@ -67,7 +67,12 @@ TOKEN_TYPE_ACCESS = "access"
 TOKEN_TYPE_REFRESH = "refresh"
 
 
-def _make_token(user_id: uuid.UUID, token_type: str, expires_delta: timedelta) -> str:
+def _make_token(
+    user_id: uuid.UUID,
+    token_type: str,
+    expires_delta: timedelta,
+    scope: str | None = None,
+) -> str:
     now = datetime.now(tz=timezone.utc)
     payload: dict[str, Any] = {
         "sub": str(user_id),
@@ -76,15 +81,36 @@ def _make_token(user_id: uuid.UUID, token_type: str, expires_delta: timedelta) -
         "iat": now,
         "exp": now + expires_delta,
     }
+    # PR 5.5: only include the scope claim when explicitly set, so existing
+    # full-session tokens stay byte-identical to before.
+    if scope is not None:
+        payload["scope"] = scope
     return jwt.encode(payload, settings.JWT_SECRET_KEY, algorithm=ALGORITHM)
 
 
-def create_access_token(user_id: uuid.UUID) -> str:
-    """Return a signed HS256 access JWT valid for 30 minutes."""
+def create_access_token(
+    user_id: uuid.UUID,
+    *,
+    scope: str | None = None,
+    expires_delta: timedelta | None = None,
+) -> str:
+    """Return a signed HS256 access JWT.
+
+    By default the token is valid for ``ACCESS_TOKEN_EXPIRE_MINUTES`` (30 min)
+    and carries no scope claim — i.e. it is a full-session token.
+
+    PR 5.5: pass ``scope="clip"`` (and a custom ``expires_delta``) to mint a
+    limited-capability token for the browser extension. Routes guarded by
+    :func:`require_scope` will accept it; routes guarded by the default
+    :func:`get_current_user` will reject it with 403.
+    """
+    if expires_delta is None:
+        expires_delta = timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
     return _make_token(
         user_id,
         TOKEN_TYPE_ACCESS,
-        timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES),
+        expires_delta,
+        scope=scope,
     )
 
 
@@ -119,13 +145,43 @@ def decode_token(token: str) -> dict[str, Any]:
 _bearer_scheme = HTTPBearer(auto_error=False)
 
 
-async def get_current_user(
-    credentials: HTTPAuthorizationCredentials | None = Depends(_bearer_scheme),
-    db: AsyncSession = Depends(get_db),
-) -> uuid.UUID:
+def verify_scope(token_payload: dict, required_scope: str | None) -> None:
+    """Raise HTTP 403 if *token_payload*'s scope does not satisfy *required_scope*.
+
+    Semantics (PR 5.5):
+      * A token with no ``scope`` claim is a full-session token and may call
+        ANY endpoint, regardless of ``required_scope``.
+      * A token with ``scope == required_scope`` passes.
+      * A token with ``scope`` set to anything else is rejected with 403.
+      * ``required_scope=None`` means "no scope required" — any token passes.
     """
-    Decode the Bearer token and return the authenticated user's UUID.
-    Raises HTTP 401 if the token is missing, invalid, or the user does not exist.
+    token_scope = token_payload.get("scope")
+    if token_scope is None:
+        return  # full session — always allowed
+    if required_scope is None:
+        return  # caller doesn't care about scope
+    if token_scope != required_scope:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=(
+                f"Token scope '{token_scope}' is not permitted on this endpoint "
+                f"(required: '{required_scope}')"
+            ),
+        )
+
+
+async def _resolve_user_from_credentials(
+    credentials: HTTPAuthorizationCredentials | None,
+    db: AsyncSession,
+    allowed_scopes: set[str | None] | None,
+) -> uuid.UUID:
+    """Shared decode + DB-existence check used by both ``get_current_user``
+    and ``require_scope``.
+
+    *allowed_scopes* is a set whose members may include ``None`` (full
+    session) and/or string scope names (e.g. ``"clip"``). When ``None`` is
+    passed for the whole argument, only no-scope tokens are accepted (default
+    ``get_current_user`` behaviour — protects sensitive routes).
     """
     if credentials is None:
         raise HTTPException(
@@ -140,6 +196,19 @@ async def get_current_user(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid token type",
             headers={"WWW-Authenticate": "Bearer"},
+        )
+
+    # PR 5.5: scope check. Default get_current_user ⇒ allowed_scopes={None}.
+    effective_allowed: set[str | None] = (
+        {None} if allowed_scopes is None else allowed_scopes
+    )
+    token_scope = payload.get("scope")
+    if token_scope not in effective_allowed:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=(
+                f"Token scope '{token_scope}' is not permitted on this endpoint"
+            ),
         )
 
     user_id_str: str | None = payload.get("sub")
@@ -171,6 +240,46 @@ async def get_current_user(
         )
 
     return user_id
+
+
+async def get_current_user(
+    credentials: HTTPAuthorizationCredentials | None = Depends(_bearer_scheme),
+    db: AsyncSession = Depends(get_db),
+) -> uuid.UUID:
+    """
+    Decode the Bearer token and return the authenticated user's UUID.
+
+    Raises HTTP 401 if the token is missing, invalid, or the user does not
+    exist; raises HTTP 403 (PR 5.5) if the token carries a ``scope`` claim
+    (i.e. it is a limited-capability extension/clip token, which must not be
+    accepted on full-session-only endpoints).
+    """
+    return await _resolve_user_from_credentials(credentials, db, allowed_scopes=None)
+
+
+def require_scope(allowed_scopes: set[str | None]):
+    """Build a FastAPI dependency that accepts tokens whose ``scope`` claim
+    is in *allowed_scopes* (use ``None`` in the set to also accept full-session
+    tokens).
+
+    Example::
+
+        @router.post("/url")
+        async def import_url(
+            user_id: uuid.UUID = Depends(require_scope({None, "clip"})),
+            ...
+        ): ...
+    """
+
+    async def _dep(
+        credentials: HTTPAuthorizationCredentials | None = Depends(_bearer_scheme),
+        db: AsyncSession = Depends(get_db),
+    ) -> uuid.UUID:
+        return await _resolve_user_from_credentials(
+            credentials, db, allowed_scopes=allowed_scopes
+        )
+
+    return _dep
 
 
 # ---------------------------------------------------------------------------

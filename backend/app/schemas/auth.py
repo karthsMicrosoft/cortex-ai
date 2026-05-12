@@ -69,6 +69,13 @@ class RefreshRequest(BaseModel):
     refresh_token: Optional[str] = None
 
 
+class LogoutRequest(BaseModel):
+    """Body for POST /api/auth/logout. The refresh token is optional —
+    if absent we fall back to the httpOnly `refresh_token` cookie (Round-7
+    localStorage fallback path uses the body)."""
+    refresh_token: Optional[str] = None
+
+
 class UserOut(BaseModel):
     id: uuid.UUID
     email: str

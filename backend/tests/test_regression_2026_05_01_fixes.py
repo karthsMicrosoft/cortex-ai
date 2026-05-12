@@ -217,10 +217,28 @@ async def test_post_password_rejects_short_new_password(
 
 @pytest.mark.asyncio
 async def test_logout_clears_cookie_idempotently(client: AsyncClient):
-    """Logout must succeed even when no refresh cookie is present
-    (idempotent — defends against double-click + already-expired sessions)."""
-    resp1 = await client.post("/api/auth/logout")
+    """Logout must require a valid access token (Round 19 / SEC-07 hardening)
+    but, given a valid token, must succeed even when no refresh cookie is
+    present (idempotent — defends against double-click + already-expired
+    refresh tokens)."""
+    # Without auth: 401 (Round 19 — was 204 before persistent revocation).
+    resp_no_auth = await client.post("/api/auth/logout")
+    assert resp_no_auth.status_code == 401
+
+    # With a fresh access token but no refresh cookie/body: 204 (idempotent).
+    import uuid as _uuid
+    email = f"logout_idem_{_uuid.uuid4().hex[:8]}@example.com"
+    reg = await client.post(
+        "/api/auth/register",
+        json={"email": email, "password": "Pa$$word123", "display_name": "L"},
+    )
+    assert reg.status_code == 201
+    token = reg.json()["access_token"]
+    headers = {"Authorization": f"Bearer {token}"}
+
+    resp1 = await client.post("/api/auth/logout", headers=headers)
     assert resp1.status_code == 204
-    # Second call must also succeed
-    resp2 = await client.post("/api/auth/logout")
-    assert resp2.status_code == 204
+    # Second call with the SAME token must now 401 (the JTI was revoked on
+    # the first call); that's the new contract.
+    resp2 = await client.post("/api/auth/logout", headers=headers)
+    assert resp2.status_code == 401

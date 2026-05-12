@@ -71,14 +71,29 @@ vi.mock('../sync/syncManager', () => ({
 }));
 
 // ---------------------------------------------------------------------------
-// Mock authStore (Zustand hook — called as useAuthStore(selector))
+// Mock importUrl so the URL tab path is testable (Phase 5 / PR 5.3).
 // ---------------------------------------------------------------------------
 
-const _mockCaptureAuthState = { accessToken: 'test-token', user: null };
-const _mockCaptureUseAuthStore = Object.assign(
-  (selector: (s: typeof _mockCaptureAuthState) => unknown) => selector(_mockCaptureAuthState),
-  { getState: () => _mockCaptureAuthState, subscribe: vi.fn(), setState: vi.fn() },
-);
+vi.mock('../api/import', () => ({
+  importUrl: vi.fn(),
+}));
+
+// ---------------------------------------------------------------------------
+// Mock authStore (Zustand hook — called as useAuthStore(selector))
+// Uses vi.hoisted so the factory can safely reference the value when the
+// module is first imported (which now happens transitively via UrlClipForm
+// → api/client → authStore).
+// ---------------------------------------------------------------------------
+
+const { _mockCaptureUseAuthStore } = vi.hoisted(() => {
+  const state = { accessToken: 'test-token', user: null };
+  return {
+    _mockCaptureUseAuthStore: Object.assign(
+      (selector: (s: typeof state) => unknown) => selector(state),
+      { getState: () => state, subscribe: () => () => {}, setState: () => {} },
+    ),
+  };
+});
 vi.mock('../store/authStore', () => ({ useAuthStore: _mockCaptureUseAuthStore }));
 
 // ---------------------------------------------------------------------------
@@ -86,11 +101,25 @@ vi.mock('../store/authStore', () => ({ useAuthStore: _mockCaptureUseAuthStore })
 // ---------------------------------------------------------------------------
 
 import { CapturePage } from '../pages/CapturePage';
+import { Route, Routes } from 'react-router-dom';
+import { importUrl } from '../api/import';
 
 function renderCapturePage() {
   return render(
     <MemoryRouter>
       <CapturePage />
+    </MemoryRouter>,
+  );
+}
+
+function renderCapturePageWithRoutes() {
+  return render(
+    <MemoryRouter initialEntries={['/']}>
+      <Routes>
+        <Route path="/" element={<CapturePage />} />
+        <Route path="/library" element={<div data-testid="library-page">Library</div>} />
+        <Route path="/note/:id" element={<div data-testid="note-page">Note</div>} />
+      </Routes>
     </MemoryRouter>,
   );
 }
@@ -422,6 +451,54 @@ describe('CapturePage (Task 1.4 / 3.2)', () => {
       fireEvent.click(removeBtn);
 
       await waitFor(() => expect(URL.revokeObjectURL).toHaveBeenCalled());
+    });
+  });
+
+  // -----------------------------------------------------------------------
+  // Phase 5 / PR 5.3 — URL tab + Clip-from-URL form
+  // -----------------------------------------------------------------------
+  describe('URL tab (PR 5.3)', () => {
+    it('renders a URL tab control', () => {
+      renderCapturePage();
+      expect(screen.getByRole('button', { name: /^url$/i })).toBeInTheDocument();
+    });
+
+    it('renders Text, Voice, Image, URL tab controls', () => {
+      renderCapturePage();
+      expect(screen.getByRole('button', { name: /^text$/i })).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: /^voice$/i })).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: /^image$/i })).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: /^url$/i })).toBeInTheDocument();
+    });
+
+    it('clicking URL tab shows the UrlClipForm (URL input + Save link button)', () => {
+      renderCapturePage();
+      fireEvent.click(screen.getByRole('button', { name: /^url$/i }));
+      expect(screen.getByLabelText(/url/i)).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: /save link/i })).toBeInTheDocument();
+    });
+
+    it('clicking another tab hides the UrlClipForm', () => {
+      renderCapturePage();
+      fireEvent.click(screen.getByRole('button', { name: /^url$/i }));
+      expect(screen.getByRole('button', { name: /save link/i })).toBeInTheDocument();
+
+      fireEvent.click(screen.getByRole('button', { name: /^text$/i }));
+      expect(screen.queryByRole('button', { name: /save link/i })).toBeNull();
+    });
+
+    it('successful URL clip navigates to /note/:id', async () => {
+      vi.mocked(importUrl).mockResolvedValueOnce({ id: 'note-clip-1' } as never);
+      renderCapturePageWithRoutes();
+      fireEvent.click(screen.getByRole('button', { name: /^url$/i }));
+
+      const urlInput = screen.getByLabelText(/url/i);
+      fireEvent.change(urlInput, { target: { value: 'https://example.com/article' } });
+      fireEvent.click(screen.getByRole('button', { name: /save link/i }));
+
+      await waitFor(() => {
+        expect(screen.getByTestId('note-page')).toBeInTheDocument();
+      });
     });
   });
 });

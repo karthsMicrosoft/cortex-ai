@@ -701,3 +701,37 @@ Phase 3 (spec § 4.2 items 35-40) closed in a single session via 6 PRs (#22-#27)
 
 **Live verification > test-only confidence.** Three of this round's bugs (interval binding, lazy-load, ambiguous-param) only surfaced live, not in CI. The chrome-devtools verification step continues to pay off.
 
+
+
+## § 22ag — Phase 5 closure: Web Clipper / External Ingest (2026-05-11, Round 17)
+
+6 PRs landed (#43-#48) + 1 merge fix. PWA share_target + URL import with full SSRF hardening + PDF ingestion with chunking + Chrome MV3 extension with limited-scope clip token. End-to-end ingest paths from any source (phone share sheet, paste-URL on desktop, browser extension, PDF upload).
+
+### Per-PR decisions
+
+**PR 5.0 (#43) — Source provenance schema.** 3 nullable columns on notes (`source_url`, `source_title`, `source_parent_id`) so Phase 5 PRs can record provenance without a wider data-model rewrite. `source_parent_id` is self-FK with `ondelete='SET NULL'` (orphaning chunks if parent is deleted). Indexed for fast "give me all chunks" lookup.
+
+**PR 5.1 (#44) — PWA share_target.** GET method with URL params (`title`, `text`, `url`) is sufficient for iOS Safari and Android Chrome shares; POST/multipart for files would need extension and is deferred. **Public `/share` route** lets the OS share-sheet land here without auth; payload is stashed in Dexie `shared_inbox` table; `SessionGate` drains the inbox after successful login (single-shot per token transition). Won't lose shares from the install flow.
+
+**PR 5.2 (#45) — URL import endpoint with SSRF hardening.** SSRF is first-class scope per rubber-duck critique. Mitigations enumerated in PROGRESS § 17 above. **Decision:** the canonical hybrid SQL is duplicated inline in `url_ingest.py` rather than refactored out of `search.py` — refactoring at Phase 5's cadence risks breaking unrelated tests. Future cleanup PR should consolidate. Plain text storage only (no HTML rendering = no XSS risk from arbitrary web content).
+
+**PR 5.4 (#46) — PDF ingestion.** `pypdf` for extraction (pure Python; avoids CVE surface of `PyPDF2` C bindings). Paragraph-boundary chunking via `\n\n` split + greedy packing into ≤45000 chars per chunk (under the 50000 content cap); single oversize paragraphs get hard-split. Parent/child notes via `source_parent_id` from PR 5.0. Limits: 20 MB upload, 100 pages, 30 s extraction timeout, reject encrypted. **Decision:** OCR-pdfs (image-only PDFs) are out of scope; text-only PDFs cover MVP. **Decision:** parent note's `content` is the verbatim first chunk (not a synthetic header) — keeps the data simpler; can change later.
+
+**PR 5.3 (#47) — Clip-from-URL UI.** New "URL" tab on Capture page (4-tab layout: Text/Voice/Image/URL). New `UrlClipForm` component reused by `SharePage` indirectly (both call `importUrl()` from `api/import.ts`). Pill-button tabs use `aria-pressed` rather than full ARIA tab pattern (simpler, doesn't break test queries; no arrow-key nav needed for 4 tabs).
+
+**PR 5.5 (#48) — Chrome MV3 extension + scope claim.** Per rubber-duck critique: NEVER reuse the full session JWT in extension storage. New `POST /api/auth/clip-token` mints a 30-day JWT with `scope='clip'` claim. New `require_scope` dependency wired onto exactly 2 routes (`/api/import/url`, `POST /api/notes`). Existing `get_current_user` updated to REJECT scoped tokens (returns 403) — so a clip token CAN'T accidentally call delete-note / change-password / export / sync. Tests assert each forbidden route stays 403.
+
+**Extension token-paste UX:** the user manually pastes the token from the web app into the extension popup once (then the extension stores it in `chrome.storage.local`). Real OAuth flow is overkill for personal MVP; deferred. Settings UI to mint+display the token is a small follow-up frontend PR (filed as nit in PROGRESS § 17).
+
+### Cross-cutting decisions
+
+**Workspace contention pattern is fragile but reliable.** Three contention incidents this round (PRs 5.1↔5.4, 5.2↔5.4, 5.3↔5.5). All recovered via stash + branch re-checkout. Final diff verification (`git diff --stat origin/main...HEAD`) caught any residue. Decision: continue with the pattern through Phase 6, but evaluate `git worktree` per agent if Phase 6's foundation PR (alembic 009 + 010) hits contention.
+
+**Backend deploy serialization.** Container Apps' `ContainerAppOperationInProgress` race didn't hit this round because PR 5.0 deployed solo; subsequent merges queued at >3 min spacing naturally due to PR review pauses. Filed nit in DECISIONS § 22ae still applies.
+
+**Migration 008 ran manually.** Per DECISIONS § 22ab, alembic doesn't auto-run in CI (TTY constraint). Manual `az containerapp exec --command "alembic upgrade head"` ran cleanly post-deploy. Pattern works.
+
+**No new `source_type` enum value.** All clipped/imported content uses `source_type='text'` with provenance in `source_url`. Avoids a TypeScript union schema sweep + frontend rendering branch — the existing UI just sees the new field but doesn't have to handle a new variant.
+
+**Chunking for long sources is the answer to the 50k content cap.** PDFs > 45k chars get split into N notes via `source_parent_id`. RAG citations point at the chunk, not the parent. Brain View (Phase 6) will need to decide how to render parent + chunks — TBD when we get there.
+

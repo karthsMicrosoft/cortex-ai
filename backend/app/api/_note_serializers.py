@@ -40,6 +40,13 @@ def _note_to_out(note: Note) -> NoteOut:
         shadow_reader_status=note.shadow_reader_status or "pending",
         shadow_reader_questions=note.shadow_reader_questions,
         shadow_reader_answer=note.shadow_reader_answer,
+        # Phase 5 / PR 5.0 — Source provenance (scaffold).
+        source_url=getattr(note, "source_url", None),
+        source_title=getattr(note, "source_title", None),
+        source_parent_id=getattr(note, "source_parent_id", None),
+        # Phase 6 / PR 6.0 — Title + aliases (used by wiki-style linking).
+        title=getattr(note, "title", None),
+        aliases=list(getattr(note, "aliases", []) or []),
         created_at=note.created_at,
         updated_at=note.updated_at,
     )

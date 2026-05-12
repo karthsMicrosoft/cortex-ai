@@ -68,6 +68,9 @@ export interface NoteUpdate {
   music_metadata?: Record<string, unknown>;
   image_url?: string;
   audio_url?: string;
+  // Phase 6 / PR 6.4 — Title + aliases editing.
+  title?: string | null;
+  aliases?: string[];
 }
 
 export interface NotesListResponse {

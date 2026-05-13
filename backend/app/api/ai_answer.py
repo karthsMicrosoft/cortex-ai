@@ -29,6 +29,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.auth.jwt import get_current_user
 from app.database import get_db
 from app.limiter import limiter
+from app.observability.cost_metrics import emit_llm_cost
 from app.schemas.ai_answer import (
     AnswerCitation,
     AnswerFilters,
@@ -124,6 +125,16 @@ async def _retrieve_notes(
         input=query,
     )
     query_embedding: list[float] = emb_response.data[0].embedding
+
+    # Emit cost metric for embedding call (no completion tokens).
+    emb_usage = getattr(emb_response, "usage", None)
+    emb_prompt_tokens = int(getattr(emb_usage, "prompt_tokens", 0) or 0)
+    await emit_llm_cost(
+        model=EMBEDDING_MODEL,
+        prompt_tokens=emb_prompt_tokens,
+        completion_tokens=0,
+        route="/api/ai/answer:embed",
+    )
     embedding_str = "[" + ",".join(str(x) for x in query_embedding) + "]"
 
     params: dict[str, Any] = {
@@ -259,6 +270,13 @@ async def _call_openai_with_retry(
                 max_tokens=600,
                 temperature=0.3,
             )
+            usage = getattr(response, "usage", None)
+            await emit_llm_cost(
+                model=MODEL_NAME,
+                prompt_tokens=int(getattr(usage, "prompt_tokens", 0) or 0),
+                completion_tokens=int(getattr(usage, "completion_tokens", 0) or 0),
+                route="/api/ai/answer",
+            )
             return (response.choices[0].message.content or "").strip()
         except Exception as exc:  # noqa: BLE001
             last_exc = exc
@@ -309,15 +327,37 @@ async def _stream_openai_tokens(
         max_tokens=600,
         temperature=0.3,
         stream=True,
+        stream_options={"include_usage": True},
     )
+    prompt_tokens = 0
+    completion_tokens = 0
     async for chunk in stream:
+        # Final chunk under stream_options.include_usage carries `usage`
+        # and an empty `choices` list — capture it for the cost metric.
+        chunk_usage = getattr(chunk, "usage", None)
+        if chunk_usage is not None:
+            prompt_tokens = int(getattr(chunk_usage, "prompt_tokens", 0) or 0)
+            completion_tokens = int(
+                getattr(chunk_usage, "completion_tokens", 0) or 0
+            )
+
+        text_piece = None
         try:
-            delta = chunk.choices[0].delta
-            text_piece = getattr(delta, "content", None)
+            choices = getattr(chunk, "choices", None) or []
+            if choices:
+                delta = choices[0].delta
+                text_piece = getattr(delta, "content", None)
         except (AttributeError, IndexError):
             text_piece = None
         if text_piece:
             yield text_piece
+
+    await emit_llm_cost(
+        model=MODEL_NAME,
+        prompt_tokens=prompt_tokens,
+        completion_tokens=completion_tokens,
+        route="/api/ai/answer",
+    )
 
 
 async def _streaming_answer(

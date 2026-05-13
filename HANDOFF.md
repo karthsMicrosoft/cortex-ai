@@ -93,7 +93,9 @@ az containerapp secret list --name cortexks-api --resource-group cortex-rg --sho
 | **P4** | Phase 7 — Visual thinking (Heptabase / Milanote canvas with note cards + drawn arrows). Acknowledged in Round 16 plan; deferred. Will get its own audit when prioritized. | session `plan.md` |
 | **P3** | ~~JTI revocation in Redis or DB table (in-memory now; lost on Container App restart)~~ ✅ Round 19 (2026-05-12) — alembic 011 revoked_jtis table + two-tier (cache + DB) revoke; persists across restarts | `KNOWN_ISSUES.md` § "JTI revocation" |
 | **P3** | ~~`/api/auth/logout` server-side revoke (currently client-only)~~ ✅ Round 19 (2026-05-12) — POST /api/auth/logout requires auth, revokes both access + refresh JTIs; logout button now visible in AppHeader + Settings + Profile | `KNOWN_ISSUES.md` § "/auth/logout" |
-| **P4** | KMS-grade rotation for `JWT_SECRET_KEY`, strict CSP header, observability gaps | `PLAN.md` § 6 P4 |
+| **P4** | ~~Strict CSP header~~ ✅ Round 20 (2026-05-13) — PR #69: backend `default-src 'none'`, frontend strict policy with API-origin connect-src allowlist + `frame-ancestors 'none'` + `upgrade-insecure-requests` + Permissions-Policy. Closes the localStorage XSS-readability gap from § 22v. | `DECISIONS.md` § 22aj |
+| **P4** | ~~Observability gaps (App Insights traces, custom RAG cost metrics)~~ ✅ Round 20 (2026-05-13) — 3 PRs (#66-#68): App Insights tracing wired, RAG cost counters emit on every LLM call, Workbook + cost-rate alert runbook. App Insights env var live. | `PROGRESS.md` § 20 + `docs/observability.md` |
+| **P4** | KMS-grade rotation for `JWT_SECRET_KEY` | `PLAN.md` § 6 P4 |
 
 ### 3c. To redeploy from scratch
 

@@ -111,7 +111,11 @@ export function ShadowReaderPrompt({ noteId, onComplete }: Props): React.ReactEl
       scheduleNext();
     };
 
-    scheduleNext();
+    // PERF-N2: Fire the first poll immediately (setTimeout(0) rather than the
+    // tier delay) so the user doesn't wait 2s before the first check. Uses
+    // setTimeout(…,0) instead of a bare void call so fake-timer test mocks
+    // can drain the microtask queue deterministically.
+    timerId = setTimeout(() => { void runPoll(); }, 0);
 
     return () => {
       cancelled = true;

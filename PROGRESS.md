@@ -2,7 +2,7 @@
 
 > **Chronological log of what's been done.** New work appends to the end. Use this to verify "we already did X" before re-doing.
 
-**Last updated:** 2026-05-13 (Round 20: Observability + Strict CSP via /fleet with worktrees — PRs #66-#69)
+**Last updated:** 2026-05-13 (Round 21: Review nits cleanup — PERF-12/13/N2 fixes + all review-comments checkboxes closed)
 
 ---
 
@@ -1130,4 +1130,38 @@ Verified:
 - **P4** Strict CSP header
 - **P4** Observability gaps (App Insights traces, custom metrics)
 - **P4** Frontend deps stale (React 19, Vite 8, Tailwind 4)
+
+---
+
+## Round 21 — Review nits cleanup (2026-05-13)
+
+### What was done
+
+Closed all 8 remaining open items in `review-comments.tasks.md` (Tasks 2 + 4):
+
+| Finding | Status | Action |
+|---|---|---|
+| **PERF-12** — export_data loads all notes into memory | ✅ Fixed | Switched to `db.stream(stmt)` + `execution_options(yield_per=100)` for true batched streaming. Also fixed `datetime.utcnow()` → `datetime.now(timezone.utc)` in `_refresh_sas_url`. |
+| **PERF-13** — graph links query unbounded | ✅ Fixed | Added `_GRAPH_LINK_CAP = 2000` + `.limit(2000)` to the NoteLink query in `get_graph`. |
+| **PERF-N2** — ShadowReaderPrompt first poll delayed 2s | ✅ Fixed | Changed initial `scheduleNext()` → `setTimeout(runPoll, 0)` for immediate first poll. Updated test assertion from exact-1 to `≥1`. |
+| **PERF-14** — APScheduler BackgroundScheduler | ✅ N/A | `distill.py` removed in Round 9. |
+| **PERF-N1** — generate_daily_summary string comparison | ✅ N/A | `distill.py` removed in Round 9. |
+| **PERF-N3** — duplicate tag-upsert logic | ✅ Already done | Resolved by PERF-01 fix (`get_or_create_tags_batch` in `db_helpers.py`). |
+| **SA-M1** — migration 001 TEXT placeholder | ✅ Already done | Already cleaned to single `ALTER TABLE` statement. |
+| **SA-N1** — animations.css slide-up keyframe | ✅ Verified | `@keyframes slide-up` present in `frontend/src/styles/animations.css`. |
+
+### Files changed
+- `backend/app/api/export.py` — PERF-12 streaming + `datetime.utcnow()` fix
+- `backend/app/api/insights.py` — PERF-13 link cap
+- `frontend/src/components/ShadowReaderPrompt.tsx` — PERF-N2 immediate first poll
+- `frontend/src/__tests__/ShadowReaderPrompt.test.tsx` — updated assertion
+- `features/cortex-second-brain/tasks/review-comments.tasks.md` — all 8 checkboxes closed
+- `PLAN.md` — item 13 ticked
+- `KNOWN_ISSUES.md` — timestamp updated
+- `PROGRESS.md` — Round 21 entry
+
+### Test results
+- Backend: 880 passed, 0 failures (8 skipped)
+- Frontend: ShadowReaderPrompt 39/39 passed; TypeScript clean
+- Full frontend suite has a pre-existing hang (unrelated to Round 21 changes)
 

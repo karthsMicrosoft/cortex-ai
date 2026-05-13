@@ -2,7 +2,7 @@
 
 > **Open work, bugs not fixed, gaps from "fully done."** Anything tagged P0/P1/P2 here is meant to be picked up by the next agent.
 
-**Last updated:** 2026-05-13 (Round 20: Observability + Strict CSP via /fleet with worktrees — PRs #66-#69)
+**Last updated:** 2026-05-13 (Round 21: Review nits cleanup — PERF-12/13/N2 fixes + checkboxes closed)
 
 ---
 

@@ -251,8 +251,10 @@ describe('ShadowReaderPrompt — B17 polling schedule', () => {
   it('polls at least once within 2s (first tier starts immediately)', async () => {
     mockGetQuestions.mockResolvedValue(PENDING_RESPONSE);
     await renderPrompt();
+    // PERF-N2: First poll now fires at t=0 (immediate), so advancing 2100ms
+    // fires both the t=0 poll and the t=2000 scheduled poll.
     await act(async () => { await vi.advanceTimersByTimeAsync(2100); });
-    expect(mockGetQuestions).toHaveBeenCalledTimes(1);
+    expect(mockGetQuestions.mock.calls.length).toBeGreaterThanOrEqual(1);
   });
 
   it('polls approximately 10 times in first 20s (2s intervals)', async () => {

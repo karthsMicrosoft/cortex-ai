@@ -84,7 +84,7 @@ def _refresh_sas_url(url: str | None) -> str | None:
             logger.warning("export: cannot re-sign SAS URL — missing account credentials")
             return url
 
-        expiry = _dt.datetime.utcnow() + _dt.timedelta(hours=1)
+        expiry = _dt.datetime.now(_dt.timezone.utc) + _dt.timedelta(hours=1)
         sas_token = generate_blob_sas(
             account_name=account_name,
             container_name=container_name,
@@ -150,33 +150,34 @@ async def export_data(
     Uses streaming so large exports (thousands of notes) don't OOM the
     container before the client receives anything.
     """
-    notes_result = await db.execute(
+    # PERF-12: Stream notes in batches via execution_options(yield_per=…)
+    # instead of loading all notes into memory before streaming.
+    stmt = (
         select(Note)
         .options(selectinload(Note.tags))
         .where(Note.user_id == current_user_id)
         .order_by(Note.created_at.asc())
+        .execution_options(yield_per=100)
     )
-    notes = list(notes_result.scalars().all())
 
     exported_at = _dt.datetime.now(_dt.timezone.utc).isoformat().replace("+00:00", "Z")
 
     async def _stream() -> AsyncGenerator[bytes, None]:
         import json as _json
         yield b'{"exported_at":"' + exported_at.encode() + b'","notes":['
-        for i, note in enumerate(notes):
+        note_count = 0
+        result = await db.stream(stmt)
+        async for note in result.scalars():
             chunk = _json.dumps(_serialise_note(note), ensure_ascii=False)
-            if i > 0:
+            if note_count > 0:
                 yield b"," + chunk.encode("utf-8")
             else:
                 yield chunk.encode("utf-8")
+            note_count += 1
         # summaries[] retained as an empty array for back-compat; the
         # daily/weekly summary feature was removed 2026-05-06.
         yield b'],"summaries":[]}'
-
-    logger.info(
-        "export: user_id=%s notes=%d",
-        current_user_id, len(notes),
-    )
+        logger.info("export: user_id=%s notes=%d", current_user_id, note_count)
 
     return StreamingResponse(
         _stream(),

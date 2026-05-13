@@ -135,3 +135,10 @@ app.include_router(users_router,          prefix="/api/users",         tags=["us
 app.include_router(import_url_router,     prefix="/api/import",        tags=["import"])
 app.include_router(clip_token_router,     prefix="/api/auth",          tags=["auth"])
 app.include_router(note_links_router,     prefix="/api/notes",         tags=["note_links"])
+
+# --- Observability (Round 20 / PR alpha) ---
+# Initialize Azure Monitor / Application Insights tracing. No-ops silently if
+# APPLICATIONINSIGHTS_CONNECTION_STRING is unset (local dev, tests).
+from app.observability.tracing import init_tracing  # noqa: E402
+
+init_tracing(app)

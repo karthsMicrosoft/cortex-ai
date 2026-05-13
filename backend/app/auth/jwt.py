@@ -319,6 +319,16 @@ async def _resolve_user_from_credentials(
             headers={"WWW-Authenticate": "Bearer"},
         )
 
+    # Round 20 / PR alpha — enrich the current trace span with a hashed user
+    # id so authenticated requests are correlatable in App Insights without
+    # leaking raw UUIDs. Best-effort; swallows all exceptions.
+    try:
+        from app.observability.tracing import add_user_id_hash_to_span  # noqa: PLC0415
+
+        add_user_id_hash_to_span(user_id)
+    except Exception:  # noqa: BLE001
+        pass
+
     return user_id
 
 

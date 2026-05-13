@@ -2,7 +2,7 @@
 
 > **Open work, bugs not fixed, gaps from "fully done."** Anything tagged P0/P1/P2 here is meant to be picked up by the next agent.
 
-**Last updated:** 2026-05-12 (Round 19: P3 nits combined — JTI revocation + /auth/logout + sign-out UI + extension settings + searchbar title + workflow concurrency via PRs #60-#64)
+**Last updated:** 2026-05-13 (Round 20: Observability + Strict CSP via /fleet with worktrees — PRs #66-#69)
 
 ---
 

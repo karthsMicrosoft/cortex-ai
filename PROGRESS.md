@@ -2,7 +2,7 @@
 
 > **Chronological log of what's been done.** New work appends to the end. Use this to verify "we already did X" before re-doing.
 
-**Last updated:** 2026-05-12 (Round 19: P3 nits combined — JTI revocation + /auth/logout + sign-out UI + extension settings + searchbar title + workflow concurrency via PRs #60-#64)
+**Last updated:** 2026-05-13 (Round 20: Observability + Strict CSP via /fleet with worktrees — PRs #66-#69)
 
 ---
 

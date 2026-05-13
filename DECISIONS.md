@@ -806,3 +806,35 @@ Phase 7 (visual thinking — Heptabase/Milanote) is the only deferred item from 
 - ProfilePage — predates this round; kept for legacy bookmarks.
 All three call into authStore.signOut OR (in ProfilePage's case) the older logoutApi() pattern. Both call the new revocation endpoint.
 
+
+
+## § 22aj — Round 20: Observability + Strict CSP (2026-05-13)
+
+4 PRs landed via /fleet (#66-#69). Worktree-per-agent pattern adopted as the default for parallel fleet work.
+
+### Per-PR decisions
+
+**PR alpha (#66) — App Insights tracing.** Chose `azure-monitor-opentelemetry` (Microsoft-supported, autoinstruments FastAPI + httpx + asyncpg) over the older `opencensus-ext-azure`. `init_tracing(app)` is no-op without `APPLICATIONINSIGHTS_CONNECTION_STRING` so local dev + tests don't depend on Azure. Idempotent. Exception-safe. `add_user_id_hash_to_span` uses 16-char SHA-256 prefix (privacy-respecting; no PII in spans). Wrapped in try/except so telemetry NEVER breaks the request — explicit non-goal in this round.
+
+**PR beta (#67) — RAG cost metrics.** Three OTel counters per LLM call: `cortex.rag.cost_usd_estimate` (USD), `cortex.rag.prompt_tokens`, `cortex.rag.completion_tokens`. All dimensioned by `{model, route}`. Pricing table in code (constants) so updates are explicit + reviewable. `_compute_cost` returns 0.0 for unknown models + logs warning (silent failure mode). Streaming path uses `stream_options={"include_usage": True}` to get the usage stats in the final SSE chunk.
+
+**PR gamma (#68) — Workbook + cost-rate alert.** Workbook JSON template committed to `infra/observability/`; runbook in `docs/observability.md` documents the manual `az portal workbook create` import + the cost-rate alert (>0.50 USD/hr threshold; routed to existing `cortex-alerts-ag` from Round 13). Threshold of 0.50 USD/hr = ~12 USD/day = 360 USD/mo — well above expected single-user usage of <5 USD/mo, so this catches genuinely runaway cost without false positives. KQL queries use App Insights `customMetrics` table with the cortex.rag.* metric names from PR beta.
+
+**PR delta (#69) — Strict CSP.** Two-tier policy:
+- **Backend** (`/api/*` routes): `default-src 'none'; frame-ancestors 'none'`. The backend serves only JSON; lock down everything. Plus `X-Content-Type-Options: nosniff` + `Referrer-Policy: no-referrer`.
+- **Frontend** (SWA-served SPA assets): pragmatic strict policy that allows `script-src 'self' 'wasm-unsafe-eval'` (Vite bundles + wavesurfer audio decoder), `style-src 'self' 'unsafe-inline'` (Tailwind + React inline animations — pragmatic MVP choice), `img-src` allows Azure Blob hostnames, `connect-src` allowlists ONLY the API origin (https + wss for WebSocket), `frame-ancestors 'none'`, `upgrade-insecure-requests`.
+
+`Permissions-Policy: camera=(self), microphone=(self), geolocation=()` adds defense-in-depth: only the SWA origin can request camera/mic, geolocation entirely blocked.
+
+**Closes the localStorage XSS-readability gap from § 22v** by blocking inline scripts. An XSS payload now cannot execute inline JS; it would need to load an external script from an allowlisted origin (only `'self'`), making the existing JTI-revocation defense + 1-use refresh-token rotation actually strong.
+
+### Cross-cutting decisions
+
+**Worktree-per-agent is now the default fleet pattern.** Round 19 saw 8 workspace-contention incidents across the previous 3 rounds; one of them silently shipped a half-broken PR (#62 frontend lost). Round 20: 0 contention incidents because each of the 4 agents created `..\cortex-pr<id>` worktrees. Adoption is explicit in the agent prompt template now. Cost: tiny (one extra command at start, one cleanup at end). Benefit: massive (no silent partial-PR shipping).
+
+**Telemetry never breaks the request.** Every observability code path (tracing init, span enrichment, metric emit) is wrapped in try/except. `init_tracing` returns False instead of raising. `emit_llm_cost` swallows + logs at debug. The product behavior is unchanged whether App Insights is configured, available, or broken.
+
+**No frontend telemetry yet.** This round is backend-only (per the recommendation scope). Frontend Web Vitals + JS error reporting could be a future PR (small, ~1 day) if the product needs it. App Insights JS SDK + the existing connection string would be the integration.
+
+**No backend in-process metrics aggregation.** OTel SDK exports to Azure Monitor every 60s by default. We don't aggregate/cache locally; that adds memory + complexity for negligible gain on a single-user app. If multi-user scale requires it, OTel has built-in views.
+

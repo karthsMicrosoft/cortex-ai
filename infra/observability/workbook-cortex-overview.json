@@ -1,0 +1,195 @@
+{
+  "version": "Notebook/1.0",
+  "items": [
+    {
+      "type": 1,
+      "content": {
+        "json": "# Cortex — Operations Overview\n\nLive operational dashboard for the **cortexks** stack. Data sources:\n- **Application Insights** (`cortexks-ai`) — requests, traces, custom metrics emitted by the FastAPI backend.\n- **Container App** (`cortexks-api`) — replica restart count metric.\n\nCustom metric reference: `cortex.rag.cost_usd_estimate` is emitted per `/api/ai/answer` call by the RAG pipeline (see PR beta / Round 20)."
+      },
+      "name": "header"
+    },
+    {
+      "type": 1,
+      "content": {
+        "json": "## 💰 Today's RAG cost (USD, last 24h)"
+      },
+      "name": "section-cost"
+    },
+    {
+      "type": 3,
+      "content": {
+        "version": "KqlItem/1.0",
+        "query": "customMetrics\n| where timestamp > ago(24h)\n| where name == \"cortex.rag.cost_usd_estimate\"\n| summarize cost_usd = sum(value)",
+        "size": 3,
+        "title": "Total RAG cost — last 24h",
+        "queryType": 0,
+        "resourceType": "microsoft.insights/components",
+        "visualization": "tiles",
+        "tileSettings": {
+          "showBorder": false,
+          "titleContent": {
+            "columnMatch": "cost_usd",
+            "formatter": 1
+          },
+          "leftContent": {
+            "columnMatch": "cost_usd",
+            "formatter": 12,
+            "formatOptions": {
+              "palette": "auto"
+            },
+            "numberFormat": {
+              "unit": 0,
+              "options": {
+                "style": "currency",
+                "currency": "USD",
+                "maximumFractionDigits": 4
+              }
+            }
+          }
+        }
+      },
+      "name": "kql-cost-today"
+    },
+    {
+      "type": 1,
+      "content": {
+        "json": "## 🔝 Top 10 costliest queries (last 24h)\n\nGrouped by `route` + `model` from the `customDimensions` of `cortex.rag.cost_usd_estimate`."
+      },
+      "name": "section-top-queries"
+    },
+    {
+      "type": 3,
+      "content": {
+        "version": "KqlItem/1.0",
+        "query": "customMetrics\n| where timestamp > ago(24h)\n| where name == \"cortex.rag.cost_usd_estimate\"\n| extend route = tostring(customDimensions.route), model = tostring(customDimensions.model)\n| summarize total_cost_usd = sum(value), call_count = count() by route, model\n| order by total_cost_usd desc\n| take 10",
+        "size": 0,
+        "title": "Top 10 costliest (route, model) pairs",
+        "queryType": 0,
+        "resourceType": "microsoft.insights/components",
+        "visualization": "table",
+        "gridSettings": {
+          "formatters": [
+            {
+              "columnMatch": "total_cost_usd",
+              "formatter": 8,
+              "formatOptions": {
+                "palette": "redGreen"
+              },
+              "numberFormat": {
+                "unit": 0,
+                "options": {
+                  "style": "currency",
+                  "currency": "USD",
+                  "maximumFractionDigits": 6
+                }
+              }
+            }
+          ]
+        }
+      },
+      "name": "kql-top-queries"
+    },
+    {
+      "type": 1,
+      "content": {
+        "json": "## 🚨 Error rate per route (last 6h)\n\n5xx-or-greater responses as a percentage of total requests, grouped by route name."
+      },
+      "name": "section-errors"
+    },
+    {
+      "type": 3,
+      "content": {
+        "version": "KqlItem/1.0",
+        "query": "requests\n| where timestamp > ago(6h)\n| summarize total = count(), errors = countif(toint(resultCode) >= 500) by name\n| extend error_rate_pct = round(100.0 * errors / total, 2)\n| order by error_rate_pct desc",
+        "size": 0,
+        "title": "5xx error rate by route — last 6h",
+        "queryType": 0,
+        "resourceType": "microsoft.insights/components",
+        "visualization": "table",
+        "gridSettings": {
+          "formatters": [
+            {
+              "columnMatch": "error_rate_pct",
+              "formatter": 8,
+              "formatOptions": {
+                "palette": "redGreen",
+                "min": 0,
+                "max": 100
+              },
+              "numberFormat": {
+                "unit": 1,
+                "options": {
+                  "style": "decimal",
+                  "maximumFractionDigits": 2
+                }
+              }
+            }
+          ]
+        }
+      },
+      "name": "kql-error-rate"
+    },
+    {
+      "type": 1,
+      "content": {
+        "json": "## ⏱️ p95 latency per route (last 6h)\n\nTop 20 routes by call count. p50 and p95 of `requests.duration` in milliseconds."
+      },
+      "name": "section-latency"
+    },
+    {
+      "type": 3,
+      "content": {
+        "version": "KqlItem/1.0",
+        "query": "requests\n| where timestamp > ago(6h)\n| summarize p95_ms = percentile(duration, 95), p50_ms = percentile(duration, 50), call_count = count() by name\n| order by call_count desc\n| take 20",
+        "size": 0,
+        "title": "p50 / p95 latency by route — last 6h",
+        "queryType": 0,
+        "resourceType": "microsoft.insights/components",
+        "visualization": "table",
+        "gridSettings": {
+          "formatters": [
+            {
+              "columnMatch": "p95_ms",
+              "formatter": 8,
+              "formatOptions": {
+                "palette": "yellowOrangeRed"
+              }
+            }
+          ]
+        }
+      },
+      "name": "kql-latency-p95"
+    },
+    {
+      "type": 1,
+      "content": {
+        "json": "## 🔁 Replica restart count (last 24h)\n\nContainer App replica restart count over the last 24 hours. Spikes indicate liveness-probe failures or OOMs.\n\n*Note:* this tile expects the workbook to be opened with the Container App resource selected as a secondary scope, OR the resource pinned via the parameter below."
+      },
+      "name": "section-restarts"
+    },
+    {
+      "type": 3,
+      "content": {
+        "version": "KqlItem/1.0",
+        "query": "InsightsMetrics\n| where TimeGenerated > ago(24h)\n| where Name == \"RestartCount\"\n| summarize restarts = max(Val) by bin(TimeGenerated, 30m)\n| render timechart",
+        "size": 0,
+        "title": "Replica restart count — last 24h",
+        "queryType": 0,
+        "resourceType": "microsoft.insights/components",
+        "visualization": "timechart"
+      },
+      "name": "kql-restarts"
+    },
+    {
+      "type": 1,
+      "content": {
+        "json": "---\n\n_Workbook source: `infra/observability/workbook-cortex-overview.json` — see `docs/observability.md` for deploy + alert-wiring instructions._"
+      },
+      "name": "footer"
+    }
+  ],
+  "fallbackResourceIds": [
+    "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/cortex-rg/providers/microsoft.insights/components/cortexks-ai"
+  ],
+  "$schema": "https://github.com/Microsoft/Application-Insights-Workbooks/blob/master/schema/workbook.json"
+}

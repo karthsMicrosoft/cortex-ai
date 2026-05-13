@@ -30,6 +30,7 @@ from app.database import get_db
 from app.models.note import Note
 from app.models.note_link import NoteLink
 from app.models.user import User
+from app.observability.cost_metrics import emit_llm_cost
 from app.services.openai_client import get_openai
 
 logger = logging.getLogger(__name__)
@@ -241,6 +242,14 @@ async def get_patterns(
         response_format={"type": "json_object"},
     )
 
+    usage = getattr(response, "usage", None)
+    await emit_llm_cost(
+        model="gpt-4o-mini",
+        prompt_tokens=int(getattr(usage, "prompt_tokens", 0) or 0),
+        completion_tokens=int(getattr(usage, "completion_tokens", 0) or 0),
+        route="/api/insights/patterns",
+    )
+
     raw = response.choices[0].message.content or "{}"
     try:
         data = json.loads(raw)
@@ -368,6 +377,14 @@ async def generate_express(
         temperature=0.8,
     )
     generated_text = (response.choices[0].message.content or "").strip()
+
+    usage = getattr(response, "usage", None)
+    await emit_llm_cost(
+        model="gpt-4o-mini",
+        prompt_tokens=int(getattr(usage, "prompt_tokens", 0) or 0),
+        completion_tokens=int(getattr(usage, "completion_tokens", 0) or 0),
+        route="/api/ai/generate",
+    )
 
     logger.info(
         "express_generate: user_id=%s kind=%s notes=%d",

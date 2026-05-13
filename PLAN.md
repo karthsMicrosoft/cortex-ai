@@ -2,7 +2,7 @@
 
 > **Living document.** Captures what we're building, what's done, what's next. Update as work progresses.
 
-**Last updated:** 2026-05-04 (rounds 1–8 closed; user-confirmed working through bug 27)
+**Last updated:** 2026-05-13 (Phases 1-6 complete + P3 nits + Round 20 Observability + Strict CSP — see PROGRESS.md § 15-20)
 
 ---
 
@@ -65,33 +65,67 @@ Per spec § 2.1. Currently deployed in **`centralus`** with OpenAI in **`eastus`
 | 38-39 | PR #24 — CapturePage preview-before-upload, client-side resize ≤2048px / 5MB JPEG, "Uploading…" spinner + error toast; backend `/api/upload` 415/413 tests; OCR placeholder for empty `READ` results |
 | 40 | PR #25 lazy-load route splitting (-58 KB raw / -13 KB gzip main bundle, 6 new chunks) + PR #26 E2E Playwright runner + nightly cron workflow (17/17 passing against live) + PR #27 Shadow Reader voice answer (FR-8.4) |
 
-> Phase 3 closed 2026-05-08. See PROGRESS.md § 15 for details.
+### Phase 4 — AI Search & Synthesis (Round 16, NotebookLM-style RAG) ✅ DONE (2026-05-11)
+| Item | Shipped via |
+|---|---|
+| RAG endpoint `POST /api/ai/answer` with citations | PR #33 (merged via #34) |
+| Ask UI page `/ask` + 5th BottomNav tab + clickable citation chips | PR #35 |
+| Search filter sidebar (category + tags + date, URL-shareable) | PR #36 |
+| NDJSON streaming via `fetch()` + `ReadableStream` (NOT EventSource — bearer auth) | PR #39 |
+| Multi-turn conversation with sessionStorage persistence | PR #40 |
+| 75-note seed dataset for `karths@microsoft.com` + embedding backfill | PR #30 + #41 |
+
+> Phase 4 closed 2026-05-11. See PROGRESS.md § 16.
+
+### Phase 5 — Web Clipper / External Ingest (Round 17) ✅ DONE (2026-05-11)
+| Item | Shipped via |
+|---|---|
+| Source provenance schema (alembic 008: `source_url`, `source_title`, `source_parent_id`) | PR #43 |
+| PWA `share_target` manifest entry + public `/share` route + IndexedDB stash + drain-on-auth | PR #44 |
+| `POST /api/import/url` with full SSRF hardening (IMDS block, redirect re-check, content-type allowlist) | PR #45 |
+| PDF ingestion via `pypdf` with paragraph-boundary chunking + parent/child notes | PR #46 |
+| Clip-from-URL UI on Capture page (4th tab) | PR #47 |
+| Chrome MV3 extension (`extension/`) + `POST /api/auth/clip-token` (limited-scope JWT) | PR #48 |
+
+> Phase 5 closed 2026-05-11. See PROGRESS.md § 17.
+
+### Phase 6 — Knowledge Graph + Bidirectional Linking (Round 18) ✅ DONE (2026-05-11)
+| Item | Shipped via |
+|---|---|
+| Foundation: `note_links` triple-uniqueness (semantic + manual + wiki coexist) + ShadowReader scoped delete + `notes.title` + `notes.aliases[]` (alembic 009 + 010) | PR #50 (+ #51, #52 follow-ups for alembic varchar fixes) |
+| `GET /api/notes/{id}/links` + Backlinks panel on NoteDetailPage | PR #54 |
+| Brain View polish: hover tooltip, resize observer, search/category/date filters, per-link_type edge styling | PR #53 |
+| `POST /api/notes/{id}/links` manual link + `DELETE /api/notes/{id}/links/{link_id}` + LinkPicker autocomplete modal | PR #55 |
+| Title + aliases editing on NoteDetailPage (H1 click-to-edit, debounced PATCH for aliases) | PR #56 |
+| Wiki-link `[[Title]]` parsing pipeline stage + clickable `WikiContent` renderer + `backfill_wiki_links.py` | PR #57 |
+
+> Phase 6 closed 2026-05-11. **Closes the 4-feature initiative the user proposed in Round 16.** See PROGRESS.md § 18.
+
+> Phase 7 (visual canvas — Heptabase / Milanote-style) is acknowledged but deferred. No audit yet.
 
 ---
 
-## 4 — Status snapshot
+## 4 — Status snapshot (refreshed 2026-05-13)
 
-| Phase | Status | Notes |
+| Phase / Round | Status | Notes |
 |---|---|---|
-| Workforce Phase 1 — Requirements | ✅ Done | 23 stories, COMPLEX assessment |
-| Workforce Phase 2 — Design + Research | ✅ Done | 9 user stories; 9 OQs from research, all resolved in Round 2 |
-| Workforce Phase 3 — Critique | ✅ Done | 17 BLOCKING + 6 CONCERN + 3 NIT — ALL RESOLVED |
-| Workforce Phase 4 — Coding (TDD) | ✅ Done | 7 coding sub-phases (us-1..us-9, with us-6/7/9 in parallel) |
-| Workforce Phase 5 — Review | ✅ Done | 4 reviewers (security, performance, quality, spec-auditor) Round 1 → 32 above-threshold items → Round 2 PASSED |
-| Backend tests local | ⚠️ 263 pass / 30 fail (test-side flakes) | See KNOWN_ISSUES |
-| Frontend tests local | ✅ 276/277 pass (1 unrelated mock-isolation bug) | See KNOWN_ISSUES |
-| Deploy Phase 1 to Azure | ✅ Done | All resources live, migrations applied, health-check 200 |
-| Browser smoke test (auth flow) | ✅ Auto-login fixed and deployed | Register → me() race fixed; SW skipWaiting + clientsClaim |
-| Browser smoke test (full pipeline) | ⏳ Not yet validated end-to-end | Pick this up — see § 5 |
-| Round 1 — Live UX bug-bash | ✅ 4 production bugs fixed + AI pipeline unblock | See PROGRESS § Round 1 |
-| Round 2 — UX-tester findings | ✅ ISSUE-03 + ISSUE-04 fixed; voice 500→422 | See PROGRESS § Round 2 |
-| Round 3 — User functional bug-bash | ✅ 10/11 fixed + 1 schema bonus; P1.1 (scheduler) deferred | See PROGRESS § Round 3 |
-| Round 4 — Voice-P0 + delete-500 + image-tag + Shadow-Reader revert | ✅ 5 bugs fixed and deployed; 14 regression tests added | See PROGRESS § Round 4 |
-| Bug 17 — Different browsers showed different data for same user | ✅ syncManager `lastPull` seed = epoch on first boot + auto-migrate | See PROGRESS § Bug 17 |
-| Round 5 — Refresh logout, delete-sync, mobile voice, voice duplicate | ✅ 4 bugs fixed via parallel coder + tester agents; alembic 006 (note_deletions tombstone) deployed | See PROGRESS § Round 5 |
-| Round 6 — Refresh-logout #2, mobile voice #2, library categories, voice cut at first pause | ✅ B24 (spread-order in pullChanges) + B25 (continuous recognition) confirmed by user. B22 + B23 still failed despite credentials fix → addressed in Round 7 | See PROGRESS § Round 6 |
-| Round 7 — Refresh-logout root cause (Edge cookie blocking) + mobile voice WS skip | ✅ HAR analysis confirmed third-party cookie blocked by Edge tracking-prevention. Moved refresh token to localStorage + JSON body (SEC-02 reversed). Skipped WS on mobile UA. P1 follow-up: revert to first-party cookie when custom domain or SWA Standard SKU is in place | See PROGRESS § Round 7 |
-| Round 8 — Mobile recording silent failure + cross-browser audio playback | ✅ B26: `recorder.start(isMobile ? 1000 : 250)` so iOS Safari emits chunks mid-stream; visible error on upload failure; mobile no longer shows degraded toast. B27: backend transcodes incoming audio to MP4/AAC at upload time via existing ffmpeg; one-time migration script converts existing webm blobs | See PROGRESS § Round 8 |
+| Workforce Phases 1-5 (Requirements → Review) | ✅ Done | See PROGRESS.md § 1 |
+| **Phase 1 MVP** (items 1-21) | ✅ Done | All US-1..US-9 shipped + deployed |
+| **Phase 2** (Insights + Personal Dictionary + Shadow Reader, items 22-34) | ✅ Done | See PROGRESS.md |
+| **Phase 3** (Music + Express + Polish, items 35-40) | ✅ Round 15 (2026-05-08) | See PROGRESS.md § 15 |
+| **Phase 4** (AI Search & Synthesis — NotebookLM-style RAG) | ✅ Round 16 (2026-05-11) | See PROGRESS.md § 16 |
+| **Phase 5** (Web Clipper / External Ingest) | ✅ Round 17 (2026-05-11) | See PROGRESS.md § 17 |
+| **Phase 6** (Knowledge Graph + Bidirectional Linking) | ✅ Round 18 (2026-05-11) | See PROGRESS.md § 18 — **closes the 4-feature initiative** |
+| **Round 19** (P3 nits + sign-out option + JTI revocation) | ✅ 2026-05-12 | See PROGRESS.md § 19 |
+| **Round 20** (Observability + Strict CSP) | ✅ 2026-05-13 | See PROGRESS.md § 20 |
+| Backend tests | ✅ ~861 passing / 0 failing | Round 20 baseline |
+| Frontend tests | ✅ ~767 passing / 0 failing | Round 20 baseline |
+| Extension tests | ✅ 7 passing | New surface from PR #48 |
+| TypeScript | ✅ Clean | |
+| E2E nightly cron | ✅ Green | Last 3 nights |
+| Live `/api/health` | ✅ 200 | At PR #66 image |
+| App Insights tracing + cost metrics | ✅ Live (Round 20) | OTel SDK initialized; metrics flowing |
+| Strict CSP (backend + SWA) | ✅ Live (Round 20) | Verified via curl + chrome-devtools no-violation |
 
 ---
 
@@ -165,11 +199,18 @@ End-to-end happy path to validate before declaring "done":
 10. ~~Items 37-40 from spec § 4.2 — Express UI polish, Settings export, image-capture UI, E2E + perf optimization.~~ ✅ Closed via 6 PRs (#22-#27). See § 3 above and PROGRESS.md § 15.
 
 ### P4 — Production hardening
-11. Move JTI revocation from in-memory set to Redis or DB table (SEC-07 follow-up — currently in-memory means revocations are lost on Container App restart).
-12. Add `/api/auth/logout` endpoint that revokes current refresh JTI (defense-in-depth).
+11. ~~Move JTI revocation from in-memory set to Redis or DB table (SEC-07 follow-up)~~ ✅ Round 19 (2026-05-12) — alembic 011 `revoked_jtis` table + two-tier (cache + DB) revoke; persists across Container App restarts.
+12. ~~Add `/api/auth/logout` endpoint that revokes current refresh JTI~~ ✅ Round 19 (2026-05-12) — POST /api/auth/logout revokes both access + refresh JTIs; logout button visible in AppHeader + Settings + Profile.
 13. Address remaining 20 LOW/NIT review findings noted in `review-comments.tasks.md` Tasks 1-3.
 14. Bootstrap proper KMS-grade key rotation for JWT_SECRET_KEY (90-day rotation).
 15. Migrate frontend dependencies forward (React 19, Vite 8, Tailwind 4 — Researcher flagged these as 1-3 majors stale; decision to defer was design-justified at the time).
+16. ~~Strict CSP header~~ ✅ Round 20 (2026-05-13) — backend `default-src 'none'`, frontend strict policy with API-origin connect-src + Permissions-Policy.
+17. ~~Observability gaps (App Insights traces, custom RAG cost metrics)~~ ✅ Round 20 (2026-05-13) — OTel autoinstrumentation + 3 cost counters + Workbook + cost-rate alert runbook.
+18. **Phase 7 — Visual thinking canvas** (Heptabase / Milanote-style: freeform canvas with note cards + drawn arrows + grouping). Acknowledged in Round 16 plan; deferred. Will get its own audit when prioritized.
+
+### Open ops follow-ups (post-Round 20, user-runs)
+- Import the workbook JSON into App Insights via `az portal workbook create` (commands in `docs/observability.md`).
+- Wire the cost-rate alert (>0.50 USD/hr → cortex-alerts-ag) via `az monitor metrics alert create`.
 
 ---
 

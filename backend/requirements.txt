@@ -22,3 +22,8 @@ pypdf>=4.0,<7
 readability-lxml==0.8.*
 lxml>=4.9,<6
 beautifulsoup4>=4.12,<5
+# --- Observability (Round 20 / PR alpha) ---
+# Azure Monitor OpenTelemetry distro: autoinstruments FastAPI, httpx, asyncpg.
+# No-ops at runtime if APPLICATIONINSIGHTS_CONNECTION_STRING is unset.
+azure-monitor-opentelemetry>=1.6,<2
+opentelemetry-instrumentation-fastapi>=0.48b0

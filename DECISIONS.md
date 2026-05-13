@@ -384,6 +384,8 @@ az containerapp exec --name cortexks-api --resource-group cortex-rg \
 
 **P1 follow-up:** track in `KNOWN_ISSUES.md` "Migrate refresh token to first-party cookies" — once a custom domain is set up (both SWA and Container App under the same eTLD+1) or SWA Standard SKU is approved ($9/month, gives a linked-backend reverse-proxy), revert to cookie-only delivery.
 
+**Round 20 / PR delta — strict CSP closes the XSS surface.** A strict Content-Security-Policy now ships on both the SWA-served SPA assets (`frontend/public/staticwebapp.config.json` `globalHeaders`) and the FastAPI backend (`backend/app/middleware/csp.py`, `default-src 'none'; frame-ancestors 'none'`). The SPA policy uses `script-src 'self' 'wasm-unsafe-eval'` with no `'unsafe-inline'` and a tight `connect-src` allowlist for the API origin, which largely closes the XSS gap that made the localStorage trade-off uncomfortable: an attacker can no longer inject a `<script>` tag or remote-load arbitrary JS to read `cortex_refresh`.
+
 **Test contract change:** `backend/tests/test_auth.py` `TestRefreshTokenInBody` (renamed from `TestRefreshTokenNotInBody`) now asserts the Round-7 contract.
 
 ### 22w — Skip WebSocket streaming on mobile UA (Round 7 / Bug 23)

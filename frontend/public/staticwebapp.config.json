@@ -9,8 +9,10 @@
     }
   },
   "globalHeaders": {
+    "Content-Security-Policy": "default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https://cortexksblob.blob.core.windows.net https://*.blob.core.windows.net; connect-src 'self' https://cortexks-api.wonderfulpond-177bdc9c.centralus.azurecontainerapps.io wss://cortexks-api.wonderfulpond-177bdc9c.centralus.azurecontainerapps.io; font-src 'self' data:; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'; upgrade-insecure-requests",
     "X-Content-Type-Options": "nosniff",
     "X-Frame-Options": "DENY",
-    "Permissions-Policy": "microphone=(self), camera=(self)"
+    "Referrer-Policy": "strict-origin-when-cross-origin",
+    "Permissions-Policy": "camera=(self), microphone=(self), geolocation=()"
   }
 }

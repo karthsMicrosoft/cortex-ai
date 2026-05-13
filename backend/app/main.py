@@ -84,6 +84,13 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# --- CSP (Round 20 / PR delta) ---
+# Lock all backend responses to default-src 'none'; frame-ancestors 'none'.
+# Backend serves only JSON — no scripts, no embeds, no frames. This closes
+# the XSS surface flagged in DECISIONS § 22v (refresh token in localStorage).
+from app.middleware.csp import StrictCspMiddleware  # noqa: E402
+app.add_middleware(StrictCspMiddleware)
+
 
 # ---------------------------------------------------------------------------
 # Health check

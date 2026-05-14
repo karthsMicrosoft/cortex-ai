@@ -213,8 +213,8 @@ End-to-end happy path to validate before declaring "done":
 18. **Phase 7 — Visual thinking canvas** (Heptabase / Milanote-style: freeform canvas with note cards + drawn arrows + grouping). Acknowledged in Round 16 plan; deferred. Will get its own audit when prioritized.
 
 ### Open ops follow-ups (post-Round 20, user-runs)
-- Import the workbook JSON into App Insights via `az portal workbook create` (commands in `docs/observability.md`).
-- Wire the cost-rate alert (>0.50 USD/hr → cortex-alerts-ag) via `az monitor metrics alert create`.
+- ~~Import the workbook JSON into App Insights via `az portal workbook create`~~ ✅ Done 2026-05-14 (Round 23).
+- ~~Wire the cost-rate alert (>0.50 USD/hr → cortex-alerts-ag) via `az monitor metrics alert create`~~ ✅ Done 2026-05-14 (Round 23).
 
 ---
 

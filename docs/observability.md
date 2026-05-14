@@ -9,6 +9,8 @@ alerts already documented in [`docs/DEPLOYMENT.md`](./DEPLOYMENT.md).
 
 ## Workbook: Cortex — Operations Overview
 
+> **Status: LIVE** — deployed 2026-05-14 (Round 23) as `616a9790-ef54-58b1-a75e-36e5d589b96c` in `cortex-rg`.
+
 Source-of-truth template: [`infra/observability/workbook-cortex-overview.json`](../infra/observability/workbook-cortex-overview.json).
 
 ### What it shows
@@ -72,6 +74,8 @@ upserts when `--name` matches an existing GUID. Alternatively use
 ---
 
 ## RAG cost-rate metric alert
+
+> **Status: LIVE** — deployed 2026-05-14 (Round 23). Created with `skipMetricValidation` since the custom metric has not yet been ingested; alert will activate once `cortex.rag.cost_usd_estimate` data flows.
 
 Fires when the RAG pipeline burns through more than **$0.50 USD/hour** of model spend
 (custom metric `cortex.rag.cost_usd_estimate`). At $0.50/hr sustained that's ~$12/day

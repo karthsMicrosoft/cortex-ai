@@ -189,7 +189,7 @@ End-to-end happy path to validate before declaring "done":
 4. ~~Move APScheduler distill cron OUT of Container App into Container Apps Job~~ ✅ **Removed entirely 2026-05-06 (Round 9)** — daily/weekly summary functionality dropped per user product decision; alembic 007 dropped the table; UI cards gone.
 5. ~~Wire GitHub Actions secrets so push-to-main auto-deploys (currently workflows exist but secrets are empty).~~ ✅ Done 2026-05-06 (Round 11) — OIDC-federated `cortex-github-actions` AAD app + 7 repo secrets; both workflows green on push and `workflow_dispatch`. Caveat: alembic migrations stay manual (no TTY in CI for `az containerapp exec`).
 6. ~~Set up Azure Budget alerts (`$100` warning, `$140` critical) per `docs/DEPLOYMENT.md`.~~ ✅ Done 2026-05-05 — `cortex-monthly` budget on `cortex-rg`, $150/mo, three thresholds (67% Actual / 93% Actual / 100% Forecasted) → karths@microsoft.com.
-7. Set up Log Analytics alert on the B12 log-scrubber metric for any leaked tokens.
+7. ~~Set up Log Analytics alert on the B12 log-scrubber metric for any leaked tokens.~~ ✅ Done 2026-05-14 (Round 22) — scheduled-query alert `cortexks-leaked-token-alert` on `ContainerAppConsoleLogs_CL` for un-scrubbed `token=ey` patterns; routes to `cortex-alerts-ag`. See `docs/log-alert-leaked-tokens.md`.
 
 ### P2 — Test debt
 8. Triage the 30 backend test failures: per-failure determine real bug vs test-side flake. Update tests or code accordingly. Goal: ≥95% pass rate. See `KNOWN_ISSUES.md` § "Test failures".

@@ -141,12 +141,15 @@ async def get_graph(
         for n in notes
     ]
 
+    # PERF-13: Cap the links result set to avoid unbounded O(N²) responses.
+    _GRAPH_LINK_CAP = 2000
+
     if note_ids:
         links_result = await db.execute(
             select(NoteLink).where(
                 NoteLink.source_note_id.in_(note_ids),
                 NoteLink.target_note_id.in_(note_ids),
-            )
+            ).limit(_GRAPH_LINK_CAP)
         )
         links_orm = list(links_result.scalars().all())
     else:

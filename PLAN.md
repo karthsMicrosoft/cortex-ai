@@ -2,7 +2,7 @@
 
 > **Living document.** Captures what we're building, what's done, what's next. Update as work progresses.
 
-**Last updated:** 2026-05-13 (Phases 1-6 complete + P3 nits + Round 20 Observability + Strict CSP — see PROGRESS.md § 15-20)
+**Last updated:** 2026-05-13 (Phases 1-6 complete + P3 nits + Round 20 Observability + Strict CSP + Round 21 review nits — see PROGRESS.md § 15-21)
 
 ---
 
@@ -201,7 +201,7 @@ End-to-end happy path to validate before declaring "done":
 ### P4 — Production hardening
 11. ~~Move JTI revocation from in-memory set to Redis or DB table (SEC-07 follow-up)~~ ✅ Round 19 (2026-05-12) — alembic 011 `revoked_jtis` table + two-tier (cache + DB) revoke; persists across Container App restarts.
 12. ~~Add `/api/auth/logout` endpoint that revokes current refresh JTI~~ ✅ Round 19 (2026-05-12) — POST /api/auth/logout revokes both access + refresh JTIs; logout button visible in AppHeader + Settings + Profile.
-13. Address remaining 20 LOW/NIT review findings noted in `review-comments.tasks.md` Tasks 1-3.
+13. ~~Address remaining 20 LOW/NIT review findings noted in `review-comments.tasks.md` Tasks 1-3.~~ ✅ Round 21 (2026-05-13) — All review-comments.tasks.md items resolved: PERF-12 (export streaming), PERF-13 (graph link cap), PERF-N2 (immediate first poll), PERF-14/N1 (N/A — distill removed), PERF-N3 (already done), SA-M1 (already cleaned), SA-N1 (verified).
 14. Bootstrap proper KMS-grade key rotation for JWT_SECRET_KEY (90-day rotation).
 15. Migrate frontend dependencies forward (React 19, Vite 8, Tailwind 4 — Researcher flagged these as 1-3 majors stale; decision to defer was design-justified at the time).
 16. ~~Strict CSP header~~ ✅ Round 20 (2026-05-13) — backend `default-src 'none'`, frontend strict policy with API-origin connect-src + Permissions-Policy.

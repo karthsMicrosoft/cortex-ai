@@ -1165,3 +1165,40 @@ Closed all 8 remaining open items in `review-comments.tasks.md` (Tasks 2 + 4):
 - Frontend: ShadowReaderPrompt 39/39 passed; TypeScript clean
 - Full frontend suite has a pre-existing hang (unrelated to Round 21 changes)
 
+---
+
+## Round 22 — Log Analytics alert + test fixes (2026-05-14)
+
+### What was done
+
+Three items dispatched via /fleet with git-worktree-per-agent (zero contention):
+
+| PR | Item | Details |
+|---|---|---|
+| **#73** | Review nits (Round 21) | PERF-12 export streaming, PERF-13 graph link cap, PERF-N2 immediate first poll + all 8 review-comments checkboxes closed |
+| **#74** | P1: Log Analytics leaked token alert | `docs/log-alert-leaked-tokens.md` with KQL query + full `az monitor scheduled-query create` CLI command. 20 new backend tests for `_ScrubTokenFilter` covering basic redaction, edge cases, args-as-tuple/dict |
+| **#75** | P2: api-client.test.ts mock isolation | All 4 `vi.clearAllMocks()` → `vi.restoreAllMocks()` in afterEach blocks. 18 tests pass |
+| **#76** | P2: Frontend test suite hang | Switched to `pool: 'vmThreads'` + `afterAll` Dexie cleanup in setup.ts. Root cause: fake-indexeddb keeps Node event loop refs open, preventing workers from exiting |
+
+### Files changed
+- `docs/log-alert-leaked-tokens.md` (new) — KQL query + az CLI runbook
+- `backend/tests/test_log_scrubber_alert.py` (new) — 20 tests
+- `frontend/src/__tests__/api-client.test.ts` — `vi.restoreAllMocks()` fix
+- `frontend/src/__tests__/setup.ts` — afterAll Dexie db.close() cleanup
+- `frontend/vitest.config.ts` — `pool: 'vmThreads'` + `teardownTimeout: 1000`
+- `PLAN.md` — items 7, 9 ticked; item 10 added + ticked; status snapshot refreshed
+- `KNOWN_ISSUES.md` — timestamp updated
+
+### Test results
+- Backend: 881+ passed (20 new log-scrubber tests), 0 failures
+- Frontend: 767 passed; suite completes with vmThreads pool; TypeScript clean
+- All 4 PRs verified by independent agents before merge
+
+### Remaining open work after Round 22
+- **P1** Migrate refresh token to first-party cookies (blocked on custom domain)
+- **P2** Triage 30 backend test failures (item 8)
+- **P4** Phase 7 visual canvas (Heptabase/Milanote)
+- **P4** KMS-grade JWT_SECRET_KEY rotation
+- **P4** Frontend deps (React 19, Vite 8, Tailwind 4)
+- **Ops** Import Workbook + wire cost-rate alert (5-min az CLI)
+

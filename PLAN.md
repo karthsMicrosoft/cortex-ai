@@ -2,7 +2,7 @@
 
 > **Living document.** Captures what we're building, what's done, what's next. Update as work progresses.
 
-**Last updated:** 2026-05-13 (Phases 1-6 complete + P3 nits + Round 20 Observability + Strict CSP + Round 21 review nits — see PROGRESS.md § 15-21)
+**Last updated:** 2026-05-14 (Round 22: Log Analytics alert + test fixes — PRs #73-#76 merged — see PROGRESS.md § 21-22)
 
 ---
 
@@ -105,7 +105,7 @@ Per spec § 2.1. Currently deployed in **`centralus`** with OpenAI in **`eastus`
 
 ---
 
-## 4 — Status snapshot (refreshed 2026-05-13)
+## 4 — Status snapshot (refreshed 2026-05-14)
 
 | Phase / Round | Status | Notes |
 |---|---|---|
@@ -118,14 +118,17 @@ Per spec § 2.1. Currently deployed in **`centralus`** with OpenAI in **`eastus`
 | **Phase 6** (Knowledge Graph + Bidirectional Linking) | ✅ Round 18 (2026-05-11) | See PROGRESS.md § 18 — **closes the 4-feature initiative** |
 | **Round 19** (P3 nits + sign-out option + JTI revocation) | ✅ 2026-05-12 | See PROGRESS.md § 19 |
 | **Round 20** (Observability + Strict CSP) | ✅ 2026-05-13 | See PROGRESS.md § 20 |
-| Backend tests | ✅ ~861 passing / 0 failing | Round 20 baseline |
-| Frontend tests | ✅ ~767 passing / 0 failing | Round 20 baseline |
+| **Round 21** (Review nits cleanup) | ✅ 2026-05-13 | See PROGRESS.md § 21 |
+| **Round 22** (Log alert + test fixes) | ✅ 2026-05-14 | See PROGRESS.md § 22 |
+| Backend tests | ✅ ~881 passing / 0 failing | Round 22 baseline (+20 log scrubber tests) |
+| Frontend tests | ✅ ~767 passing / 0 failing | vmThreads pool fix; suite no longer hangs |
 | Extension tests | ✅ 7 passing | New surface from PR #48 |
 | TypeScript | ✅ Clean | |
-| E2E nightly cron | ✅ Green | Last 3 nights |
-| Live `/api/health` | ✅ 200 | At PR #66 image |
+| E2E nightly cron | ✅ Green | |
+| Live `/api/health` | ✅ 200 | |
 | App Insights tracing + cost metrics | ✅ Live (Round 20) | OTel SDK initialized; metrics flowing |
 | Strict CSP (backend + SWA) | ✅ Live (Round 20) | Verified via curl + chrome-devtools no-violation |
+| Log Analytics leaked-token alert | ✅ Runbook ready (Round 22) | `docs/log-alert-leaked-tokens.md` — user runs `az monitor scheduled-query create` |
 
 ---
 
@@ -193,7 +196,8 @@ End-to-end happy path to validate before declaring "done":
 
 ### P2 — Test debt
 8. Triage the 30 backend test failures: per-failure determine real bug vs test-side flake. Update tests or code accordingly. Goal: ≥95% pass rate. See `KNOWN_ISSUES.md` § "Test failures".
-9. Fix the frontend `api-client.test.ts` mock-isolation bug (use `vi.resetAllMocks()` instead of `vi.clearAllMocks()` in afterEach).
+9. ~~Fix the frontend `api-client.test.ts` mock-isolation bug (use `vi.resetAllMocks()` instead of `vi.clearAllMocks()` in afterEach).~~ ✅ Done 2026-05-14 (Round 22) — changed all 4 afterEach blocks to `vi.restoreAllMocks()`.
+10. ~~Fix frontend test suite hang (full `npx vitest run` hangs indefinitely).~~ ✅ Done 2026-05-14 (Round 22) — switched to `pool: 'vmThreads'` + `afterAll` Dexie cleanup in setup.ts. Root cause: fake-indexeddb keeps event loop refs open.
 
 ### P3 — Phase 3 scope ✅ DONE (Round 15, 2026-05-08)
 10. ~~Items 37-40 from spec § 4.2 — Express UI polish, Settings export, image-capture UI, E2E + perf optimization.~~ ✅ Closed via 6 PRs (#22-#27). See § 3 above and PROGRESS.md § 15.

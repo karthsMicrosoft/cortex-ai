@@ -2,7 +2,7 @@
 
 > **Open work, bugs not fixed, gaps from "fully done."** Anything tagged P0/P1/P2 here is meant to be picked up by the next agent.
 
-**Last updated:** 2026-05-14 (Round 22: Log Analytics leaked-token alert — see docs/log-alert-leaked-tokens.md)
+**Last updated:** 2025-05-14 (Round 23: Test triage finalized — 900 passed / 0 failed / 8 skipped; xpassed SEC-07 test promoted)
 
 ---
 
@@ -151,11 +151,13 @@ Rebuild recipe + Bicep-vs-CLI rationale in `docs/DEPLOYMENT.md` § "Health-Check
 
 ---
 
-## ✅ P1 — Backend + frontend test failures (resolved 2026-05-07)
+## ✅ P1 — Backend + frontend test failures (resolved 2026-05-07, finalized Round 23)
 
-**Status:** Final round of test triage closed the remaining failures across both suites.
+**Status:** All 30 original backend test failures resolved across rounds 9–22. Round 23 confirmed final baseline and promoted the last xpassed test.
 
-**Backend:** `626 passed | 0 failed | 6 skipped | 1 xfailed | 1 xpassed` — **100%** pass rate (target was ≥95%).
+**Backend:** `900 passed | 0 failed | 8 skipped | 1 xfailed | 0 xpassed` — **100%** pass rate (target was ≥95%).
+- 8 skips: 3 require real Postgres (`test_database.py`), 2 require deployed backend (`test_deployed_smoke.py`), 1 env-dependent patterns test (`test_insights.py`), 2 WS harness TODOs (`test_voice_ws.py`).
+- SEC-07 `test_reused_refresh_token_returns_401` promoted from xfail to regular pass (revocation implemented Round 19).
 **Frontend:** `523 passed | 0 failed | 1 skipped` (30/30 test files green) — **99.8%** pass rate. The 1 skip is a documented order-dependent flake in `VoiceCapture.realtime.test.tsx` (`IndexedDB rawTranscription on stop`) — passes in isolation; deferred with an inline TODO to rework the mock useVoiceRecorder so mutating `mockHookState.isRecording` enqueues a React state update.
 
 The triage was done as a 9-PR fleet sweep over 2026-05-06/05-07 (PRs #2 → #18, see PROGRESS § 12). Net delta: +30 backend passes, +90 frontend passes, 1 production bug found and fixed (PR #6 dictionary bulk SQLite portability), 0 production behavior regressions.
@@ -331,7 +333,7 @@ Items 35-40 from spec § 4.2 — closed via 6 PRs (#22-#27). See `PROGRESS.md` �
 | 39 — Frontend image capture | **PR #24** (Round 15) — preview-before-upload, client-side resize ≤2048px / 5MB JPEG, "Uploading…" spinner + error toast, new `ImagePreview.tsx` |
 | 40 — E2E + perf | **PR #25** lazy-load route splitting (-58 KB raw / -13 KB gzip main bundle, 6 new chunks for Insights/Create/Settings/Library/Search/NoteDetail) + **PR #26** Playwright runner (`npm run e2e`, GH Actions workflow `e2e.yml` with `workflow_dispatch` + nightly cron 09:00 UTC, 17/17 tests passing live) + **PR #27** Shadow Reader voice answer (FR-8.4) — restored mic UI on desktop, new `POST /api/notes/{id}/shadow-reader/answer-audio` that uses existing `/api/upload` + `transcribe_audio_url`, mobile UA still skips mic per § 22w |
 
-**TDD pattern used:** red→green for every PR (frontend Vitest + backend pytest where applicable). Full backend now at **640 passed / 6 skipped / 1 xfailed / 1 xpassed** (Round 14 baseline 628 + ~12 added across PRs). Full frontend at **563 passed / 1 skipped** (Round 14 baseline 523 + ~40 added).
+**TDD pattern used:** red→green for every PR (frontend Vitest + backend pytest where applicable). Full backend now at **900 passed / 8 skipped / 1 xfailed / 0 xpassed** (Round 23 finalized baseline). Full frontend at **563 passed / 1 skipped** (Round 14 baseline 523 + ~40 added).
 
 **Live verification:** chrome-devtools manual audit + cache-buster reload after each merge; before/after screenshots saved to session `files/`. E2E workflow (PR #26) provides ongoing regression coverage.
 

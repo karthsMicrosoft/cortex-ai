@@ -37,8 +37,10 @@ import { useAuthStore } from '../store/authStore';
 // ---------------------------------------------------------------------------
 // Default mock state — restored before EVERY test so that one test's
 // .mockReturnValue(...) override (e.g. the refresh-on-401 path which sets
-// accessToken='old-token') doesn't leak into the next test. vi.clearAllMocks()
-// only clears call history; it does NOT restore implementations.
+// accessToken='old-token') doesn't leak into the next test.
+// vi.restoreAllMocks() in afterEach resets all mocks to their original
+// implementations (defense-in-depth), and this beforeEach re-applies the
+// default auth state every test needs.
 // ---------------------------------------------------------------------------
 
 const _DEFAULT_AUTH_STATE = {
@@ -105,7 +107,7 @@ describe('apiGet — fetch wrapper (Task 3.2)', () => {
 
   afterEach(() => {
     globalThis.fetch = originalFetch;
-    vi.clearAllMocks();
+    vi.restoreAllMocks();
   });
 
   // ----------- Authorization header -----------
@@ -219,7 +221,7 @@ describe('apiPost — fetch wrapper (Task 3.2)', () => {
 
   afterEach(() => {
     globalThis.fetch = originalFetch;
-    vi.clearAllMocks();
+    vi.restoreAllMocks();
   });
 
   it('sends POST method', async () => {
@@ -272,7 +274,7 @@ describe('apiPut — fetch wrapper (Task 3.2)', () => {
 
   afterEach(() => {
     globalThis.fetch = originalFetch;
-    vi.clearAllMocks();
+    vi.restoreAllMocks();
   });
 
   it('sends PUT method', async () => {
@@ -295,7 +297,7 @@ describe('apiDelete — fetch wrapper (Task 3.2)', () => {
 
   afterEach(() => {
     globalThis.fetch = originalFetch;
-    vi.clearAllMocks();
+    vi.restoreAllMocks();
   });
 
   it('sends DELETE method', async () => {

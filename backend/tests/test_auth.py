@@ -932,22 +932,13 @@ class TestRefreshTokenRevocation:
     """
 
     @pytest.mark.asyncio
-    @pytest.mark.xfail(
-        reason=(
-            "SEC-07: Refresh token revocation not yet implemented (known gap). "
-            "The old refresh token is valid for its full 30-day TTL after rotation. "
-            "Fix: store refresh token JTI in DB and reject on reuse. "
-            "See review-comments.tasks.md 1.8."
-        ),
-        strict=False,
-    )
     async def test_reused_refresh_token_returns_401(self, client: AsyncClient):
         """
         SEC-07: After calling /api/auth/refresh once, using the PRE-ROTATION
         refresh token again must return 401 (replay attack prevention).
 
-        This test is marked xfail because revocation is NOT implemented.
-        When the fix is shipped, remove the xfail mark and this test must pass.
+        Revocation implemented in Round 19 (alembic 011 `revoked_jtis` table).
+        Promoted from xfail to regular test in Round 23.
         """
         email = _unique_email()
         await _register(client, email)
@@ -993,12 +984,10 @@ class TestRefreshTokenRevocation:
     @pytest.mark.asyncio
     async def test_refresh_token_gap_is_documented(self, client: AsyncClient):
         """
-        SEC-07: Document the known gap — the refresh endpoint issues a new token
-        but does not invalidate the old one.
+        SEC-07: Document the refresh-token replay behaviour.
 
-        This test PASSES today (documents current behaviour) and serves as a
-        sentinel: if behaviour changes to reject the old token, the xfail test
-        above should be un-xfailed.
+        Since Round 19 the old token IS rejected (revocation implemented).
+        This test now verifies the replay returns 401.
         """
         email = _unique_email()
         await _register(client, email)

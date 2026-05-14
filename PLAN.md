@@ -2,7 +2,7 @@
 
 > **Living document.** Captures what we're building, what's done, what's next. Update as work progresses.
 
-**Last updated:** 2026-05-14 (Round 22: Log Analytics alert + test fixes — PRs #73-#76 merged — see PROGRESS.md § 21-22)
+**Last updated:** 2025-05-14 (Round 23: Test triage finalized — 900/0/8 baseline, xpassed test promoted)
 
 ---
 
@@ -195,7 +195,7 @@ End-to-end happy path to validate before declaring "done":
 7. ~~Set up Log Analytics alert on the B12 log-scrubber metric for any leaked tokens.~~ ✅ Done 2026-05-14 (Round 22) — scheduled-query alert `cortexks-leaked-token-alert` on `ContainerAppConsoleLogs_CL` for un-scrubbed `token=ey` patterns; routes to `cortex-alerts-ag`. See `docs/log-alert-leaked-tokens.md`.
 
 ### P2 — Test debt
-8. Triage the 30 backend test failures: per-failure determine real bug vs test-side flake. Update tests or code accordingly. Goal: ≥95% pass rate. See `KNOWN_ISSUES.md` § "Test failures".
+8. ~~Triage the 30 backend test failures: per-failure determine real bug vs test-side flake.~~ ✅ Done (Round 23, 2025-05-14) — all 30 failures resolved across rounds 9–22. Current baseline: 900 passed, 0 failures. 1 xpassed test promoted to regular pass.
 9. ~~Fix the frontend `api-client.test.ts` mock-isolation bug (use `vi.resetAllMocks()` instead of `vi.clearAllMocks()` in afterEach).~~ ✅ Done 2026-05-14 (Round 22) — changed all 4 afterEach blocks to `vi.restoreAllMocks()`.
 10. ~~Fix frontend test suite hang (full `npx vitest run` hangs indefinitely).~~ ✅ Done 2026-05-14 (Round 22) — switched to `pool: 'vmThreads'` + `afterAll` Dexie cleanup in setup.ts. Root cause: fake-indexeddb keeps event loop refs open.
 
@@ -238,7 +238,7 @@ End-to-end happy path to validate before declaring "done":
 | Azure OpenAI throughput limits in `eastus` | S0 SKU is per-token-rate-limited; for >1k notes/day, consider PTU or fallback to a different region |
 | pgvector index degrade beyond 100k rows | HNSW with `m=16, ef_construction=64` is fine for single-user MVP; revisit if scale increases |
 | Service Worker stale-bundle bug | Mitigated by `clientsClaim:true, skipWaiting:true` (deployed) |
-| In-memory JTI revocation loses state on Container App restart | Acceptable trade-off for single-user MVP; upgrade path documented (P4.11) |
+| In-memory JTI revocation loses state on Container App restart | ✅ Resolved Round 19 — `revoked_jtis` DB table + two-tier cache; xfail test promoted to regular pass in Round 23 |
 | Refresh token absent from CSP — XSS could steal access token from memory | Document residual risk; recommend strict CSP header (P1 nice-to-have) |
-| Test drift between TDD-red tests and final implementation | 30 failures noted; fix-pair pass had limited time. Triage in P2 |
+| Test drift between TDD-red tests and final implementation | ✅ Resolved — 30 failures triaged over rounds 9–22; 0 failures as of Round 23 |
 | Multiple ACR images (`cortex-api` orphan + `cortexks-api` live) | Cosmetic; clean up: `az acr repository delete --name cortexksacr --image cortex-api` |

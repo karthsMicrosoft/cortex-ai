@@ -19,7 +19,7 @@ const TABS = [
 // ---------------------------------------------------------------------------
 
 /**
- * BottomNav — fixed bottom navigation bar with five tabs.
+ * BottomNav — fixed bottom navigation bar with six tabs.
  *
  * Uses react-router-dom NavLink so the active tab is automatically highlighted.
  * Visible on every authenticated page (rendered inside the protected layout).

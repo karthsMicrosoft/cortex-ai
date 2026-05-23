@@ -156,7 +156,8 @@ export async function batchUpdateItems(
   canvasId: string,
   items: BatchItemEntry[],
 ): Promise<CanvasItemOut[]> {
-  return apiPost<CanvasItemOut[]>(`/api/canvases/${canvasId}/items/batch`, { items });
+  const resp = await apiPost<{ items: CanvasItemOut[] }>(`/api/canvases/${canvasId}/items/batch`, { items });
+  return resp.items;
 }
 
 export async function deleteCanvasItem(canvasId: string, itemId: string): Promise<void> {
@@ -175,5 +176,6 @@ export async function deleteCanvasEdge(canvasId: string, edgeId: string): Promis
 }
 
 export async function autoLayoutCanvas(canvasId: string): Promise<CanvasItemOut[]> {
-  return apiPost<CanvasItemOut[]>(`/api/canvases/${canvasId}/auto-layout`, {});
+  const resp = await apiPost<{ items: CanvasItemOut[] }>(`/api/canvases/${canvasId}/auto-layout`, {});
+  return resp.items;
 }

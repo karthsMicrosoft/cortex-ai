@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import {
   ReactFlow,
@@ -11,12 +11,14 @@ import {
   Handle,
   Position,
   ReactFlowProvider,
+  useReactFlow,
   type Node,
   type Edge,
   type Connection,
   type NodeProps,
   type NodeChange,
   type EdgeChange,
+  type Viewport,
 } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
 import { ArrowLeft, LayoutGrid, Plus, Type as TypeIcon } from 'lucide-react';
@@ -33,6 +35,12 @@ import {
   type CanvasEdgeOut,
   type CanvasItemOut,
 } from '../api/canvas';
+
+// ---------------------------------------------------------------------------
+// Zoom context — NoteCardNode reads zoom for LOD (title-only at low zoom).
+// ---------------------------------------------------------------------------
+
+const ZoomContext = createContext(1);
 
 // ---------------------------------------------------------------------------
 // Helpers — backend ↔ reactflow conversion
@@ -98,10 +106,11 @@ function edgeToFlow(edge: CanvasEdgeOut): Edge {
 // ---------------------------------------------------------------------------
 
 function NoteCardNode({ data }: NodeProps<Node<NodeData>>): React.ReactElement {
+  const zoom = useContext(ZoomContext);
   const isGhost = data.noteId === null;
   const title = data.noteTitle ?? data.lastKnownTitle ?? 'Untitled note';
   const summary = data.noteSummary ?? '';
-  const showSummary = (data.zoom ?? 1) >= 0.5;
+  const showSummary = zoom >= 0.5;
 
   const handleClick = () => {
     if (!isGhost && data.noteId && data.onNoteOpen) {
@@ -195,11 +204,13 @@ const NODE_TYPES = {
 function CanvasEditorInner(): React.ReactElement {
   const { id: canvasId } = useParams<{ id: string }>();
   const navigate = useNavigate();
+  const reactFlowInstance = useReactFlow();
   const [canvas, setCanvas] = useState<CanvasDetailOut | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [notFound, setNotFound] = useState(false);
   const [titleDraft, setTitleDraft] = useState('');
+  const [currentZoom, setCurrentZoom] = useState(1);
 
   const [nodes, setNodes, onNodesChange] = useNodesState<Node<NodeData>>([]);
   const [edges, setEdges, onEdgesChange] = useEdgesState<Edge>([]);
@@ -207,6 +218,7 @@ function CanvasEditorInner(): React.ReactElement {
   // itemId -> current version (for optimistic concurrency)
   const versionsRef = useRef<Map<string, number>>(new Map());
   const dragDebounceRef = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map());
+  const viewportRef = useRef<Viewport>({ x: 0, y: 0, zoom: 1 });
 
   const handleNoteOpen = useCallback(
     (noteId: string) => {
@@ -237,6 +249,18 @@ function CanvasEditorInner(): React.ReactElement {
         });
         setNodes(flowNodes);
         setEdges(data.edges.map(edgeToFlow));
+        // Restore saved viewport if non-default
+        if (data.viewport_x !== 0 || data.viewport_y !== 0 || data.viewport_zoom !== 1) {
+          viewportRef.current = { x: data.viewport_x, y: data.viewport_y, zoom: data.viewport_zoom };
+          setCurrentZoom(data.viewport_zoom);
+          setTimeout(() => {
+            reactFlowInstance.setViewport({
+              x: data.viewport_x,
+              y: data.viewport_y,
+              zoom: data.viewport_zoom,
+            });
+          }, 50);
+        }
         setIsLoading(false);
       })
       .catch((err: unknown) => {
@@ -253,12 +277,21 @@ function CanvasEditorInner(): React.ReactElement {
 
   // Save viewport on unmount (best-effort)
   useEffect(() => {
+    const cid = canvasId;
     return () => {
       const timeouts = dragDebounceRef.current;
       timeouts.forEach((t) => clearTimeout(t));
       timeouts.clear();
+      if (cid) {
+        const vp = viewportRef.current;
+        void updateCanvas(cid, {
+          viewport_x: vp.x,
+          viewport_y: vp.y,
+          viewport_zoom: vp.zoom,
+        })?.catch(() => { /* best-effort */ });
+      }
     };
-  }, []);
+  }, [canvasId]);
 
   const persistItemPosition = useCallback(
     (itemId: string, x: number, y: number) => {
@@ -418,6 +451,11 @@ function CanvasEditorInner(): React.ReactElement {
 
   const nodeTypes = useMemo(() => NODE_TYPES, []);
 
+  const handleViewportChange = useCallback((vp: Viewport) => {
+    viewportRef.current = vp;
+    setCurrentZoom(vp.zoom);
+  }, []);
+
   if (notFound) {
     return (
       <div className="flex min-h-screen flex-col items-center justify-center bg-[#0F172A] pb-24 text-slate-200">
@@ -502,6 +540,7 @@ function CanvasEditorInner(): React.ReactElement {
         </div>
       ) : (
         <div className="h-[calc(100vh-8rem)] w-full" data-testid="canvas-flow-wrapper">
+          <ZoomContext.Provider value={currentZoom}>
           <ReactFlow
             nodes={nodes}
             edges={edges}
@@ -509,13 +548,16 @@ function CanvasEditorInner(): React.ReactElement {
             onEdgesChange={handleEdgesChange}
             onConnect={handleConnect}
             onNodesDelete={handleNodesDelete}
+            onViewportChange={handleViewportChange}
             nodeTypes={nodeTypes}
-            fitView
+            defaultViewport={{ x: 0, y: 0, zoom: 1 }}
+            fitView={!canvas || (canvas.viewport_x === 0 && canvas.viewport_y === 0 && canvas.viewport_zoom === 1)}
           >
             <Background />
             <Controls />
             <MiniMap />
           </ReactFlow>
+          </ZoomContext.Provider>
         </div>
       )}
     </div>

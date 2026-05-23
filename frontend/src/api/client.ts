@@ -186,6 +186,15 @@ export async function apiPut<T>(url: string, body?: unknown, options?: RequestOp
   return res.json() as Promise<T>;
 }
 
+export async function apiPatch<T>(url: string, body?: unknown, options?: RequestOptions): Promise<T> {
+  const res = await fetchWithAuth(url, { ...options, method: 'PATCH', body });
+  if (!res.ok) {
+    const { code, detail } = await parseErrorBody(res);
+    throw new ApiError(res.status, code, detail, parseRetryAfter(res));
+  }
+  return res.json() as Promise<T>;
+}
+
 export async function apiDelete(url: string, options?: RequestOptions): Promise<void> {
   const res = await fetchWithAuth(url, { ...options, method: 'DELETE' });
   if (!res.ok) {

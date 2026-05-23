@@ -1,16 +1,17 @@
 import { NavLink } from 'react-router-dom';
-import { Mic, BookOpen, BarChart2, PenSquare, MessageCircle } from 'lucide-react';
+import { Mic, BookOpen, BarChart2, PenSquare, MessageCircle, Layout } from 'lucide-react';
 
 // ---------------------------------------------------------------------------
 // Tab config
 // ---------------------------------------------------------------------------
 
 const TABS = [
-  { to: '/',         label: 'Capture',  Icon: Mic           },
-  { to: '/library',  label: 'Library',  Icon: BookOpen      },
-  { to: '/ask',      label: 'Ask',      Icon: MessageCircle },
-  { to: '/insights', label: 'Insights', Icon: BarChart2     },
-  { to: '/create',   label: 'Create',   Icon: PenSquare     },
+  { to: '/',          label: 'Capture',  Icon: Mic           },
+  { to: '/library',   label: 'Library',  Icon: BookOpen      },
+  { to: '/canvases',  label: 'Canvas',   Icon: Layout        },
+  { to: '/ask',       label: 'Ask',      Icon: MessageCircle },
+  { to: '/insights',  label: 'Insights', Icon: BarChart2     },
+  { to: '/create',    label: 'Create',   Icon: PenSquare     },
 ] as const;
 
 // ---------------------------------------------------------------------------

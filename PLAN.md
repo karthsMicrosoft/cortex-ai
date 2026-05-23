@@ -2,7 +2,7 @@
 
 > **Living document.** Captures what we're building, what's done, what's next. Update as work progresses.
 
-**Last updated:** 2025-05-14 (Round 23: Test triage finalized — 900/0/8 baseline, xpassed test promoted)
+**Last updated:** 2026-05-22 (Round 24: Phase 7 Visual Thinking Canvas — SHIPPED across 4 PRs)
 
 ---
 
@@ -101,7 +101,17 @@ Per spec § 2.1. Currently deployed in **`centralus`** with OpenAI in **`eastus`
 
 > Phase 6 closed 2026-05-11. **Closes the 4-feature initiative the user proposed in Round 16.** See PROGRESS.md § 18.
 
-> Phase 7 (visual canvas — Heptabase / Milanote-style) is acknowledged but deferred. No audit yet.
+### Phase 7 — Visual Thinking Canvas (Round 24) ✅ SHIPPED (2026-05-22)
+| Item | Shipped via |
+|---|---|
+| Backend: alembic 012 (`canvases`, `canvas_items`, `canvas_edges`), ORM, 12 REST endpoints, owner isolation, optimistic concurrency (`version` INT), ghost cards (ON DELETE SET NULL + `last_known_title`), batch update, auto-layout. 37 backend tests. | PR A |
+| Frontend: `@xyflow/react` v12, `CanvasListPage`, `CanvasEditorPage` with custom NoteCardNode/GroupNode/TextNode, zoom-based LOD via ZoomContext, viewport persistence, drag-debounced PATCH, Canvas tab in BottomNav. 46 frontend tests. | PR B |
+| Add-to-canvas UX: `AddToCanvasModal` on NoteDetailPage, "Open as Canvas" on BrainViewPage. ~15 tests. | PR C |
+| Polish: mobile `touch-action: none`, undo/redo command stack (Ctrl+Z / Ctrl+Shift+Z / Ctrl+Y), empty-state onboarding, autosave indicator, Escape-to-deselect, documentation. ~10 tests. | PR D |
+
+> Phase 7 closed 2026-05-22. See PROGRESS.md § 24 and DECISIONS.md § 22ak.
+
+> Phase 7 (visual canvas — Heptabase / Milanote-style) ✅ SHIPPED Round 24 (2026-05-22). 4 PRs (A backend + B/C/D frontend). See § 3 above.
 
 ---
 
@@ -120,6 +130,8 @@ Per spec § 2.1. Currently deployed in **`centralus`** with OpenAI in **`eastus`
 | **Round 20** (Observability + Strict CSP) | ✅ 2026-05-13 | See PROGRESS.md § 20 |
 | **Round 21** (Review nits cleanup) | ✅ 2026-05-13 | See PROGRESS.md § 21 |
 | **Round 22** (Log alert + test fixes) | ✅ 2026-05-14 | See PROGRESS.md § 22 |
+| **Round 23** (Test triage + ops) | ✅ 2026-05-14 | See PROGRESS.md § 23 — 900 passed / 0 failed baseline |
+| **Phase 7 / Round 24** (Visual Thinking Canvas) | ✅ 2026-05-22 | See PROGRESS.md § 24 — 4 PRs, ~100 new tests |
 | Backend tests | ✅ ~881 passing / 0 failing | Round 22 baseline (+20 log scrubber tests) |
 | Frontend tests | ✅ ~767 passing / 0 failing | vmThreads pool fix; suite no longer hangs |
 | Extension tests | ✅ 7 passing | New surface from PR #48 |
@@ -210,7 +222,7 @@ End-to-end happy path to validate before declaring "done":
 15. Migrate frontend dependencies forward (React 19, Vite 8, Tailwind 4 — Researcher flagged these as 1-3 majors stale; decision to defer was design-justified at the time).
 16. ~~Strict CSP header~~ ✅ Round 20 (2026-05-13) — backend `default-src 'none'`, frontend strict policy with API-origin connect-src + Permissions-Policy.
 17. ~~Observability gaps (App Insights traces, custom RAG cost metrics)~~ ✅ Round 20 (2026-05-13) — OTel autoinstrumentation + 3 cost counters + Workbook + cost-rate alert runbook.
-18. **Phase 7 — Visual thinking canvas** (Heptabase / Milanote-style: freeform canvas with note cards + drawn arrows + grouping). Acknowledged in Round 16 plan; deferred. Will get its own audit when prioritized.
+18. ~~**Phase 7 — Visual thinking canvas** (Heptabase / Milanote-style: freeform canvas with note cards + drawn arrows + grouping). Acknowledged in Round 16 plan; deferred. Will get its own audit when prioritized.~~ ✅ Shipped Round 24 (2026-05-22) across 4 PRs (A backend + B/C/D frontend). See PROGRESS.md § 24.
 
 ### Open ops follow-ups (post-Round 20, user-runs)
 - ~~Import the workbook JSON into App Insights via `az portal workbook create`~~ ✅ Done 2026-05-14 (Round 23).

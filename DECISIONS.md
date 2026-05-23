@@ -2,7 +2,7 @@
 
 > **Architecture decisions and deviations from spec, with rationale.** When refactoring, preserve these unless the underlying constraint has changed.
 
-**Last updated:** 2026-04-30
+**Last updated:** 2026-05-22 (Round 24: Phase 7 Visual Thinking Canvas — see § 22ak)
 
 ---
 
@@ -838,3 +838,84 @@ All three call into authStore.signOut OR (in ProfilePage's case) the older logou
 
 **No backend in-process metrics aggregation.** OTel SDK exports to Azure Monitor every 60s by default. We don't aggregate/cache locally; that adds memory + complexity for negligible gain on a single-user app. If multi-user scale requires it, OTel has built-in views.
 
+
+
+## § 22ak — Phase 7: Visual Thinking Canvas (Round 24, 2026-05-22)
+
+Phase 7 shipped across 4 PRs (A backend + B/C/D frontend). Recording the cross-cutting design decisions here so future refactors preserve them.
+
+### Library choice: `@xyflow/react` v12
+
+**Decision:** Use `@xyflow/react` v12 (formerly `react-flow`) over tldraw, excalidraw, or building from scratch.
+
+**Why:**
+- Purpose-built for node-graph editors with first-class TypeScript types, custom node components, controlled state, and a stable v12 API.
+- Smaller bundle (~80 KB gz) vs tldraw (~300 KB gz with its drawing primitives we don't need).
+- Excalidraw is freeform drawing, not node-edge model; would have required wrapping nodes manually.
+- We already understand the controlled-state pattern from React; no new mental model to teach.
+
+### Canvas ≠ Brain View
+
+**Decision:** Brain View stays the auto-generated force-directed graph (from `note_links`). Canvas is a separate, user-curated spatial arrangement persisted in its own tables.
+
+**Why:**
+- Brain View answers "what does the graph of my notes look like?" — computed every load, no user state.
+- Canvas answers "how do I arrange these specific notes for thinking?" — user owns the spatial layout, must persist.
+- Conflating them would either ruin Brain View (positions stick on every accidental drag) or constrain Canvas (can't include text/group nodes).
+- Both are accessible: BrainViewPage has an "Open as Canvas" CTA (PR C) that snapshots current graph nodes into a new canvas; notes can be added to existing canvases via the AddToCanvas modal on NoteDetailPage.
+
+### Optimistic concurrency via `version` INT
+
+**Decision:** Each row in `canvas_items` carries a `version` INT column. Every PATCH from the client includes the version it last saw; the backend rejects with HTTP 409 if it doesn't match the current row, then bumps the version on accept.
+
+**Why:**
+- Single-user app, but a user with two tabs open could race themselves. 409-and-refetch is the simplest correct behavior.
+- Avoids last-writer-wins data loss (drag in tab A → drag in tab B → tab A's position is gone forever).
+- Alternative (CRDT / OT) is overkill for single-tenant.
+- Frontend handles the 409 by refetching the full canvas; user sees the canonical state.
+
+### Ghost cards via `ON DELETE SET NULL` + `last_known_title`
+
+**Decision:** When the underlying note is deleted, `canvas_items.note_id` is set to NULL by the FK constraint, but the item row stays. We snapshot the title into `last_known_title` at item-create time so the ghost still has a label.
+
+**Why:**
+- Deleting a note shouldn't destroy the user's spatial memory of the canvas (positions of other items relative to it).
+- Ghost cards render dashed + 60% opacity + "Deleted note" badge so the user knows to remove or replace them.
+- Alternative (cascade delete) is destructive and irreversible; the user can simply delete the ghost manually if they don't want it.
+
+### `ZoomContext` for LOD (not node-data)
+
+**Decision:** `CanvasEditorPage` exposes the current zoom via a React `ZoomContext`. `NoteCardNode` reads it via `useContext` and conditionally renders the summary at zoom ≥ 0.5.
+
+**Why:**
+- The naive approach (write zoom into every node's `data` on viewport change) triggers a re-render of every node on every wheel tick → render loop with reactflow's own internal state.
+- Context-based LOD has zero impact on reactflow's diff: only nodes that actually use the zoom re-render, and only when the threshold flips.
+- Caught during the PR B audit.
+
+### Viewport persistence: save on unmount, restore on load
+
+**Decision:** Viewport (x, y, zoom) saved to `canvases` row on unmount (best-effort PATCH). Restored from the row on load. Defaults to `fitView` if viewport is the all-zero default.
+
+**Why:**
+- Don't persist on every wheel tick (too chatty, no value).
+- Don't persist on every render (same).
+- Unmount catches the common "navigate away" case. The user's next visit lands where they left off.
+
+### Undo/redo: client-side, position-only
+
+**Decision:** Client-side command stack in `useCanvasUndoRedo` hook tracks position changes only. Ctrl+Z reverses; Ctrl+Shift+Z / Ctrl+Y replays. New move clears the redo stack.
+
+**Why:**
+- 80% of canvas editing is "I moved this and didn't mean to."
+- Add/delete reversal requires a reverse-operation model (recreate-with-id, restore-version) that the backend doesn't directly support yet. Listed as P3 in KNOWN_ISSUES C-1.
+- Server-side undo (event-sourced log per canvas) is overkill for single-user; deferred until a real need.
+- Listed limitation surfaces in the empty-state hint and in KNOWN_ISSUES so the user isn't surprised when add/delete don't undo.
+
+### Mobile: `touch-action: none` on the flow wrapper
+
+**Decision:** Inline `style={{ touchAction: 'none' }}` on the div wrapping `<ReactFlow>`.
+
+**Why:**
+- Without it, the browser's default pan/zoom gestures fight reactflow's own pan/pinch on touch devices (iOS Safari especially), giving the user a janky double-handling experience.
+- `touch-action: none` cedes all gestures to reactflow's handlers.
+- Toolbar uses `flex-wrap` so the buttons stack cleanly on narrow viewports.

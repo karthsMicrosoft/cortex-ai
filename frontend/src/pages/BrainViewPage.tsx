@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { ArrowLeft, RefreshCw, Search } from 'lucide-react';
+import { ArrowLeft, Layout, Loader2, RefreshCw, Search } from 'lucide-react';
 import ForceGraph2D from 'react-force-graph-2d';
 import { apiGet } from '../api/client';
+import { addCanvasItem, createCanvas } from '../api/canvas';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -86,6 +87,10 @@ export default function BrainViewPage(): React.ReactElement {
   const [hoverNode, setHoverNode] = useState<FGNode | null>(null);
   const [hoverPos] = useState<{ x: number; y: number }>({ x: 0, y: 0 });
 
+  const [isExporting, setIsExporting] = useState(false);
+  const [exportError, setExportError] = useState<string | null>(null);
+  const [exportWarning, setExportWarning] = useState<string | null>(null);
+
   // ---- Resize observer + window resize ----
   const remeasure = useCallback(() => {
     const el = containerRef.current;
@@ -155,6 +160,42 @@ export default function BrainViewPage(): React.ReactElement {
     },
     [navigate],
   );
+
+  const handleOpenAsCanvas = useCallback(async () => {
+    if (isExporting) return;
+    setIsExporting(true);
+    setExportError(null);
+    setExportWarning(null);
+    try {
+      const nodes = filteredGraph.nodes as FGNode[];
+      const MAX_ITEMS = 50;
+      const cap = nodes.slice(0, MAX_ITEMS);
+      if (nodes.length > MAX_ITEMS) {
+        setExportWarning(
+          `Only the first ${MAX_ITEMS} of ${nodes.length} nodes were added.`,
+        );
+      }
+      const dateStr = new Date().toLocaleDateString();
+      const canvas = await createCanvas({ title: `Brain View — ${dateStr}` });
+      for (const node of cap) {
+        try {
+          await addCanvasItem(canvas.id, {
+            note_id: node.id,
+            item_type: 'note',
+            position_x: node.x ?? 0,
+            position_y: node.y ?? 0,
+          });
+        } catch {
+          // Skip nodes that fail (e.g., note already deleted).
+        }
+      }
+      navigate(`/canvas/${canvas.id}`);
+    } catch (err: unknown) {
+      setExportError(err instanceof Error ? err.message : 'Failed to create canvas');
+    } finally {
+      setIsExporting(false);
+    }
+  }, [filteredGraph, isExporting, navigate]);
 
   const handleNodeHover = useCallback((node: FGNode | null) => {
     setHoverNode(node);
@@ -248,7 +289,34 @@ export default function BrainViewPage(): React.ReactElement {
             Clear filters
           </button>
         )}
+        <button
+          type="button"
+          onClick={() => void handleOpenAsCanvas()}
+          disabled={isExporting || filteredGraph.nodes.length === 0}
+          data-testid="brain-view-open-as-canvas"
+          className="ml-auto flex items-center gap-1.5 rounded-md border border-indigo-600 bg-indigo-600 px-2.5 py-1 text-xs font-medium text-white hover:bg-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-400 disabled:cursor-not-allowed disabled:opacity-50"
+        >
+          {isExporting ? (
+            <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden="true" />
+          ) : (
+            <Layout className="h-3.5 w-3.5" aria-hidden="true" />
+          )}
+          Open as Canvas
+        </button>
       </div>
+
+      {(exportError || exportWarning) && (
+        <div
+          data-testid="brain-view-export-status"
+          className={`border-b px-4 py-1 text-xs ${
+            exportError
+              ? 'border-red-700 bg-red-900/30 text-red-200'
+              : 'border-amber-700 bg-amber-900/30 text-amber-200'
+          }`}
+        >
+          {exportError ?? exportWarning}
+        </div>
+      )}
 
       {/* Category legend (also acts as filter toggles) */}
       <div

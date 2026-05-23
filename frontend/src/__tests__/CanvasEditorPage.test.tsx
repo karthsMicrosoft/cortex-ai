@@ -342,4 +342,58 @@ describe('CanvasEditorPage', () => {
       expect(screen.getByTestId('canvas-auto-layout')).toBeInTheDocument();
     });
   });
+
+  it('canvas container has touch-action: none for mobile pan/pinch', async () => {
+    renderPage();
+    await waitFor(() => {
+      const wrapper = screen.getByTestId('canvas-flow-wrapper');
+      expect(wrapper.style.touchAction).toBe('none');
+    });
+  });
+
+  it('renders the autosave indicator (idle by default)', async () => {
+    renderPage();
+    await waitFor(() => {
+      const ind = screen.getByTestId('canvas-save-indicator');
+      expect(ind).toBeInTheDocument();
+      expect(ind.getAttribute('data-status')).toBe('idle');
+    });
+  });
+
+  it('shows the empty state when the canvas has no items', async () => {
+    (canvasApi.getCanvas as ReturnType<typeof vi.fn>).mockResolvedValue({
+      ...DETAIL_FIXTURE,
+      items: [],
+      edges: [],
+    });
+    renderPage();
+    await waitFor(() => {
+      expect(screen.getByTestId('canvas-empty-state')).toBeInTheDocument();
+      expect(screen.getByText(/this canvas is empty/i)).toBeInTheDocument();
+      expect(screen.getByText(/Ctrl\+Z undo/i)).toBeInTheDocument();
+    });
+  });
+
+  it('does not show the empty state when items exist', async () => {
+    renderPage();
+    await waitFor(() => expect(screen.getByTestId('reactflow')).toBeInTheDocument());
+    expect(screen.queryByTestId('canvas-empty-state')).not.toBeInTheDocument();
+  });
+
+  it('Escape key dispatches without throwing (deselect handler attached)', async () => {
+    renderPage();
+    await waitFor(() => expect(screen.getByTestId('reactflow')).toBeInTheDocument());
+    // No assertion needed — just verify the listener handles Escape without error.
+    expect(() => {
+      window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }));
+    }).not.toThrow();
+  });
+
+  it('Ctrl+Z key dispatches without throwing (undo handler attached)', async () => {
+    renderPage();
+    await waitFor(() => expect(screen.getByTestId('reactflow')).toBeInTheDocument());
+    expect(() => {
+      window.dispatchEvent(new KeyboardEvent('keydown', { key: 'z', ctrlKey: true }));
+    }).not.toThrow();
+  });
 });

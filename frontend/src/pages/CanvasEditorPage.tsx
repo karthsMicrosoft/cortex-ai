@@ -35,6 +35,9 @@ import {
   type CanvasEdgeOut,
   type CanvasItemOut,
 } from '../api/canvas';
+import { useCanvasUndoRedo, type MoveCommand } from '../hooks/useCanvasUndoRedo';
+
+type SaveStatus = 'idle' | 'saving' | 'saved' | 'error';
 
 // ---------------------------------------------------------------------------
 // Zoom context — NoteCardNode reads zoom for LOD (title-only at low zoom).
@@ -214,11 +217,43 @@ function CanvasEditorInner(): React.ReactElement {
 
   const [nodes, setNodes, onNodesChange] = useNodesState<Node<NodeData>>([]);
   const [edges, setEdges, onEdgesChange] = useEdgesState<Edge>([]);
+  const [saveStatus, setSaveStatus] = useState<SaveStatus>('idle');
 
   // itemId -> current version (for optimistic concurrency)
   const versionsRef = useRef<Map<string, number>>(new Map());
   const dragDebounceRef = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map());
+  // itemId -> position before the current drag (for undo command building)
+  const dragStartPosRef = useRef<Map<string, { x: number; y: number }>>(new Map());
   const viewportRef = useRef<Viewport>({ x: 0, y: 0, zoom: 1 });
+  const inFlightSavesRef = useRef(0);
+  const savedTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const undoRedo = useCanvasUndoRedo();
+  // Tracks moves that originated from undo/redo so we don't re-push them on
+  // the resulting drag-end event.
+  const suppressNextPushRef = useRef<Set<string>>(new Set());
+
+  const markSaving = useCallback(() => {
+    inFlightSavesRef.current += 1;
+    setSaveStatus('saving');
+    if (savedTimerRef.current) {
+      clearTimeout(savedTimerRef.current);
+      savedTimerRef.current = null;
+    }
+  }, []);
+
+  const markSaved = useCallback(() => {
+    inFlightSavesRef.current = Math.max(0, inFlightSavesRef.current - 1);
+    if (inFlightSavesRef.current === 0) {
+      setSaveStatus('saved');
+      if (savedTimerRef.current) clearTimeout(savedTimerRef.current);
+      savedTimerRef.current = setTimeout(() => setSaveStatus('idle'), 2000);
+    }
+  }, []);
+
+  const markError = useCallback(() => {
+    inFlightSavesRef.current = Math.max(0, inFlightSavesRef.current - 1);
+    setSaveStatus('error');
+  }, []);
 
   const handleNoteOpen = useCallback(
     (noteId: string) => {
@@ -298,6 +333,7 @@ function CanvasEditorInner(): React.ReactElement {
       if (!canvasId) return;
       const existing = dragDebounceRef.current.get(itemId);
       if (existing) clearTimeout(existing);
+      markSaving();
       const t = setTimeout(async () => {
         const version = versionsRef.current.get(itemId) ?? 1;
         try {
@@ -307,38 +343,93 @@ function CanvasEditorInner(): React.ReactElement {
             version,
           });
           versionsRef.current.set(itemId, updated.version);
+          markSaved();
         } catch (err: unknown) {
           const status = (err as { status?: number }).status;
           if (status === 409 && canvasId) {
             // Conflict — re-fetch canvas
-            const fresh = await getCanvas(canvasId);
-            setCanvas(fresh);
-            const flowNodes = fresh.items.map((item) => {
-              const n = itemToNode(item);
-              versionsRef.current.set(item.id, item.version);
-              return { ...n, data: { ...n.data, onNoteOpen: handleNoteOpen } };
-            });
-            setNodes(flowNodes);
-            setEdges(fresh.edges.map(edgeToFlow));
+            try {
+              const fresh = await getCanvas(canvasId);
+              setCanvas(fresh);
+              const flowNodes = fresh.items.map((item) => {
+                const n = itemToNode(item);
+                versionsRef.current.set(item.id, item.version);
+                return { ...n, data: { ...n.data, onNoteOpen: handleNoteOpen } };
+              });
+              setNodes(flowNodes);
+              setEdges(fresh.edges.map(edgeToFlow));
+              markSaved();
+            } catch {
+              markError();
+            }
+          } else {
+            markError();
           }
         }
       }, 400);
       dragDebounceRef.current.set(itemId, t);
     },
-    [canvasId, setNodes, setEdges, handleNoteOpen],
+    [canvasId, setNodes, setEdges, handleNoteOpen, markSaving, markSaved, markError],
   );
 
   const handleNodesChange = useCallback(
     (changes: NodeChange<Node<NodeData>>[]) => {
       onNodesChange(changes);
       for (const change of changes) {
-        if (change.type === 'position' && change.position && change.dragging === false) {
-          persistItemPosition(change.id, change.position.x, change.position.y);
+        if (change.type === 'position') {
+          // Record drag-start position once, so we can build an undo command.
+          if (change.dragging === true && !dragStartPosRef.current.has(change.id)) {
+            const current = nodes.find((n) => n.id === change.id);
+            if (current) {
+              dragStartPosRef.current.set(change.id, { ...current.position });
+            }
+          }
+          if (change.position && change.dragging === false) {
+            const start = dragStartPosRef.current.get(change.id);
+            dragStartPosRef.current.delete(change.id);
+            if (suppressNextPushRef.current.has(change.id)) {
+              suppressNextPushRef.current.delete(change.id);
+            } else if (start && (start.x !== change.position.x || start.y !== change.position.y)) {
+              undoRedo.push({
+                type: 'move',
+                itemId: change.id,
+                fromX: start.x,
+                fromY: start.y,
+                toX: change.position.x,
+                toY: change.position.y,
+              });
+            }
+            persistItemPosition(change.id, change.position.x, change.position.y);
+          }
         }
       }
     },
-    [onNodesChange, persistItemPosition],
+    [onNodesChange, persistItemPosition, nodes, undoRedo],
   );
+
+  // Apply a move command to local nodes + persist it. Used by undo/redo.
+  const applyMove = useCallback(
+    (cmd: MoveCommand) => {
+      suppressNextPushRef.current.add(cmd.itemId);
+      setNodes((ns) =>
+        ns.map((n) =>
+          n.id === cmd.itemId ? { ...n, position: { x: cmd.toX, y: cmd.toY } } : n,
+        ),
+      );
+      persistItemPosition(cmd.itemId, cmd.toX, cmd.toY);
+    },
+    [setNodes, persistItemPosition],
+  );
+
+  const handleUndo = useCallback(() => {
+    const cmd = undoRedo.undo();
+    if (cmd) applyMove(cmd);
+  }, [undoRedo, applyMove]);
+
+  const handleRedo = useCallback(() => {
+    const cmd = undoRedo.redo();
+    if (cmd) applyMove(cmd);
+  }, [undoRedo, applyMove]);
 
   const handleEdgesChange = useCallback(
     (changes: EdgeChange<Edge>[]) => {
@@ -456,6 +547,40 @@ function CanvasEditorInner(): React.ReactElement {
     setCurrentZoom(vp.zoom);
   }, []);
 
+  // Keyboard shortcuts: Ctrl+Z undo, Ctrl+Shift+Z / Ctrl+Y redo, Escape deselect.
+  useEffect(() => {
+    const isEditable = (el: EventTarget | null): boolean => {
+      if (!(el instanceof HTMLElement)) return false;
+      const tag = el.tagName;
+      return tag === 'INPUT' || tag === 'TEXTAREA' || el.isContentEditable;
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (isEditable(e.target)) return;
+      const ctrl = e.ctrlKey || e.metaKey;
+      if (ctrl && !e.shiftKey && (e.key === 'z' || e.key === 'Z')) {
+        e.preventDefault();
+        handleUndo();
+      } else if (ctrl && ((e.shiftKey && (e.key === 'z' || e.key === 'Z')) || e.key === 'y' || e.key === 'Y')) {
+        e.preventDefault();
+        handleRedo();
+      } else if (e.key === 'Escape') {
+        setNodes((ns) => ns.map((n) => (n.selected ? { ...n, selected: false } : n)));
+        setEdges((es) => es.map((eg) => (eg.selected ? { ...eg, selected: false } : eg)));
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [handleUndo, handleRedo, setNodes, setEdges]);
+
+  // Cleanup saved-timer on unmount.
+  useEffect(() => {
+    return () => {
+      if (savedTimerRef.current) clearTimeout(savedTimerRef.current);
+    };
+  }, []);
+
+  const isEmpty = !isLoading && nodes.length === 0;
+
   if (notFound) {
     return (
       <div className="flex min-h-screen flex-col items-center justify-center bg-[#0F172A] pb-24 text-slate-200">
@@ -475,7 +600,7 @@ function CanvasEditorInner(): React.ReactElement {
   return (
     <div className="flex min-h-screen flex-col bg-[#0F172A] pb-16 text-slate-200">
       {/* Toolbar */}
-      <header className="flex items-center gap-2 border-b border-slate-700 px-3 py-2">
+      <header className="flex flex-wrap items-center gap-2 border-b border-slate-700 px-3 py-2">
         <button
           type="button"
           onClick={() => navigate('/canvases')}
@@ -519,6 +644,19 @@ function CanvasEditorInner(): React.ReactElement {
         >
           <LayoutGrid className="h-3 w-3" /> Auto-layout
         </button>
+        <span
+          data-testid="canvas-save-indicator"
+          data-status={saveStatus}
+          aria-live="polite"
+          className={[
+            'ml-1 min-w-[60px] text-right text-[10px] tabular-nums',
+            saveStatus === 'error' ? 'text-red-400' : 'text-slate-400',
+          ].join(' ')}
+        >
+          {saveStatus === 'saving' && 'Saving…'}
+          {saveStatus === 'saved' && 'Saved ✓'}
+          {saveStatus === 'error' && 'Save failed'}
+        </span>
       </header>
 
       {error && (
@@ -539,7 +677,25 @@ function CanvasEditorInner(): React.ReactElement {
           Loading canvas…
         </div>
       ) : (
-        <div className="h-[calc(100vh-8rem)] w-full" data-testid="canvas-flow-wrapper">
+        <div
+          className="relative h-[calc(100vh-8rem)] w-full"
+          data-testid="canvas-flow-wrapper"
+          style={{ touchAction: 'none' }}
+        >
+          {isEmpty && (
+            <div
+              data-testid="canvas-empty-state"
+              className="pointer-events-none absolute inset-0 z-10 flex flex-col items-center justify-center px-6 text-center"
+            >
+              <p className="text-sm text-slate-300">
+                This canvas is empty. Use the toolbar to add a group or text item,
+                or open a note to add it here.
+              </p>
+              <p className="mt-2 text-[11px] text-slate-500">
+                Shortcuts: Ctrl+Z undo · Ctrl+Shift+Z redo · Delete to remove · Esc to deselect
+              </p>
+            </div>
+          )}
           <ZoomContext.Provider value={currentZoom}>
           <ReactFlow
             nodes={nodes}

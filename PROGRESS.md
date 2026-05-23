@@ -2,7 +2,7 @@
 
 > **Chronological log of what's been done.** New work appends to the end. Use this to verify "we already did X" before re-doing.
 
-**Last updated:** 2026-05-13 (Round 21: Review nits cleanup — PERF-12/13/N2 fixes + all review-comments checkboxes closed)
+**Last updated:** 2026-05-22 (Round 24: Phase 7 Visual Thinking Canvas SHIPPED — 4 PRs, ~100 new tests)
 
 ---
 
@@ -1226,3 +1226,39 @@ Two items dispatched via /fleet with Opus 4.6 1M + git-worktree-per-agent:
 - **P4** KMS-grade JWT_SECRET_KEY rotation
 - **P4** Frontend deps (React 19, Vite 8, Tailwind 4)
 
+
+
+---
+
+## Round 24 — Phase 7: Visual Thinking Canvas (2026-05-22)
+
+Closes the long-deferred Phase 7 (Heptabase / Milanote-style freeform canvas) in a single round across 4 PRs. Shipped via worktree-per-agent fleet pattern (see § 22aj for adoption rationale).
+
+### What was done
+
+| PR | Surface | Details |
+|---|---|---|
+| **PR A** | Backend | Alembic 012 (`canvases`, `canvas_items`, `canvas_edges`); ORM models with `version` INT for optimistic concurrency; 12 REST endpoints under `/api/canvases`; owner isolation enforced via cross-user 404; ghost-card support (`ON DELETE SET NULL` FK + `last_known_title` snapshot); batch update + auto-layout endpoints. 37 backend tests. |
+| **PR B** | Frontend | `@xyflow/react` v12 installed; `CanvasListPage` (grid of canvas cards, create/delete); `CanvasEditorPage` with custom `NoteCardNode` / `GroupNode` / `TextNode`; zoom-based LOD via `ZoomContext` (avoids render loops); viewport persisted on unmount + restored on load; drag-end position persistence (debounced 400ms PATCH); Canvas tab added to BottomNav (6 tabs). 46 tests. Audit fixes mid-PR: API-contract alignment + ZoomContext (originally inlined zoom into node data → caused loops). |
+| **PR C** | Frontend | `AddToCanvasModal` on `NoteDetailPage` (pick existing canvas or create new); "Open as Canvas" CTA on `BrainViewPage` (snapshot current force-graph nodes into a fresh canvas). ~15 tests. |
+| **PR D** | Frontend + Docs | Mobile `touch-action: none` on the flow wrapper (fixes pinch-zoom / pan on iOS Safari); client-side undo/redo command stack for position changes (Ctrl+Z / Ctrl+Shift+Z / Ctrl+Y); Escape-to-deselect; empty-state onboarding ("This canvas is empty…" + shortcut hint); autosave indicator (Saving… / Saved ✓ / Save failed); flex-wrap toolbar for narrow viewports. Docs: PLAN, PROGRESS, KNOWN_ISSUES, DECISIONS updated. ~10 tests. |
+
+### Key design choices (full rationale in DECISIONS.md § 22ak)
+- `@xyflow/react` v12 chosen over tldraw / excalidraw — purpose-built node editor, smaller bundle, better TypeScript story.
+- Canvas ≠ Brain View: Brain View stays the auto-generated force-directed graph; Canvas is user-curated spatial arrangement.
+- Optimistic concurrency via `version` INT column on `canvas_items`; 409 on conflict triggers a full canvas refetch.
+- Ghost cards: deleting an underlying note leaves the canvas item in place (`note_id` set to NULL) with `last_known_title` snapshot, so user spatial memory isn't destroyed.
+- Undo/redo: client-side command stack for **position changes only** (V1 limitation; add/delete reversal deferred).
+
+### Test results
+- Backend: +37 canvas tests, all green
+- Frontend: +~70 canvas tests across 4 PRs (List 13 + Editor 22 + Store 5 + API 12 + AddToCanvas/Brain ~15 + undo/redo 7), all green
+- TypeScript: clean
+- No regressions
+
+### Remaining open work after Round 24
+- **P1** Migrate refresh token to first-party cookies (blocked on custom domain)
+- **P3** Canvas undo/redo: extend to add/delete (currently position-only)
+- **P3** Canvas: drag-to-resize for group/text nodes (currently size is fixed-on-create)
+- **P4** KMS-grade JWT_SECRET_KEY rotation
+- **P4** Frontend deps (React 19, Vite 8, Tailwind 4)

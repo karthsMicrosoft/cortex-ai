@@ -2,7 +2,21 @@
 
 > **Open work, bugs not fixed, gaps from "fully done."** Anything tagged P0/P1/P2 here is meant to be picked up by the next agent.
 
-**Last updated:** 2025-05-14 (Round 23: Test triage finalized — 900 passed / 0 failed / 8 skipped; xpassed SEC-07 test promoted)
+**Last updated:** 2026-05-22 (Round 24: Phase 7 Visual Thinking Canvas shipped — see "Phase 7 known limitations" below)
+
+---
+
+## Phase 7 — Visual Thinking Canvas (Round 24) — known limitations
+
+These are intentional V1 scoping decisions, not bugs. Tracked as P3 follow-ups for a future iteration.
+
+| # | Limitation | Notes |
+|---|---|---|
+| C-1 | **Undo/redo tracks position changes only.** Adding or deleting a node/edge cannot be undone. | The command stack lives in `frontend/src/hooks/useCanvasUndoRedo.ts`. Extending to add/delete requires a reverse-operation model (re-create deleted item with same id + version, or delete the just-added item). Deferred to keep PR D scope small. |
+| C-2 | **Group/text nodes are fixed-size on create.** Drag-to-resize is not implemented. | `addCanvasItem` accepts `width`/`height` and the backend stores them; the UI just doesn't expose a resize handle yet. |
+| C-3 | **No multi-select drag.** Each node moves individually. | Reactflow supports this out of the box; would need wiring the batch-update endpoint for the position payload. Backend endpoint already exists (`PATCH /api/canvases/{id}/items:batch`). |
+| C-4 | **Optimistic-concurrency conflict (409) triggers a full canvas refetch.** | Acceptable for single-user, but for collaborative editing we'd want a CRDT or operational-transform layer. Out of scope (Cortex is single-tenant per spec). |
+| C-5 | **Autosave indicator is per-canvas, not per-item.** "Saving…" reflects any in-flight PATCH; can't tell which item is mid-save. | Cosmetic. |
 
 ---
 

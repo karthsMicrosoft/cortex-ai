@@ -123,6 +123,7 @@ from app.api.users import router as users_router                  # US-8 — use
 from app.api.import_url import router as import_url_router        # P5 PR 5.2 — URL import
 from app.api.clip_token import router as clip_token_router        # P5 PR 5.5 — extension clip token
 from app.api.note_links import router as note_links_router        # P6 PR 6.1 — backlinks API
+from app.api.canvases import router as canvases_router            # P7 PR A — visual thinking canvas
 
 app.include_router(auth_router,           prefix="/api/auth",          tags=["auth"])
 app.include_router(notes_router,          prefix="/api/notes",         tags=["notes"])
@@ -142,6 +143,7 @@ app.include_router(users_router,          prefix="/api/users",         tags=["us
 app.include_router(import_url_router,     prefix="/api/import",        tags=["import"])
 app.include_router(clip_token_router,     prefix="/api/auth",          tags=["auth"])
 app.include_router(note_links_router,     prefix="/api/notes",         tags=["note_links"])
+app.include_router(canvases_router,       prefix="/api/canvases",      tags=["canvases"])
 
 # --- Observability (Round 20 / PR alpha) ---
 # Initialize Azure Monitor / Application Insights tracing. No-ops silently if

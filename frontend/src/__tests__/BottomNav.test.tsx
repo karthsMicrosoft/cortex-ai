@@ -59,10 +59,10 @@ describe('BottomNav (Task 5 / 3.1)', () => {
 
   // --- Four tabs ---
 
-  it('renders exactly five nav tab links', () => {
+  it('renders exactly six nav tab links', () => {
     renderBottomNav();
     const links = screen.getAllByRole('link');
-    expect(links.length).toBe(5);
+    expect(links.length).toBe(6);
   });
 
   it('has a Capture tab', () => {
@@ -178,7 +178,7 @@ describe('BottomNav (Task 5 / 3.1)', () => {
     const nav = screen.getByRole('navigation');
     // Lucide icons render as SVG elements
     const icons = nav.querySelectorAll('svg');
-    expect(icons.length).toBeGreaterThanOrEqual(5);
+    expect(icons.length).toBeGreaterThanOrEqual(6);
   });
 
   // --- Accessibility ---

@@ -21,6 +21,8 @@ const LibraryPage = lazy(() => import('./pages/LibraryPage'));
 const SearchPage = lazy(() => import('./pages/SearchPage'));
 const AskPage = lazy(() => import('./pages/AskPage'));
 const SharePage = lazy(() => import('./pages/SharePage'));
+const CanvasListPage = lazy(() => import('./pages/CanvasListPage'));
+const CanvasEditorPage = lazy(() => import('./pages/CanvasEditorPage'));
 
 import { BottomNav } from './components/BottomNav';
 import { AppHeader } from './components/AppHeader';
@@ -158,6 +160,22 @@ export default function App(): React.ReactElement {
           element={
             <AuthGate>
               <ProfilePage />
+            </AuthGate>
+          }
+        />
+        <Route
+          path="/canvases"
+          element={
+            <AuthGate>
+              <CanvasListPage />
+            </AuthGate>
+          }
+        />
+        <Route
+          path="/canvas/:id"
+          element={
+            <AuthGate>
+              <CanvasEditorPage />
             </AuthGate>
           }
         />

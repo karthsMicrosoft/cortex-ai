@@ -1,4 +1,4 @@
-import { lazy, Suspense } from 'react';
+import { lazy, Suspense, useEffect, useReducer } from 'react';
 import { Routes, Route, Navigate } from 'react-router-dom';
 import { useAuthStore } from './store/authStore';
 // Eager imports — auth boundary + first-paint pages must render immediately
@@ -9,25 +9,42 @@ import CapturePage from './pages/CapturePage';
 import ConflictsPage from './pages/ConflictsPage';
 import ProfilePage from './pages/ProfilePage';   // 2026-05-01 — issue #3
 
+// ---------------------------------------------------------------------------
+// Lazy with auto-retry — Safari mobile sometimes fails to load chunks from
+// the service-worker cache after a bfcache restore. Retrying once after a
+// short delay fixes the transient failure instead of showing a blank screen.
+// ---------------------------------------------------------------------------
+
+function lazyRetry(load: () => Promise<{ default: React.ComponentType }>) {
+  return lazy(() =>
+    load().catch(
+      () => new Promise<{ default: React.ComponentType }>((resolve) => {
+        setTimeout(() => resolve(load()), 1500);
+      }),
+    ),
+  );
+}
+
 // PERF (Round 15 / PR #25): code-split secondary pages so the initial JS
 // bundle stays small. PERF-10 already lazy-loaded BrainViewPage; this round
 // adds Insights / Create / Settings / NoteDetail / Library / Search.
-const BrainViewPage = lazy(() => import('./pages/BrainViewPage'));
-const InsightsPage = lazy(() => import('./pages/InsightsPage'));
-const CreatePage = lazy(() => import('./pages/CreatePage'));
-const SettingsPage = lazy(() => import('./pages/SettingsPage'));  // US-7
-const NoteDetailPage = lazy(() => import('./pages/NoteDetailPage'));
-const LibraryPage = lazy(() => import('./pages/LibraryPage'));
-const SearchPage = lazy(() => import('./pages/SearchPage'));
-const AskPage = lazy(() => import('./pages/AskPage'));
-const SharePage = lazy(() => import('./pages/SharePage'));
-const CanvasListPage = lazy(() => import('./pages/CanvasListPage'));
-const CanvasEditorPage = lazy(() => import('./pages/CanvasEditorPage'));
+const BrainViewPage = lazyRetry(() => import('./pages/BrainViewPage'));
+const InsightsPage = lazyRetry(() => import('./pages/InsightsPage'));
+const CreatePage = lazyRetry(() => import('./pages/CreatePage'));
+const SettingsPage = lazyRetry(() => import('./pages/SettingsPage'));  // US-7
+const NoteDetailPage = lazyRetry(() => import('./pages/NoteDetailPage'));
+const LibraryPage = lazyRetry(() => import('./pages/LibraryPage'));
+const SearchPage = lazyRetry(() => import('./pages/SearchPage'));
+const AskPage = lazyRetry(() => import('./pages/AskPage'));
+const SharePage = lazyRetry(() => import('./pages/SharePage'));
+const CanvasListPage = lazyRetry(() => import('./pages/CanvasListPage'));
+const CanvasEditorPage = lazyRetry(() => import('./pages/CanvasEditorPage'));
 
 import { BottomNav } from './components/BottomNav';
 import { AppHeader } from './components/AppHeader';
 import { SessionGate } from './components/SessionGate';
 import { RouteLoading } from './components/RouteLoading';
+import { ErrorBoundary } from './components/ErrorBoundary';
 
 // ---------------------------------------------------------------------------
 // Protected layout — AuthGate + AppHeader + BottomNav
@@ -59,11 +76,27 @@ function AuthGate({ children }: { children: React.ReactNode }): React.ReactEleme
 // ---------------------------------------------------------------------------
 
 export default function App(): React.ReactElement {
+  // Safari bfcache fix: when the browser restores a frozen page, IndexedDB
+  // connections and React state can be stale → blank screen. Force a full
+  // re-render of the route tree by bumping a key.
+  const [bfKey, bumpBfKey] = useReducer((c: number) => c + 1, 0);
+
+  useEffect(() => {
+    const handlePageShow = (e: PageTransitionEvent) => {
+      if (e.persisted) {
+        bumpBfKey();
+      }
+    };
+    window.addEventListener('pageshow', handlePageShow);
+    return () => window.removeEventListener('pageshow', handlePageShow);
+  }, []);
+
   return (
     <div className="min-h-screen bg-[#0F172A]">
+      <ErrorBoundary>
       <SessionGate>
       <Suspense fallback={<RouteLoading />}>
-      <Routes>
+      <Routes key={bfKey}>
         {/* Public routes */}
         <Route path="/login" element={<LoginPage />} />
         <Route path="/register" element={<RegisterPage />} />
@@ -192,6 +225,7 @@ export default function App(): React.ReactElement {
       </Routes>
       </Suspense>
       </SessionGate>
+      </ErrorBoundary>
     </div>
   );
 }

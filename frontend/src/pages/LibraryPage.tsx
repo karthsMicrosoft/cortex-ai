@@ -1,5 +1,5 @@
 import { useCallback, useState } from 'react';
-import { Trash2, X } from 'lucide-react';
+import { Search, Trash2, X } from 'lucide-react';
 import { db } from '../db';
 import type { Category } from '../db';
 import { useNotes } from '../hooks/useNotes';
@@ -39,12 +39,24 @@ export default function LibraryPage(): React.ReactElement {
   const [selectedLocalIds, setSelectedLocalIds] = useState<Set<string>>(new Set());
   const [isDeleting, setIsDeleting] = useState(false);
   const [deleteError, setDeleteError] = useState<string | null>(null);
+  const [searchQuery, setSearchQuery] = useState('');
 
   const notes = useNotes({
     category: activeCategory,
     dateFrom: dateFrom ? new Date(dateFrom) : undefined,
     dateTo: dateTo ? new Date(dateTo) : undefined,
   });
+
+  // Client-side text search across note content and transcription
+  const filteredNotes = searchQuery.trim()
+    ? notes.filter((n) => {
+        const q = searchQuery.toLowerCase();
+        return (
+          n.content.toLowerCase().includes(q) ||
+          (n.rawTranscription && n.rawTranscription.toLowerCase().includes(q))
+        );
+      })
+    : notes;
 
   const toggleSelect = useCallback((localId: string) => {
     setSelectedLocalIds((prev) => {
@@ -115,7 +127,7 @@ export default function LibraryPage(): React.ReactElement {
       <header className="flex items-center justify-between border-b border-slate-700 px-4 py-3">
         <h1 className="text-lg font-semibold text-slate-100">Library</h1>
         <div className="flex items-center gap-2">
-          {!selectMode && notes.length > 0 && (
+          {!selectMode && filteredNotes.length > 0 && (
             <button
               type="button"
               onClick={() => setSelectMode(true)}
@@ -163,6 +175,30 @@ export default function LibraryPage(): React.ReactElement {
 
       {/* Filters */}
       <div className="border-b border-slate-700/50 px-4 py-3">
+        {/* Search bar */}
+        <div className="relative mb-3">
+          <Search className="absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-slate-500" aria-hidden="true" />
+          <input
+            type="text"
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+            placeholder="Search notes…"
+            aria-label="Search notes"
+            data-testid="library-search-input"
+            className="w-full rounded-lg border border-slate-600 bg-slate-800 py-1.5 pl-8 pr-8 text-xs text-slate-200 placeholder-slate-500 focus:border-indigo-500 focus:outline-none"
+          />
+          {searchQuery && (
+            <button
+              type="button"
+              onClick={() => setSearchQuery('')}
+              aria-label="Clear search"
+              className="absolute right-2 top-1/2 -translate-y-1/2 text-slate-500 hover:text-slate-300"
+            >
+              <X className="h-3.5 w-3.5" />
+            </button>
+          )}
+        </div>
+
         {/* Category chips */}
         <div className="mb-3 flex gap-2 overflow-x-auto pb-1">
           <button
@@ -228,12 +264,16 @@ export default function LibraryPage(): React.ReactElement {
 
       {/* Timeline */}
       <main className="flex flex-1 flex-col gap-3 px-4 py-4">
-        {notes.length === 0 ? (
+        {filteredNotes.length === 0 ? (
           <div className="flex flex-1 items-center justify-center">
-            <p className="text-sm text-slate-500">No notes yet. Tap the mic to capture one!</p>
+            <p className="text-sm text-slate-500">
+              {searchQuery.trim()
+                ? 'No notes match your search.'
+                : 'No notes yet. Tap the mic to capture one!'}
+            </p>
           </div>
         ) : (
-          notes.map((note) => {
+          filteredNotes.map((note) => {
             const isSelected = selectedLocalIds.has(note.localId);
             return (
               <div key={note.localId} className="relative">

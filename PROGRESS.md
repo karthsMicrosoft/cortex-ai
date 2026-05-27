@@ -1290,3 +1290,10 @@ Post-Phase 7 polish pushed directly to main (no separate PRs — small targeted 
 - **Root cause:** Safari mobile auto-zooms the viewport when an input has `font-size < 16px`. The Library search bar used `text-xs` (12px), triggering zoom on focus.
 - **Fix:** Global CSS rule in `globals.css` forces `font-size: 16px !important` on all `input`, `textarea`, `select` elements below `640px` viewport width. Fixes all inputs across the app (search, date pickers, canvas title, login, register, profile, settings).
 - Commit: `2e0c387`.
+
+### Next up: Brain View 3D Upgrade (not started)
+- Plan saved in session workspace and debated by gpt-5.3-codex advocate+critic agents.
+- Decision: use **real low-poly brain GLB mesh** as translucent wireframe shell (bundled in `public/models/brain.glb`, <200KB).
+- Replace `react-force-graph-2d` → `react-force-graph-3d` (Three.js/WebGL).
+- Categories mapped to brain-lobe anchor zones; nodes float near surface, NOT snapped to mesh topology.
+- See PLAN.md for full implementation details.

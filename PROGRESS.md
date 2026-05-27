@@ -1285,3 +1285,8 @@ Post-Phase 7 polish pushed directly to main (no separate PRs — small targeted 
 ### Canvas seed data + migration
 - Ran Alembic migration 012 on production (`alembic upgrade head`) — tables were missing after Round 24 merge, causing 500 on `/api/canvases`.
 - Seeded 3 demo canvases: "Life Dashboard" (14 items), "Creative Projects" (9 items), "Growth & Learning Map" (10 items) with groups, note cards, text annotations, and labeled edges.
+
+### Safari input auto-zoom fix
+- **Root cause:** Safari mobile auto-zooms the viewport when an input has `font-size < 16px`. The Library search bar used `text-xs` (12px), triggering zoom on focus.
+- **Fix:** Global CSS rule in `globals.css` forces `font-size: 16px !important` on all `input`, `textarea`, `select` elements below `640px` viewport width. Fixes all inputs across the app (search, date pickers, canvas title, login, register, profile, settings).
+- Commit: `2e0c387`.

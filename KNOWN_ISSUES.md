@@ -2,7 +2,7 @@
 
 > **Open work, bugs not fixed, gaps from "fully done."** Anything tagged P0/P1/P2 here is meant to be picked up by the next agent.
 
-**Last updated:** 2026-05-22 (Round 24: Phase 7 Visual Thinking Canvas shipped — see "Phase 7 known limitations" below)
+**Last updated:** 2026-05-27 (Round 24 follow-ups: Library search bar + Safari mobile blank screen fix)
 
 ---
 

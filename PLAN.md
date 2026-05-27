@@ -2,7 +2,7 @@
 
 > **Living document.** Captures what we're building, what's done, what's next. Update as work progresses.
 
-**Last updated:** 2026-05-22 (Round 24: Phase 7 Visual Thinking Canvas — SHIPPED across 4 PRs)
+**Last updated:** 2026-05-27 (Round 24 follow-ups: Library search bar + Safari mobile blank screen fix)
 
 ---
 

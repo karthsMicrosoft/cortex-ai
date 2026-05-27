@@ -2,7 +2,7 @@
 
 > **Chronological log of what's been done.** New work appends to the end. Use this to verify "we already did X" before re-doing.
 
-**Last updated:** 2026-05-22 (Round 24: Phase 7 Visual Thinking Canvas SHIPPED — 4 PRs, ~100 new tests)
+**Last updated:** 2026-05-27 (Round 24: Phase 7 Visual Thinking Canvas SHIPPED — 4 PRs, ~100 new tests + Library search bar + Safari mobile fix)
 
 ---
 
@@ -1262,3 +1262,26 @@ Closes the long-deferred Phase 7 (Heptabase / Milanote-style freeform canvas) in
 - **P3** Canvas: drag-to-resize for group/text nodes (currently size is fixed-on-create)
 - **P4** KMS-grade JWT_SECRET_KEY rotation
 - **P4** Frontend deps (React 19, Vite 8, Tailwind 4)
+
+---
+
+## Round 24 Follow-ups (2026-05-27)
+
+Post-Phase 7 polish pushed directly to main (no separate PRs — small targeted fixes).
+
+### Library search bar
+- Added a text search input at the top of the Library page filters.
+- Instant client-side filtering against note `content` and `rawTranscription` via Dexie (offline-first, no network round-trip).
+- Clear button (`X`) and contextual empty state ("No notes match your search.").
+- Commit: `e2e9ca0`.
+
+### Safari mobile blank screen fix
+- **Root cause:** Safari's bfcache restores frozen JS state, breaking lazy-loaded chunks and IndexedDB connections → blank white screen on tab navigation (Library, Canvas, etc). Refresh recovers because it bypasses bfcache.
+- **Fix 1 — `lazyRetry` wrapper:** All `React.lazy()` imports now auto-retry chunk loads after 1.5s on failure (covers stale service-worker cache + bfcache restore).
+- **Fix 2 — `ErrorBoundary`:** New `src/components/ErrorBoundary.tsx` wraps the entire route tree. Catches render crashes and shows "Something went wrong" with Try Again / Reload buttons instead of blank screen.
+- **Fix 3 — bfcache handler:** `pageshow` event listener detects `event.persisted` (bfcache restore) and bumps a key on `<Routes>` to force React to re-mount all route components with fresh state.
+- Commit: `f746233`.
+
+### Canvas seed data + migration
+- Ran Alembic migration 012 on production (`alembic upgrade head`) — tables were missing after Round 24 merge, causing 500 on `/api/canvases`.
+- Seeded 3 demo canvases: "Life Dashboard" (14 items), "Creative Projects" (9 items), "Growth & Learning Map" (10 items) with groups, note cards, text annotations, and labeled edges.

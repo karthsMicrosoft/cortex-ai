@@ -156,7 +156,7 @@ PYTHONIOENCODING=utf-8 az containerapp exec --name cortexks-api --resource-group
 - Zustand 4.5 (state) + Dexie 4.0 + dexie-react-hooks 1.1 (IndexedDB)
 - react-router-dom 6.26
 - vite-plugin-pwa 0.20 (service worker with `clientsClaim:true, skipWaiting:true`)
-- react-force-graph-2d 1.25 (lazy-loaded), wavesurfer.js 7.8 (dynamic import)
+- react-force-graph-3d (lazy-loaded, Three.js/WebGL), wavesurfer.js 7.8 (dynamic import)
 - Vitest 2 + @testing-library/react + jsdom + fake-indexeddb (tests)
 
 **Infra:**

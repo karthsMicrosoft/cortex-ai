@@ -1,7 +1,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { ArrowLeft, Layout, Loader2, RefreshCw, Search } from 'lucide-react';
-import ForceGraph2D from 'react-force-graph-2d';
+import ForceGraph3D from 'react-force-graph-3d';
+import * as THREE from 'three';
+import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import { apiGet } from '../api/client';
 import { addCanvasItem, createCanvas } from '../api/canvas';
 
@@ -32,6 +34,7 @@ interface GraphData {
 interface FGNode extends GraphNode {
   x?: number;
   y?: number;
+  z?: number;
 }
 
 // ---------------------------------------------------------------------------
@@ -54,17 +57,56 @@ function categoryToHex(category: string): string {
 }
 
 // ---------------------------------------------------------------------------
+// Category → brain-lobe 3D anchor positions
+// ---------------------------------------------------------------------------
+
+const CATEGORY_ANCHOR: Record<string, { x: number; y: number; z: number }> = {
+  Ideas:     { x: 0,   y: 40,  z: 60  },  // Frontal lobe
+  Journal:   { x: 0,   y: 50,  z: 80  },  // Prefrontal cortex
+  Learning:  { x: -60, y: -10, z: 0   },  // Left temporal
+  Music:     { x: 60,  y: -10, z: 0   },  // Right temporal
+  Spiritual: { x: 0,   y: 60,  z: -30 },  // Parietal lobe
+  Fitness:   { x: 0,   y: 70,  z: 20  },  // Motor cortex
+};
+
+// ---------------------------------------------------------------------------
 // Edge styling per link_type
 // ---------------------------------------------------------------------------
 
 const LINK_STYLE: Record<string, { color: string; width: number; dash: number[] | null }> = {
-  semantic: { color: '#94a3b8', width: 1, dash: [4, 3] }, // dashed gray
-  manual:   { color: '#3b82f6', width: 2, dash: null },    // solid blue
-  wiki:     { color: '#a855f7', width: 2, dash: null },    // solid purple
+  semantic: { color: '#94a3b8', width: 1, dash: [4, 3] },
+  manual:   { color: '#3b82f6', width: 2, dash: null },
+  wiki:     { color: '#a855f7', width: 2, dash: null },
 };
 
 function styleFor(lt: string | undefined) {
   return LINK_STYLE[lt ?? 'semantic'] ?? LINK_STYLE.semantic;
+}
+
+// ---------------------------------------------------------------------------
+// Text sprite helper for 3D node labels
+// ---------------------------------------------------------------------------
+
+function makeTextSprite(text: string): THREE.Sprite {
+  const canvas = document.createElement('canvas');
+  const ctx = canvas.getContext('2d')!;
+  const label = text.length > 20 ? `${text.slice(0, 20)}…` : text;
+  const fontSize = 48;
+  ctx.font = `${fontSize}px sans-serif`;
+  const metrics = ctx.measureText(label);
+  canvas.width = Math.ceil(metrics.width) + 16;
+  canvas.height = fontSize + 16;
+  ctx.font = `${fontSize}px sans-serif`;
+  ctx.fillStyle = '#cbd5e1';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillText(label, canvas.width / 2, canvas.height / 2);
+  const texture = new THREE.CanvasTexture(canvas);
+  texture.needsUpdate = true;
+  const mat = new THREE.SpriteMaterial({ map: texture, transparent: true, depthWrite: false });
+  const sprite = new THREE.Sprite(mat);
+  sprite.scale.set(canvas.width / 10, canvas.height / 10, 1);
+  return sprite;
 }
 
 // ---------------------------------------------------------------------------
@@ -74,7 +116,9 @@ function styleFor(lt: string | undefined) {
 export default function BrainViewPage(): React.ReactElement {
   const navigate = useNavigate();
   const containerRef = useRef<HTMLDivElement>(null);
+  const fgRef = useRef<{ scene: () => THREE.Scene; renderer: () => THREE.WebGLRenderer } | null>(null);
   const [dimensions, setDimensions] = useState({ width: 400, height: 600 });
+  const meshLoadedRef = useRef(false);
 
   const [graphData, setGraphData] = useState<GraphData>({ nodes: [], links: [] });
   const [isLoading, setIsLoading] = useState(true);
@@ -90,6 +134,62 @@ export default function BrainViewPage(): React.ReactElement {
   const [isExporting, setIsExporting] = useState(false);
   const [exportError, setExportError] = useState<string | null>(null);
   const [exportWarning, setExportWarning] = useState<string | null>(null);
+
+  // ---- Load brain mesh + configure renderer on mount ----
+  useEffect(() => {
+    const fg = fgRef.current;
+    if (!fg || meshLoadedRef.current) return;
+    meshLoadedRef.current = true;
+
+    // Cap pixel ratio for mobile performance
+    try {
+      fg.renderer().setPixelRatio(Math.min(window.devicePixelRatio, 2));
+    } catch {
+      // Renderer not ready yet — skip
+    }
+
+    // Add ambient + directional lights
+    try {
+      const scene = fg.scene();
+      const ambient = new THREE.AmbientLight(0xffffff, 0.6);
+      scene.add(ambient);
+      const directional = new THREE.DirectionalLight(0xffffff, 0.8);
+      directional.position.set(50, 100, 80);
+      scene.add(directional);
+    } catch {
+      // Scene not ready — skip
+    }
+
+    // Load brain mesh as translucent wireframe shell
+    const loader = new GLTFLoader();
+    loader.load(
+      '/models/brain.glb',
+      (gltf) => {
+        try {
+          const brain = gltf.scene;
+          brain.traverse((child) => {
+            if ((child as THREE.Mesh).isMesh) {
+              (child as THREE.Mesh).material = new THREE.MeshBasicMaterial({
+                color: 0x6366f1,
+                transparent: true,
+                opacity: 0.08,
+                wireframe: true,
+              });
+            }
+          });
+          brain.scale.setScalar(1.5);
+          fg.scene().add(brain);
+        } catch {
+          // Mesh processing failed — graceful fallback (nodes-only)
+        }
+      },
+      undefined,
+      () => {
+        // Mesh load failed — graceful fallback (nodes-only 3D graph)
+        console.warn('Brain mesh failed to load — falling back to nodes-only');
+      },
+    );
+  }, [isLoading]);
 
   // ---- Resize observer + window resize ----
   const remeasure = useCallback(() => {
@@ -132,6 +232,18 @@ export default function BrainViewPage(): React.ReactElement {
       .catch((err: Error) => setError(err.message))
       .finally(() => setIsLoading(false));
   }, [activeCategories, since]);
+
+  // ---- Seed node positions from category anchors ----
+  useEffect(() => {
+    if (graphData.nodes.length === 0) return;
+    for (const n of graphData.nodes as FGNode[]) {
+      if (n.x !== undefined) continue; // already positioned
+      const anchor = CATEGORY_ANCHOR[n.category] ?? { x: 0, y: 0, z: 0 };
+      n.x = anchor.x + (Math.random() - 0.5) * 40;
+      n.y = anchor.y + (Math.random() - 0.5) * 40;
+      n.z = anchor.z + (Math.random() - 0.5) * 40;
+    }
+  }, [graphData]);
 
   // ---- Client-side derived filtered graph ----
   const filteredGraph = useMemo<GraphData>(() => {
@@ -213,30 +325,19 @@ export default function BrainViewPage(): React.ReactElement {
     });
   };
 
-  const paintNode = useCallback(
-    (node: FGNode, ctx: CanvasRenderingContext2D, globalScale: number) => {
-      const r = 6;
-      const fontSize = Math.max(8, 10 / globalScale);
-      const hex = categoryToHex(node.category);
-
-      ctx.beginPath();
-      ctx.arc(node.x ?? 0, node.y ?? 0, r, 0, 2 * Math.PI);
-      ctx.fillStyle = hex;
-      ctx.fill();
-      ctx.strokeStyle = '#1e293b';
-      ctx.lineWidth = 1;
-      ctx.stroke();
-
-      ctx.font = `${fontSize}px sans-serif`;
-      ctx.fillStyle = '#cbd5e1';
-      ctx.textAlign = 'center';
-      ctx.textBaseline = 'top';
-      const label =
-        node.label.length > 20 ? `${node.label.slice(0, 20)}…` : node.label;
-      ctx.fillText(label, node.x ?? 0, (node.y ?? 0) + r + 2);
-    },
-    [],
-  );
+  // ---- 3D node rendering ----
+  const nodeThreeObject = useCallback((node: object) => {
+    const n = node as FGNode;
+    const hex = categoryToHex(n.category);
+    const color = new THREE.Color(hex);
+    const geo = new THREE.SphereGeometry(3, 16, 12);
+    const mat = new THREE.MeshLambertMaterial({ color, transparent: true, opacity: 0.85 });
+    const mesh = new THREE.Mesh(geo, mat);
+    const sprite = makeTextSprite(n.label);
+    sprite.position.set(0, 5, 0);
+    mesh.add(sprite);
+    return mesh;
+  }, []);
 
   return (
     <div className="flex min-h-screen flex-col bg-[#0F172A]">
@@ -376,36 +477,24 @@ export default function BrainViewPage(): React.ReactElement {
 
         {!isLoading && !error && filteredGraph.nodes.length > 0 && (
           <>
-            <ForceGraph2D
+            <ForceGraph3D
+              ref={fgRef as React.MutableRefObject<never>}
               width={dimensions.width}
               height={dimensions.height}
               graphData={filteredGraph}
               nodeId="id"
               linkSource="source"
               linkTarget="target"
-              nodeCanvasObject={
-                paintNode as (
-                  node: object,
-                  ctx: CanvasRenderingContext2D,
-                  globalScale: number,
-                ) => void
-              }
-              nodeCanvasObjectMode={() => 'replace'}
+              nodeThreeObject={nodeThreeObject}
               linkColor={(link) => styleFor((link as GraphLink).link_type).color}
               linkWidth={(link) => styleFor((link as GraphLink).link_type).width}
-              linkLineDash={(link) => styleFor((link as GraphLink).link_type).dash}
+              linkOpacity={0.6}
               onNodeClick={(node) => handleNodeClick(node as FGNode)}
               onNodeHover={(node) => {
                 handleNodeHover((node as FGNode | null) ?? null);
               }}
               backgroundColor="#0F172A"
-              nodePointerAreaPaint={(node, color, ctx) => {
-                const n = node as FGNode;
-                ctx.fillStyle = color;
-                ctx.beginPath();
-                ctx.arc(n.x ?? 0, n.y ?? 0, 8, 0, 2 * Math.PI);
-                ctx.fill();
-              }}
+              controlType="orbit"
             />
 
             {hoverNode && (

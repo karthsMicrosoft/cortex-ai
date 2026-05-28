@@ -1,17 +1,17 @@
 /**
  * BrainViewPage.test.tsx — Task 5.2 (Brain View UI)
- * TDD red-phase tests for frontend/src/pages/BrainViewPage.tsx
+ * Tests for frontend/src/pages/BrainViewPage.tsx
  *
  * Tests:
  *   - Renders a heading for Brain View
- *   - Renders the force-directed graph using react-force-graph-2d
+ *   - Renders the force-directed 3D graph using react-force-graph-3d
  *   - Fetches /api/insights/graph
  *   - Nodes are colored by category (from formatters utility)
  *   - Shows loading state while fetching
  *   - Shows empty state when no nodes are returned
  *   - Requires authentication
  *
- * Mock strategy: mock react-force-graph-2d (heavy canvas library).
+ * Mock strategy: mock react-force-graph-3d (heavy WebGL library) + three.
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
@@ -20,75 +20,94 @@ import React from 'react';
 import { MemoryRouter } from 'react-router-dom';
 
 // ---------------------------------------------------------------------------
-// Mock react-force-graph-2d (heavy canvas library — cannot run in jsdom)
+// Mock three.js (heavy WebGL library — cannot run in jsdom)
 // ---------------------------------------------------------------------------
 
-vi.mock('react-force-graph-2d', () => ({
-  default: (props: {
-    graphData: {
+vi.mock('three', () => {
+  const fn = vi.fn;
+  const mockMaterial = { color: 0, transparent: false, opacity: 1, wireframe: false, map: null, depthWrite: true };
+  const mockMesh = { add: fn(), position: { set: fn() }, scale: { set: fn(), setScalar: fn() }, traverse: fn(), isMesh: true, material: mockMaterial };
+  return {
+    SphereGeometry: fn(),
+    MeshLambertMaterial: fn(() => ({ ...mockMaterial })),
+    MeshBasicMaterial: fn(() => ({ ...mockMaterial })),
+    Mesh: fn(() => ({ ...mockMesh })),
+    Color: fn(),
+    SpriteMaterial: fn(() => ({ ...mockMaterial })),
+    Sprite: fn(() => ({ position: { set: fn() }, scale: { set: fn() } })),
+    CanvasTexture: fn(() => ({ needsUpdate: false })),
+    AmbientLight: fn(() => ({})),
+    DirectionalLight: fn(() => ({ position: { set: fn() } })),
+    Scene: fn(),
+    WebGLRenderer: fn(),
+  };
+});
+
+vi.mock('three/examples/jsm/loaders/GLTFLoader.js', () => ({
+  GLTFLoader: vi.fn().mockImplementation(() => ({
+    load: vi.fn(),
+  })),
+}));
+
+// ---------------------------------------------------------------------------
+// Mock react-force-graph-3d (heavy WebGL library — cannot run in jsdom)
+// ---------------------------------------------------------------------------
+
+vi.mock('react-force-graph-3d', () => {
+  const React = require('react');
+  const ForceGraph3DMock = React.forwardRef((props: Record<string, unknown>, ref: React.Ref<unknown>) => {
+    const graphData = (props.graphData ?? { nodes: [], links: [] }) as {
       nodes: { id: string; label: string; category: string; title?: string; summary?: string }[];
       links: { source: string; target: string; score: number; link_type?: string }[];
     };
-    onNodeClick?: (node: unknown) => void;
-    onNodeHover?: (node: unknown | null) => void;
-    linkColor?: (link: unknown) => string;
-    linkWidth?: (link: unknown) => number;
-    linkLineDash?: (link: unknown) => number[] | null;
-    width?: number;
-    height?: number;
-  }) => {
-    const {
-      graphData,
-      onNodeClick,
-      onNodeHover,
-      linkColor,
-      linkWidth,
-      linkLineDash,
-      width,
-      height,
-    } = props;
-    return (
-      <div
-        data-testid="force-graph"
-        data-node-count={graphData?.nodes?.length ?? 0}
-        data-link-count={graphData?.links?.length ?? 0}
-        data-width={width ?? 0}
-        data-height={height ?? 0}
-      >
-        <ul data-testid="graph-nodes">
-          {(graphData?.nodes ?? []).map((node) => (
-            <li
-              key={node.id}
-              data-testid={`node-${node.id}`}
-              data-category={node.category}
-              data-title={node.title ?? ''}
-              onMouseEnter={() => onNodeHover?.(node)}
-              onMouseLeave={() => onNodeHover?.(null)}
-              onClick={() => onNodeClick?.(node)}
-            >
-              {node.label}
-            </li>
-          ))}
-        </ul>
-        <ul data-testid="graph-links">
-          {(graphData?.links ?? []).map((lnk, i) => {
-            const dash = linkLineDash ? linkLineDash(lnk) : null;
-            return (
-              <li
-                key={i}
-                data-testid={`link-${i}`}
-                data-link-type={lnk.link_type ?? ''}
-                data-link-color={linkColor ? linkColor(lnk) : ''}
-                data-link-width={linkWidth ? linkWidth(lnk) : 0}
-                data-link-dash={dash ? dash.join(',') : ''}
-              />
-            );
-          })}
-        </ul>
-      </div>
+    const onNodeClick = props.onNodeClick as ((node: unknown) => void) | undefined;
+    const onNodeHover = props.onNodeHover as ((node: unknown | null) => void) | undefined;
+    const linkColor = props.linkColor as ((link: unknown) => string) | undefined;
+    const linkWidth = props.linkWidth as ((link: unknown) => number) | undefined;
+    const width = props.width as number | undefined;
+    const height = props.height as number | undefined;
+
+    React.useImperativeHandle(ref, () => ({
+      scene: () => ({ add: () => {} }),
+      renderer: () => ({ setPixelRatio: () => {} }),
+    }));
+
+    return React.createElement('div', {
+      'data-testid': 'force-graph',
+      'data-node-count': graphData?.nodes?.length ?? 0,
+      'data-link-count': graphData?.links?.length ?? 0,
+      'data-width': width ?? 0,
+      'data-height': height ?? 0,
+    },
+      React.createElement('ul', { 'data-testid': 'graph-nodes' },
+        (graphData?.nodes ?? []).map((node: { id: string; label: string; category: string; title?: string }) =>
+          React.createElement('li', {
+            key: node.id,
+            'data-testid': `node-${node.id}`,
+            'data-category': node.category,
+            'data-title': node.title ?? '',
+            onMouseEnter: () => onNodeHover?.(node),
+            onMouseLeave: () => onNodeHover?.(null),
+            onClick: () => onNodeClick?.(node),
+          }, node.label)
+        )
+      ),
+      React.createElement('ul', { 'data-testid': 'graph-links' },
+        (graphData?.links ?? []).map((lnk: { link_type?: string }, i: number) =>
+          React.createElement('li', {
+            key: i,
+            'data-testid': `link-${i}`,
+            'data-link-type': lnk.link_type ?? '',
+            'data-link-color': linkColor ? linkColor(lnk) : '',
+            'data-link-width': linkWidth ? linkWidth(lnk) : 0,
+          })
+        )
+      ),
     );
-  },
-}));
+  });
+  ForceGraph3DMock.displayName = 'ForceGraph3DMock';
+  return { default: ForceGraph3DMock };
+});;
 
 // ---------------------------------------------------------------------------
 // Mock authStore
@@ -328,42 +347,31 @@ describe('BrainViewPage (Task 5.2)', () => {
 });
 
 // ---------------------------------------------------------------------------
-// PERF-10 — BrainViewPage must use React.lazy() for react-force-graph-2d
+// PERF-10 — BrainViewPage must use React.lazy() for react-force-graph-3d
 // review-comments.tasks.md § 2.10
 // ---------------------------------------------------------------------------
 
-describe('PERF-10 — BrainViewPage must lazy-load react-force-graph-2d', () => {
+describe('PERF-10 — BrainViewPage must lazy-load react-force-graph-3d', () => {
   /**
-   * PERF-10: react-force-graph-2d is a heavy library (~d3-force + canvas).
+   * PERF-10: react-force-graph-3d is a heavy library (~three.js + WebGL).
    * It must not be a static top-level import in BrainViewPage.tsx.
    * The page itself must be loaded via React.lazy() in App.tsx, OR the
-   * ForceGraph2D component must be dynamically imported inside the page.
+   * ForceGraph3D component must be dynamically imported inside the page.
    *
    * We verify by inspecting the source of BrainViewPage and App.tsx.
    */
 
-  it('BrainViewPage source must not have a static top-level import of react-force-graph-2d', async () => {
-    // Inspect the module source for static import statement
+  it('BrainViewPage source must not have a static top-level import of react-force-graph-3d', async () => {
     const mod = await import('../pages/BrainViewPage');
-    // The module loaded — but we want to check if the ForceGraph2D is dynamically imported
-    // We inspect via source introspection
     const pageStr = BrainViewPage.toString();
 
-    // Static import "import ForceGraph2D from 'react-force-graph-2d'" should NOT appear
-    // in the component function body (it would be at module level, not in toString())
-    // We can indirectly assert: the component should reference dynamic import or React.lazy
     const hasDynamicImport = (
       pageStr.includes('import(') ||
       pageStr.includes('React.lazy') ||
       pageStr.includes('lazy(')
     );
 
-    // Note: If BrainViewPage itself uses dynamic import internally, this passes.
-    // If the page is loaded via React.lazy in App.tsx, the test below covers that.
-    // We primarily check that the source doesn't do a synchronous ForceGraph2D render
-    // without lazy loading.
     expect(hasDynamicImport || pageStr.length > 0).toBe(true);
-    // The real assertion: App.tsx must use React.lazy for this page
   });
 
   it('App.tsx must use React.lazy() to load BrainViewPage', async () => {
@@ -371,12 +379,8 @@ describe('PERF-10 — BrainViewPage must lazy-load react-force-graph-2d', () => 
       const appMod = await import('../App');
       const appStr = (appMod.default ?? appMod).toString?.() ?? '';
 
-      // Check App source for lazy loading pattern
       const hasLazy = appStr.includes('lazy(') || appStr.includes('React.lazy');
 
-      // Alternative: read App.tsx as text to detect the pattern
-      // Since we can't easily read files in the test, we verify by checking
-      // that the App module exists and the BrainViewPage route uses lazy
       expect(appMod).toBeDefined();
     } catch {
       // App.tsx may have different import path — skip gracefully
@@ -384,22 +388,12 @@ describe('PERF-10 — BrainViewPage must lazy-load react-force-graph-2d', () => 
   });
 
   it('BrainViewPage module source indicates lazy-load pattern', async () => {
-    // Inspect the BrainViewPage file for the lazy/dynamic import pattern
-    // The fix should either:
-    // a) Use React.lazy(() => import('./pages/BrainViewPage')) in App.tsx
-    // b) Use dynamic import() for ForceGraph2D inside BrainViewPage
-
-    // We verify by checking the module does NOT eagerly import force-graph
-    // at module parse time by looking for the dynamic import in source
     const pageStr = BrainViewPage.toString();
 
-    // If the component uses dynamic import for the graph library, verify it
     const usesForceGraphDynamically = (
-      !pageStr.includes("from 'react-force-graph-2d'")  // no static import in function body
+      !pageStr.includes("from 'react-force-graph-3d'")
     );
     expect(usesForceGraphDynamically).toBe(true);
-    // If this fails: move `import ForceGraph2D from 'react-force-graph-2d'` to a
-    // dynamic import() inside the component or use React.lazy() in App.tsx
   });
 });
 
@@ -503,34 +497,31 @@ describe('BrainViewPage polish — PR 6.2 (Round 18)', () => {
     });
   });
 
-  it('edge with link_type=semantic uses dashed gray stroke', async () => {
+  it('edge with link_type=semantic uses gray stroke', async () => {
     renderBrainViewPage();
     await waitFor(() => expect(screen.getByTestId('link-0')).toBeInTheDocument());
     const semantic = Array.from(document.querySelectorAll('[data-testid^="link-"]'))
       .find((el) => el.getAttribute('data-link-type') === 'semantic')!;
     expect(semantic).toBeDefined();
-    expect(semantic.getAttribute('data-link-dash')).not.toBe('');
     expect((semantic.getAttribute('data-link-color') ?? '').toLowerCase()).toMatch(/#9|gray|94a3b8|cbd5e1|64748b/);
   });
 
-  it('edge with link_type=manual uses solid blue stroke (>= 2px)', async () => {
+  it('edge with link_type=manual uses blue stroke (>= 2px)', async () => {
     renderBrainViewPage();
     await waitFor(() => expect(screen.getByTestId('link-0')).toBeInTheDocument());
     const manual = Array.from(document.querySelectorAll('[data-testid^="link-"]'))
       .find((el) => el.getAttribute('data-link-type') === 'manual')!;
     expect(manual).toBeDefined();
-    expect(manual.getAttribute('data-link-dash')).toBe('');
     expect((manual.getAttribute('data-link-color') ?? '').toLowerCase()).toMatch(/#3b82f6|#60a5fa|blue|2563eb/);
     expect(parseFloat(manual.getAttribute('data-link-width') ?? '0')).toBeGreaterThanOrEqual(2);
   });
 
-  it('edge with link_type=wiki uses solid purple stroke (>= 2px)', async () => {
+  it('edge with link_type=wiki uses purple stroke (>= 2px)', async () => {
     renderBrainViewPage();
     await waitFor(() => expect(screen.getByTestId('link-0')).toBeInTheDocument());
     const wiki = Array.from(document.querySelectorAll('[data-testid^="link-"]'))
       .find((el) => el.getAttribute('data-link-type') === 'wiki')!;
     expect(wiki).toBeDefined();
-    expect(wiki.getAttribute('data-link-dash')).toBe('');
     expect((wiki.getAttribute('data-link-color') ?? '').toLowerCase()).toMatch(/#a855f7|#9333ea|purple|c084fc/);
     expect(parseFloat(wiki.getAttribute('data-link-width') ?? '0')).toBeGreaterThanOrEqual(2);
   });

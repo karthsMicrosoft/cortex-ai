@@ -2,7 +2,7 @@
 
 > **Chronological log of what's been done.** New work appends to the end. Use this to verify "we already did X" before re-doing.
 
-**Last updated:** 2026-05-27 (Round 24: Phase 7 Visual Thinking Canvas SHIPPED — 4 PRs, ~100 new tests + Library search bar + Safari mobile fix)
+**Last updated:** 2026-05-27 (Round 25: Brain View 3D Upgrade — real brain mesh + Three.js/WebGL)
 
 ---
 
@@ -1297,3 +1297,52 @@ Post-Phase 7 polish pushed directly to main (no separate PRs — small targeted 
 - Replace `react-force-graph-2d` → `react-force-graph-3d` (Three.js/WebGL).
 - Categories mapped to brain-lobe anchor zones; nodes float near surface, NOT snapped to mesh topology.
 - See PLAN.md for full implementation details.
+
+---
+
+## Round 25 — Brain View 3D Upgrade (2026-05-27)
+
+Replaced 2D force graph with full 3D brain visualization using Three.js/WebGL.
+
+### What changed
+- **`react-force-graph-2d` → `react-force-graph-3d`**: Same API surface, now uses Three.js WebGL renderer. Full 3D orbit rotation, zoom, pan with mouse/touch.
+- **Real brain mesh**: Procedurally generated low-poly brain (642 vertices, 1280 faces, 23KB GLB) placed at `frontend/public/models/brain.glb`. Rendered as translucent indigo wireframe shell (opacity 0.08).
+- **Category → brain lobe mapping**: Notes cluster in anatomically meaningful regions:
+  - Ideas → Frontal lobe (0, 40, 60)
+  - Journal → Prefrontal cortex (0, 50, 80)
+  - Learning → Left temporal (-60, -10, 0)
+  - Music → Right temporal (60, -10, 0)
+  - Spiritual → Parietal lobe (0, 60, -30)
+  - Fitness → Motor cortex (0, 70, 20)
+- **3D node rendering**: SphereGeometry meshes colored by category with text sprite labels (via `nodeThreeObject`).
+- **Scene lighting**: Ambient light (0.6) + directional light (0.8, from above-right) for depth perception.
+- **Performance safeguards**: Pixel ratio capped at 2, low-poly mesh only, orbit controls for mobile touch.
+- **Graceful fallback**: If brain mesh fails to load (network error, WebGL context loss), the 3D graph continues with nodes-only (no crash, no blank screen). ErrorBoundary from Round 24 also wraps routes.
+
+### Preserved features
+- Search input, category filter chips, date picker, "Clear filters" button
+- "Open as Canvas" button with 50-node cap
+- Node click → navigate to `/note/{id}`
+- Node hover → tooltip with title + summary + category badge
+- Header with back button + node/link count
+- Link colors: semantic=gray, manual=blue, wiki=purple (now with `linkOpacity: 0.6`)
+- Category legend with 6 toggle buttons
+
+### Test results
+- All 24 BrainViewPage tests pass (mocks updated: `react-force-graph-3d` + `three` + `GLTFLoader`)
+- All 2 BrainViewPage-canvas tests pass
+- TypeScript: 0 errors
+- Production build: succeeds (BrainViewPage chunk: 384KB gzipped, lazy-loaded)
+
+### Dependencies added
+- `react-force-graph-3d` (runtime)
+- `three` (runtime, peer dep of react-force-graph-3d)
+- `@types/three` (devDependency)
+
+### Files changed
+- `frontend/package.json` + `frontend/package-lock.json`
+- `frontend/public/models/brain.glb` (NEW — procedural brain mesh asset)
+- `frontend/src/pages/BrainViewPage.tsx` (rewrite: 2D → 3D)
+- `frontend/src/__tests__/BrainViewPage.test.tsx` (mock updates)
+- `frontend/src/__tests__/BrainViewPage-canvas.test.tsx` (mock updates)
+- `PROGRESS.md`, `DECISIONS.md` (docs)

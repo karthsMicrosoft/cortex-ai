@@ -6,25 +6,61 @@ import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import React from 'react';
 import { MemoryRouter } from 'react-router-dom';
 
-// Mock react-force-graph (same approach as BrainViewPage.test.tsx)
-vi.mock('react-force-graph-2d', () => ({
-  default: (props: {
-    graphData: { nodes: { id: string; label: string; category: string }[]; links: unknown[] };
-  }) => (
-    <div
-      data-testid="force-graph"
-      data-node-count={props.graphData?.nodes?.length ?? 0}
-    >
-      <ul data-testid="graph-nodes">
-        {(props.graphData?.nodes ?? []).map((n) => (
-          <li key={n.id} data-testid={`node-${n.id}`}>
-            {n.label}
-          </li>
-        ))}
-      </ul>
-    </div>
-  ),
+// Mock three.js
+vi.mock('three', () => {
+  const mockMaterial = { color: 0, transparent: false, opacity: 1, wireframe: false, map: null, depthWrite: true };
+  const mockMesh = { add: vi.fn(), position: { set: vi.fn() }, scale: { set: vi.fn(), setScalar: vi.fn() }, traverse: vi.fn(), isMesh: true, material: mockMaterial };
+  return {
+    SphereGeometry: vi.fn(),
+    MeshLambertMaterial: vi.fn(() => ({ ...mockMaterial })),
+    MeshBasicMaterial: vi.fn(() => ({ ...mockMaterial })),
+    Mesh: vi.fn(() => ({ ...mockMesh })),
+    Color: vi.fn(),
+    SpriteMaterial: vi.fn(() => ({ ...mockMaterial })),
+    Sprite: vi.fn(() => ({ position: { set: vi.fn() }, scale: { set: vi.fn() } })),
+    CanvasTexture: vi.fn(() => ({ needsUpdate: false })),
+    AmbientLight: vi.fn(() => ({})),
+    DirectionalLight: vi.fn(() => ({ position: { set: vi.fn() } })),
+  };
+});
+
+vi.mock('three/examples/jsm/loaders/GLTFLoader.js', () => ({
+  GLTFLoader: vi.fn().mockImplementation(() => ({
+    load: vi.fn(),
+  })),
 }));
+
+// Mock react-force-graph-3d
+vi.mock('react-force-graph-3d', () => {
+  const React = require('react');
+  const ForceGraph3DMock = React.forwardRef((props: Record<string, unknown>, ref: React.Ref<unknown>) => {
+    const graphData = (props.graphData ?? { nodes: [], links: [] }) as {
+      nodes: { id: string; label: string; category: string }[];
+      links: unknown[];
+    };
+
+    React.useImperativeHandle(ref, () => ({
+      scene: () => ({ add: () => {} }),
+      renderer: () => ({ setPixelRatio: () => {} }),
+    }));
+
+    return React.createElement('div', {
+      'data-testid': 'force-graph',
+      'data-node-count': graphData?.nodes?.length ?? 0,
+    },
+      React.createElement('ul', { 'data-testid': 'graph-nodes' },
+        (graphData?.nodes ?? []).map((n: { id: string; label: string }) =>
+          React.createElement('li', {
+            key: n.id,
+            'data-testid': `node-${n.id}`,
+          }, n.label)
+        )
+      )
+    );
+  });
+  ForceGraph3DMock.displayName = 'ForceGraph3DMock';
+  return { default: ForceGraph3DMock };
+});
 
 const { mockNavigate } = vi.hoisted(() => ({ mockNavigate: vi.fn() }));
 vi.mock('react-router-dom', async () => {

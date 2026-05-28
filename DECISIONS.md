@@ -2,7 +2,7 @@
 
 > **Architecture decisions and deviations from spec, with rationale.** When refactoring, preserve these unless the underlying constraint has changed.
 
-**Last updated:** 2026-05-22 (Round 24: Phase 7 Visual Thinking Canvas — see § 22ak)
+**Last updated:** 2026-05-27 (Round 25: Brain View 3D Upgrade — see § 22al)
 
 ---
 
@@ -919,3 +919,63 @@ Phase 7 shipped across 4 PRs (A backend + B/C/D frontend). Recording the cross-c
 - Without it, the browser's default pan/zoom gestures fight reactflow's own pan/pinch on touch devices (iOS Safari especially), giving the user a janky double-handling experience.
 - `touch-action: none` cedes all gestures to reactflow's handlers.
 - Toolbar uses `flex-wrap` so the buttons stack cleanly on narrow viewports.
+
+## § 22al — Brain View 3D Upgrade (Round 25, 2026-05-27)
+
+Replaced `react-force-graph-2d` with `react-force-graph-3d` (Three.js/WebGL). Added a real low-poly brain mesh as a translucent wireframe shell so the Brain View looks like an actual 3D brain rather than a flat 2D cluster.
+
+### Why real brain mesh (not ellipsoid)
+
+**Decision:** Use a real brain-shaped GLB mesh, not a procedural ellipsoid or sphere.
+
+**Debate outcome:** gpt-5.3-codex advocate vs critic agents debated this. The advocate won on visual impact and feasibility:
+- Instant "second brain" recognition vs generic egg shape
+- GLTFLoader is 3 lines of code; mesh is only 23KB (642 vertices, 1280 faces)
+- Three.js is already loaded by react-force-graph-3d — mesh adds marginal GPU cost
+- Procedural mesh generation (via Python/trimesh) eliminates licensing concerns — no third-party asset, CC0 by construction
+
+**Critic's valid concern addressed:** node placement on real mesh topology is hard (sulci/gyri cause clipping). Solution: nodes float NEAR the surface via category anchor zones + random jitter, NOT snapped to mesh topology. The mesh is purely decorative.
+
+### Why procedurally generated mesh
+
+**Decision:** Generate the brain mesh via Python + trimesh script, not sourced from Sketchfab/web.
+
+**Why:**
+- Zero licensing ambiguity — we wrote the generation code, CC0 output
+- Exact control over poly count (1280 faces is trivially renderable on any WebGL device)
+- Reproducible: script can be re-run with different parameters if the shape needs tuning
+- Only 23KB vs typical artist-modeled brain meshes (5-50MB)
+
+### Category → brain lobe anchor mapping
+
+**Decision:** Map 6 categories to 6 anatomically meaningful brain regions. Nodes seed at anchor + random jitter (±20 units), then the force simulation clusters them organically.
+
+| Category | Region | Anchor |
+|----------|--------|--------|
+| Ideas | Frontal lobe | (0, 40, 60) |
+| Journal | Prefrontal | (0, 50, 80) |
+| Learning | Left temporal | (-60, -10, 0) |
+| Music | Right temporal | (60, -10, 0) |
+| Spiritual | Parietal | (0, 60, -30) |
+| Fitness | Motor cortex | (0, 70, 20) |
+
+**Why anatomical mapping:**
+- Brain regions have real cognitive function associations (e.g., temporal lobe for audio/music, frontal for planning/ideas)
+- Creates a meaningful spatial memory for the user — "my music notes are always on the right side"
+- Degrades gracefully: unknown categories get the origin (0,0,0)
+
+### Graceful fallback strategy
+
+**Decision:** If GLTFLoader fails (network error, invalid file, WebGL context loss), the brain mesh simply doesn't appear. The 3D node graph continues to render normally — nodes-only, no crash.
+
+**Why:**
+- The mesh is decorative, not functional. Nodes are the content.
+- ErrorBoundary from Round 24 wraps all routes — catches any unexpected Three.js crash
+- Console warning emitted for debugging: `'Brain mesh failed to load — falling back to nodes-only'`
+
+### Performance safeguards
+
+- **Pixel ratio cap:** `renderer.setPixelRatio(Math.min(devicePixelRatio, 2))` — prevents 3x resolution on high-DPI mobile (3x GPU cost for no visible improvement)
+- **Low-poly mesh only:** 1280 faces, trivial for any WebGL-capable GPU (iPhone A15+ handles heavy 3D games)
+- **Orbit controls:** `controlType="orbit"` for intuitive touch rotation on mobile (trackball is disorienting)
+- **Lazy loading:** BrainViewPage is already code-split via `React.lazy()` in App.tsx — Three.js bundle (~384KB gz) only loads when user navigates to Brain View

@@ -44,6 +44,7 @@ vi.mock('react-force-graph-3d', () => {
       renderer: () => ({ setPixelRatio: () => {} }),
       d3Force: () => ({ strength: () => {} }),
       d3ReheatSimulation: () => {},
+      cameraPosition: () => {},
     }));
 
     return React.createElement('div', {

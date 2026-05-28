@@ -143,6 +143,7 @@ export default function BrainViewPage(): React.ReactElement {
     renderer: () => THREE.WebGLRenderer;
     d3Force: (name: string, force?: unknown) => { strength?: (v: number) => void };
     d3ReheatSimulation: () => void;
+    cameraPosition: (pos: { x: number; y: number; z: number }, lookAt?: { x: number; y: number; z: number }, transitionMs?: number) => void;
   } | null>(null);
   const [dimensions, setDimensions] = useState({ width: 400, height: 600 });
   // Track scene objects for cleanup
@@ -320,7 +321,7 @@ export default function BrainViewPage(): React.ReactElement {
               });
             }
           });
-          brain.scale.setScalar(1.5);
+          brain.scale.setScalar(2.0);
           currentScene.add(brain);
           sceneObjectsRef.current.push(brain);
         } catch {
@@ -351,6 +352,14 @@ export default function BrainViewPage(): React.ReactElement {
       fg.d3Force('categoryY', categoryPositionForce('y', 0.05));
       fg.d3Force('categoryZ', categoryPositionForce('z', 0.05));
       fg.d3ReheatSimulation();
+
+      // After auto-fit settles, zoom camera to frame the brain nicely
+      const timer = setTimeout(() => {
+        try {
+          fg.cameraPosition({ x: 0, y: 0, z: 200 }, { x: 0, y: 0, z: 0 }, 800);
+        } catch { /* camera not ready */ }
+      }, 600);
+      return () => clearTimeout(timer);
     } catch {
       // Force configuration failed — use defaults
     }

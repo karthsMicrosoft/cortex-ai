@@ -42,6 +42,8 @@ vi.mock('react-force-graph-3d', () => {
     React.useImperativeHandle(ref, () => ({
       scene: () => ({ add: () => {} }),
       renderer: () => ({ setPixelRatio: () => {} }),
+      d3Force: () => ({ strength: () => {} }),
+      d3ReheatSimulation: () => {},
     }));
 
     return React.createElement('div', {

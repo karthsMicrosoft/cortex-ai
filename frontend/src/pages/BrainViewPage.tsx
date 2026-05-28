@@ -61,12 +61,12 @@ function categoryToHex(category: string): string {
 // ---------------------------------------------------------------------------
 
 const CATEGORY_ANCHOR: Record<string, { x: number; y: number; z: number }> = {
-  Ideas:     { x: 0,   y: 40,  z: 60  },  // Frontal lobe
-  Journal:   { x: 0,   y: 50,  z: 80  },  // Prefrontal cortex
-  Learning:  { x: -60, y: -10, z: 0   },  // Left temporal
-  Music:     { x: 60,  y: -10, z: 0   },  // Right temporal
-  Spiritual: { x: 0,   y: 60,  z: -30 },  // Parietal lobe
-  Fitness:   { x: 0,   y: 70,  z: 20  },  // Motor cortex
+  Ideas:     { x: 0,   y: 20,  z: 45  },  // Frontal lobe
+  Journal:   { x: 0,   y: 30,  z: 60  },  // Prefrontal cortex
+  Learning:  { x: -45, y: -5,  z: 0   },  // Left temporal
+  Music:     { x: 45,  y: -5,  z: 0   },  // Right temporal
+  Spiritual: { x: 0,   y: 40,  z: -25 },  // Parietal lobe
+  Fitness:   { x: 0,   y: 50,  z: 15  },  // Motor cortex
 };
 
 // ---------------------------------------------------------------------------
@@ -110,13 +110,40 @@ function makeTextSprite(text: string): THREE.Sprite {
 }
 
 // ---------------------------------------------------------------------------
+// Custom d3 position force — pulls nodes toward their category anchor
+// ---------------------------------------------------------------------------
+
+function categoryPositionForce(axis: 'x' | 'y' | 'z', strength: number) {
+  let nodes: Record<string, unknown>[] = [];
+  function force(alpha: number) {
+    for (const node of nodes) {
+      const cat = (node as { category?: string }).category ?? '';
+      const anchor = CATEGORY_ANCHOR[cat] ?? { x: 0, y: 0, z: 0 };
+      const target = anchor[axis];
+      const pos = (node[axis] as number) || 0;
+      const vel = `v${axis}`;
+      (node as Record<string, number>)[vel] =
+        ((node as Record<string, number>)[vel] || 0) +
+        (target - pos) * strength * alpha;
+    }
+  }
+  force.initialize = (n: Record<string, unknown>[]) => { nodes = n; };
+  return force;
+}
+
+// ---------------------------------------------------------------------------
 // BrainViewPage
 // ---------------------------------------------------------------------------
 
 export default function BrainViewPage(): React.ReactElement {
   const navigate = useNavigate();
   const containerRef = useRef<HTMLDivElement>(null);
-  const fgRef = useRef<{ scene: () => THREE.Scene; renderer: () => THREE.WebGLRenderer } | null>(null);
+  const fgRef = useRef<{
+    scene: () => THREE.Scene;
+    renderer: () => THREE.WebGLRenderer;
+    d3Force: (name: string, force?: unknown) => { strength?: (v: number) => void };
+    d3ReheatSimulation: () => void;
+  } | null>(null);
   const [dimensions, setDimensions] = useState({ width: 400, height: 600 });
   // Track scene objects for cleanup
   const sceneObjectsRef = useRef<THREE.Object3D[]>([]);
@@ -186,9 +213,9 @@ export default function BrainViewPage(): React.ReactElement {
     for (const n of graphData.nodes as FGNode[]) {
       if (n.x !== undefined) continue; // already positioned
       const anchor = CATEGORY_ANCHOR[n.category] ?? { x: 0, y: 0, z: 0 };
-      n.x = anchor.x + (Math.random() - 0.5) * 40;
-      n.y = anchor.y + (Math.random() - 0.5) * 40;
-      n.z = anchor.z + (Math.random() - 0.5) * 40;
+      n.x = anchor.x + (Math.random() - 0.5) * 20;
+      n.y = anchor.y + (Math.random() - 0.5) * 20;
+      n.z = anchor.z + (Math.random() - 0.5) * 20;
     }
   }, [graphData]);
 
@@ -288,12 +315,12 @@ export default function BrainViewPage(): React.ReactElement {
               (child as THREE.Mesh).material = new THREE.MeshBasicMaterial({
                 color: 0x6366f1,
                 transparent: true,
-                opacity: 0.08,
+                opacity: 0.12,
                 wireframe: true,
               });
             }
           });
-          brain.scale.setScalar(1.5);
+          brain.scale.setScalar(2.0);
           currentScene.add(brain);
           sceneObjectsRef.current.push(brain);
         } catch {
@@ -311,6 +338,22 @@ export default function BrainViewPage(): React.ReactElement {
       disposeTracked();
       lastSceneRef.current = null;
     };
+  }, [graphVisible]);
+
+  // ---- Configure d3 forces for brain-contained layout ----
+  useEffect(() => {
+    const fg = fgRef.current;
+    if (!fg || !graphVisible) return;
+    try {
+      const charge = fg.d3Force('charge');
+      if (charge?.strength) charge.strength(-2);
+      fg.d3Force('categoryX', categoryPositionForce('x', 0.5));
+      fg.d3Force('categoryY', categoryPositionForce('y', 0.5));
+      fg.d3Force('categoryZ', categoryPositionForce('z', 0.5));
+      fg.d3ReheatSimulation();
+    } catch {
+      // Force configuration failed — use defaults
+    }
   }, [graphVisible]);
 
   const handleNodeClick = useCallback(
@@ -536,6 +579,8 @@ export default function BrainViewPage(): React.ReactElement {
               linkColor={(link) => styleFor((link as GraphLink).link_type).color}
               linkWidth={(link) => styleFor((link as GraphLink).link_type).width}
               linkOpacity={0.6}
+              warmupTicks={40}
+              d3AlphaDecay={0.05}
               onNodeClick={(node) => handleNodeClick(node as FGNode)}
               onNodeHover={(node) => {
                 handleNodeHover((node as FGNode | null) ?? null);

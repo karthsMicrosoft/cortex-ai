@@ -118,7 +118,10 @@ export default function BrainViewPage(): React.ReactElement {
   const containerRef = useRef<HTMLDivElement>(null);
   const fgRef = useRef<{ scene: () => THREE.Scene; renderer: () => THREE.WebGLRenderer } | null>(null);
   const [dimensions, setDimensions] = useState({ width: 400, height: 600 });
-  const meshLoadedRef = useRef(false);
+  // Track scene objects for cleanup
+  const sceneObjectsRef = useRef<THREE.Object3D[]>([]);
+  // Track the scene instance to detect remounts
+  const lastSceneRef = useRef<THREE.Scene | null>(null);
 
   const [graphData, setGraphData] = useState<GraphData>({ nodes: [], links: [] });
   const [isLoading, setIsLoading] = useState(true);
@@ -134,62 +137,6 @@ export default function BrainViewPage(): React.ReactElement {
   const [isExporting, setIsExporting] = useState(false);
   const [exportError, setExportError] = useState<string | null>(null);
   const [exportWarning, setExportWarning] = useState<string | null>(null);
-
-  // ---- Load brain mesh + configure renderer on mount ----
-  useEffect(() => {
-    const fg = fgRef.current;
-    if (!fg || meshLoadedRef.current) return;
-    meshLoadedRef.current = true;
-
-    // Cap pixel ratio for mobile performance
-    try {
-      fg.renderer().setPixelRatio(Math.min(window.devicePixelRatio, 2));
-    } catch {
-      // Renderer not ready yet — skip
-    }
-
-    // Add ambient + directional lights
-    try {
-      const scene = fg.scene();
-      const ambient = new THREE.AmbientLight(0xffffff, 0.6);
-      scene.add(ambient);
-      const directional = new THREE.DirectionalLight(0xffffff, 0.8);
-      directional.position.set(50, 100, 80);
-      scene.add(directional);
-    } catch {
-      // Scene not ready — skip
-    }
-
-    // Load brain mesh as translucent wireframe shell
-    const loader = new GLTFLoader();
-    loader.load(
-      '/models/brain.glb',
-      (gltf) => {
-        try {
-          const brain = gltf.scene;
-          brain.traverse((child) => {
-            if ((child as THREE.Mesh).isMesh) {
-              (child as THREE.Mesh).material = new THREE.MeshBasicMaterial({
-                color: 0x6366f1,
-                transparent: true,
-                opacity: 0.08,
-                wireframe: true,
-              });
-            }
-          });
-          brain.scale.setScalar(1.5);
-          fg.scene().add(brain);
-        } catch {
-          // Mesh processing failed — graceful fallback (nodes-only)
-        }
-      },
-      undefined,
-      () => {
-        // Mesh load failed — graceful fallback (nodes-only 3D graph)
-        console.warn('Brain mesh failed to load — falling back to nodes-only');
-      },
-    );
-  }, [isLoading]);
 
   // ---- Resize observer + window resize ----
   const remeasure = useCallback(() => {
@@ -265,6 +212,106 @@ export default function BrainViewPage(): React.ReactElement {
     );
     return { nodes, links };
   }, [graphData, search, activeCategories]);
+
+  // Whether the ForceGraph3D is conditionally rendered (nodes > 0)
+  const graphVisible = !isLoading && !error && filteredGraph.nodes.length > 0;
+
+  // ---- Load brain mesh + configure renderer when graph mounts/remounts ----
+  useEffect(() => {
+    const fg = fgRef.current;
+    if (!fg || !graphVisible) return;
+
+    let currentScene: THREE.Scene;
+    try {
+      currentScene = fg.scene();
+    } catch {
+      return;
+    }
+
+    // Skip if same scene instance (no remount happened)
+    if (currentScene === lastSceneRef.current) return;
+    lastSceneRef.current = currentScene;
+
+    // Safely dispose tracked scene objects
+    const disposeTracked = () => {
+      for (const obj of sceneObjectsRef.current) {
+        try {
+          if ('removeFromParent' in obj) obj.removeFromParent();
+          if ('traverse' in obj) {
+            obj.traverse((child) => {
+              if ((child as THREE.Mesh).isMesh) {
+                const m = child as THREE.Mesh;
+                m.geometry?.dispose();
+                if (m.material) (m.material as THREE.Material).dispose();
+              }
+            });
+          }
+        } catch {
+          // Disposal failed — skip (object may already be gone)
+        }
+      }
+      sceneObjectsRef.current = [];
+    };
+
+    // Clean up previous scene objects
+    disposeTracked();
+
+    // Cap pixel ratio for mobile performance
+    try {
+      fg.renderer().setPixelRatio(Math.min(window.devicePixelRatio, 2));
+    } catch {
+      // Renderer not ready yet — skip
+    }
+
+    // Add ambient + directional lights
+    try {
+      const ambient = new THREE.AmbientLight(0xffffff, 0.6);
+      currentScene.add(ambient);
+      sceneObjectsRef.current.push(ambient);
+      const directional = new THREE.DirectionalLight(0xffffff, 0.8);
+      directional.position.set(50, 100, 80);
+      currentScene.add(directional);
+      sceneObjectsRef.current.push(directional);
+    } catch {
+      // Scene not ready — skip
+    }
+
+    // Load brain mesh as translucent wireframe shell
+    const loader = new GLTFLoader();
+    loader.load(
+      '/models/brain.glb',
+      (gltf) => {
+        try {
+          const brain = gltf.scene;
+          brain.traverse((child) => {
+            if ((child as THREE.Mesh).isMesh) {
+              (child as THREE.Mesh).material = new THREE.MeshBasicMaterial({
+                color: 0x6366f1,
+                transparent: true,
+                opacity: 0.08,
+                wireframe: true,
+              });
+            }
+          });
+          brain.scale.setScalar(1.5);
+          currentScene.add(brain);
+          sceneObjectsRef.current.push(brain);
+        } catch {
+          // Mesh processing failed — graceful fallback (nodes-only)
+        }
+      },
+      undefined,
+      () => {
+        console.warn('Brain mesh failed to load — falling back to nodes-only');
+      },
+    );
+
+    // Cleanup on unmount / before re-run
+    return () => {
+      disposeTracked();
+      lastSceneRef.current = null;
+    };
+  }, [graphVisible]);
 
   const handleNodeClick = useCallback(
     (node: FGNode) => {

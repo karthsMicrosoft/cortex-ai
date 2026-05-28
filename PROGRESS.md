@@ -1306,14 +1306,14 @@ Replaced 2D force graph with full 3D brain visualization using Three.js/WebGL.
 
 ### What changed
 - **`react-force-graph-2d` → `react-force-graph-3d`**: Same API surface, now uses Three.js WebGL renderer. Full 3D orbit rotation, zoom, pan with mouse/touch.
-- **Real brain mesh**: Procedurally generated low-poly brain (642 vertices, 1280 faces, 23KB GLB) placed at `frontend/public/models/brain.glb`. Rendered as translucent indigo wireframe shell (opacity 0.08).
+- **Real brain mesh**: Procedurally generated low-poly brain (642 vertices, 1280 faces, 23KB GLB) placed at `frontend/public/models/brain.glb`. Rendered as translucent indigo wireframe shell (opacity 0.15).
 - **Category → brain lobe mapping**: Notes cluster in anatomically meaningful regions:
-  - Ideas → Frontal lobe (0, 40, 60)
-  - Journal → Prefrontal cortex (0, 50, 80)
-  - Learning → Left temporal (-60, -10, 0)
-  - Music → Right temporal (60, -10, 0)
-  - Spiritual → Parietal lobe (0, 60, -30)
-  - Fitness → Motor cortex (0, 70, 20)
+  - Ideas → Frontal lobe (0, 20, 45)
+  - Journal → Prefrontal cortex (0, 30, 60)
+  - Learning → Left temporal (-45, -5, 0)
+  - Music → Right temporal (45, -5, 0)
+  - Spiritual → Parietal lobe (0, 40, -25)
+  - Fitness → Motor cortex (0, 50, 15)
 - **3D node rendering**: SphereGeometry meshes colored by category with text sprite labels (via `nodeThreeObject`).
 - **Scene lighting**: Ambient light (0.6) + directional light (0.8, from above-right) for depth perception.
 - **Performance safeguards**: Pixel ratio capped at 2, low-poly mesh only, orbit controls for mobile touch.
@@ -1346,3 +1346,28 @@ Replaced 2D force graph with full 3D brain visualization using Three.js/WebGL.
 - `frontend/src/__tests__/BrainViewPage.test.tsx` (mock updates)
 - `frontend/src/__tests__/BrainViewPage-canvas.test.tsx` (mock updates)
 - `PROGRESS.md`, `DECISIONS.md` (docs)
+
+## Round 26 — Brain View 3D node containment fix (2026-05-27)
+
+Nodes were scattered far outside the brain mesh wireframe. The brain appeared
+small and unintuitive. Fixed by tuning d3 simulation forces, adding custom
+category-based position forces, and dynamic mesh scaling.
+
+### What changed
+- **Custom position forces**: `categoryPositionForce()` helper pulls each node
+  toward its brain-lobe anchor using the d3 force interface (strength 0.08).
+- **Moderate charge**: Reduced from default -30 to -15 to prevent excessive spread.
+- **Compact anchors**: Category anchor coordinates reduced to fit within the mesh
+  bounds (e.g., Ideas at (0,20,45) instead of (0,40,60)).
+- **Reduced jitter**: Initial random spread ±20 → ±10 around anchors.
+- **Dynamic mesh scaling**: `onEngineStop` handler computes the bounding sphere of
+  all settled nodes and scales the brain mesh to contain them with 30% padding.
+- **Adaptive camera**: After simulation stops, camera zooms to frame the
+  dynamically scaled brain at `targetScale * meshRadius * 2.5` distance.
+- **Wireframe opacity**: 0.08 → 0.15 for better mesh visibility.
+- **Simulation tuning**: `warmupTicks=40`, `d3AlphaDecay=0.02` for stable settling.
+
+### Files changed
+- `frontend/src/pages/BrainViewPage.tsx` (force config, mesh scaling, camera)
+- `frontend/src/__tests__/BrainViewPage.test.tsx` (mock updates: d3Force, cameraPosition)
+- `frontend/src/__tests__/BrainViewPage-canvas.test.tsx` (mock updates)

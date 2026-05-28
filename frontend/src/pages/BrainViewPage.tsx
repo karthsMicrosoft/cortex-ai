@@ -150,6 +150,8 @@ export default function BrainViewPage(): React.ReactElement {
   const sceneObjectsRef = useRef<THREE.Object3D[]>([]);
   // Track the scene instance to detect remounts
   const lastSceneRef = useRef<THREE.Scene | null>(null);
+  // Track brain mesh for dynamic scaling
+  const brainMeshRef = useRef<THREE.Object3D | null>(null);
 
   const [graphData, setGraphData] = useState<GraphData>({ nodes: [], links: [] });
   const [isLoading, setIsLoading] = useState(true);
@@ -322,6 +324,7 @@ export default function BrainViewPage(): React.ReactElement {
             }
           });
           brain.scale.setScalar(2.0);
+          brainMeshRef.current = brain;
           currentScene.add(brain);
           sceneObjectsRef.current.push(brain);
         } catch {
@@ -338,6 +341,7 @@ export default function BrainViewPage(): React.ReactElement {
     return () => {
       disposeTracked();
       lastSceneRef.current = null;
+      brainMeshRef.current = null;
     };
   }, [graphVisible]);
 
@@ -346,24 +350,39 @@ export default function BrainViewPage(): React.ReactElement {
     const fg = fgRef.current;
     if (!fg || !graphVisible) return;
     try {
-      // Default charge (-30) gives good spread; position forces
-      // gently pull nodes toward their brain-lobe anchors
-      fg.d3Force('categoryX', categoryPositionForce('x', 0.05));
-      fg.d3Force('categoryY', categoryPositionForce('y', 0.05));
-      fg.d3Force('categoryZ', categoryPositionForce('z', 0.05));
+      // Moderate charge + position forces to keep nodes within the brain mesh
+      const charge = fg.d3Force('charge');
+      if (charge?.strength) charge.strength(-15);
+      fg.d3Force('categoryX', categoryPositionForce('x', 0.08));
+      fg.d3Force('categoryY', categoryPositionForce('y', 0.08));
+      fg.d3Force('categoryZ', categoryPositionForce('z', 0.08));
       fg.d3ReheatSimulation();
-
-      // After auto-fit settles, zoom camera to frame the brain nicely
-      const timer = setTimeout(() => {
-        try {
-          fg.cameraPosition({ x: 0, y: 0, z: 200 }, { x: 0, y: 0, z: 0 }, 800);
-        } catch { /* camera not ready */ }
-      }, 600);
-      return () => clearTimeout(timer);
     } catch {
       // Force configuration failed — use defaults
     }
   }, [graphVisible]);
+
+  // ---- Scale brain mesh to contain nodes when simulation stops ----
+  const handleEngineStop = useCallback(() => {
+    const brain = brainMeshRef.current;
+    if (!brain) return;
+    const nodes = filteredGraph.nodes as FGNode[];
+    if (nodes.length === 0) return;
+    let maxDist = 0;
+    for (const n of nodes) {
+      const d = Math.sqrt((n.x ?? 0) ** 2 + (n.y ?? 0) ** 2 + (n.z ?? 0) ** 2);
+      if (d > maxDist) maxDist = d;
+    }
+    // Scale mesh to contain all nodes with 30% padding; mesh raw radius ~65 units
+    const meshRawRadius = 65;
+    const targetScale = Math.max((maxDist / meshRawRadius) * 1.3, 1.0);
+    brain.scale.setScalar(targetScale);
+    // Zoom camera to frame the scaled brain
+    try {
+      const camDist = targetScale * meshRawRadius * 2.5;
+      fgRef.current?.cameraPosition({ x: 0, y: 0, z: camDist }, { x: 0, y: 0, z: 0 }, 800);
+    } catch { /* skip */ }
+  }, [filteredGraph]);
 
   const handleNodeClick = useCallback(
     (node: FGNode) => {
@@ -594,6 +613,7 @@ export default function BrainViewPage(): React.ReactElement {
               onNodeHover={(node) => {
                 handleNodeHover((node as FGNode | null) ?? null);
               }}
+              onEngineStop={handleEngineStop}
               backgroundColor="#0F172A"
               controlType="orbit"
             />

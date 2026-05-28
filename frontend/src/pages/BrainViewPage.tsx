@@ -345,11 +345,11 @@ export default function BrainViewPage(): React.ReactElement {
     const fg = fgRef.current;
     if (!fg || !graphVisible) return;
     try {
-      const charge = fg.d3Force('charge');
-      if (charge?.strength) charge.strength(-6);
-      fg.d3Force('categoryX', categoryPositionForce('x', 0.2));
-      fg.d3Force('categoryY', categoryPositionForce('y', 0.2));
-      fg.d3Force('categoryZ', categoryPositionForce('z', 0.2));
+      // Default charge (-30) gives good spread; position forces
+      // gently pull nodes toward their brain-lobe anchors
+      fg.d3Force('categoryX', categoryPositionForce('x', 0.05));
+      fg.d3Force('categoryY', categoryPositionForce('y', 0.05));
+      fg.d3Force('categoryZ', categoryPositionForce('z', 0.05));
       fg.d3ReheatSimulation();
     } catch {
       // Force configuration failed — use defaults
@@ -580,7 +580,7 @@ export default function BrainViewPage(): React.ReactElement {
               linkWidth={(link) => styleFor((link as GraphLink).link_type).width}
               linkOpacity={0.6}
               warmupTicks={40}
-              d3AlphaDecay={0.05}
+              d3AlphaDecay={0.02}
               onNodeClick={(node) => handleNodeClick(node as FGNode)}
               onNodeHover={(node) => {
                 handleNodeHover((node as FGNode | null) ?? null);

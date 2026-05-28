@@ -315,12 +315,12 @@ export default function BrainViewPage(): React.ReactElement {
               (child as THREE.Mesh).material = new THREE.MeshBasicMaterial({
                 color: 0x6366f1,
                 transparent: true,
-                opacity: 0.12,
+                opacity: 0.15,
                 wireframe: true,
               });
             }
           });
-          brain.scale.setScalar(2.0);
+          brain.scale.setScalar(1.5);
           currentScene.add(brain);
           sceneObjectsRef.current.push(brain);
         } catch {
@@ -346,10 +346,10 @@ export default function BrainViewPage(): React.ReactElement {
     if (!fg || !graphVisible) return;
     try {
       const charge = fg.d3Force('charge');
-      if (charge?.strength) charge.strength(-2);
-      fg.d3Force('categoryX', categoryPositionForce('x', 0.5));
-      fg.d3Force('categoryY', categoryPositionForce('y', 0.5));
-      fg.d3Force('categoryZ', categoryPositionForce('z', 0.5));
+      if (charge?.strength) charge.strength(-6);
+      fg.d3Force('categoryX', categoryPositionForce('x', 0.2));
+      fg.d3Force('categoryY', categoryPositionForce('y', 0.2));
+      fg.d3Force('categoryZ', categoryPositionForce('z', 0.2));
       fg.d3ReheatSimulation();
     } catch {
       // Force configuration failed — use defaults

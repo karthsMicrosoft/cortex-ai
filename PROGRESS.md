@@ -2,7 +2,7 @@
 
 > **Chronological log of what's been done.** New work appends to the end. Use this to verify "we already did X" before re-doing.
 
-**Last updated:** 2026-05-27 (Round 25: Brain View 3D Upgrade — real brain mesh + Three.js/WebGL)
+**Last updated:** 2026-05-28 (Round 27 planned: Brain View 3D→2D rewrite)
 
 ---
 
@@ -1371,3 +1371,36 @@ category-based position forces, and dynamic mesh scaling.
 - `frontend/src/pages/BrainViewPage.tsx` (force config, mesh scaling, camera)
 - `frontend/src/__tests__/BrainViewPage.test.tsx` (mock updates: d3Force, cameraPosition)
 - `frontend/src/__tests__/BrainViewPage-canvas.test.tsx` (mock updates)
+
+---
+
+## Round 27 — Brain View 3D → 2D Rewrite (NOT YET STARTED)
+
+**Decision:** Replace the 3D brain view (react-force-graph-3d + Three.js + GLB mesh) with a 2D brain view (react-force-graph-2d + SVG brain outline). The 3D view is visually impressive but not intuitive — 3D rotation is disorienting, nodes occlude each other, camera auto-zoom is unpredictable, and mobile touch interaction is awkward.
+
+### Planned changes
+- Replace `ForceGraph3D` → `ForceGraph2D` (already in package.json as `^1.25.0`)
+- Replace GLB brain mesh → SVG top-down brain silhouette as background
+- Replace `nodeThreeObject` (Three.js) → `nodeCanvasObject` (Canvas 2D API)
+- Replace 3D category position forces → 2D (x, y only)
+- Remove Three.js deps: `react-force-graph-3d`, `three`, `@types/three`
+- Delete `frontend/public/models/brain.glb`
+- Keep: search, filters, date, "Open as Canvas", click/hover, category legend, link styling
+
+### 2D Category anchors (top-down brain)
+| Category | Region | Anchor (x, y) |
+|----------|--------|---------------|
+| Ideas | Frontal lobe | (0, -60) |
+| Journal | Prefrontal | (0, -80) |
+| Learning | Left temporal | (-70, 10) |
+| Music | Right temporal | (70, 10) |
+| Spiritual | Parietal | (0, 40) |
+| Fitness | Motor cortex | (0, -20) |
+
+### Expected benefits
+- ~384KB gz bundle reduction (Three.js removed)
+- No WebGL requirement — works on all browsers
+- Faster load (no GLB fetch, no WebGL context init)
+- Flat 2D graph — no rotation confusion, direct click/hover
+
+See DECISIONS.md § 22am for rationale.

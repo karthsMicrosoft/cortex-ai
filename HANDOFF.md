@@ -2,8 +2,8 @@
 
 > **Read this first.** This document briefs an incoming agent (Claude / Copilot / Aider / human) on the state of the project so work can resume without context loss.
 
-**Last updated:** 2026-05-27 (Round 24 follow-ups: Phase 7 canvas live + Library search bar + Safari mobile fix)
-**Status:** Live on Azure. Phases 1–7 shipped. Phase 7 (Visual Thinking Canvas) adds freeform spatial workspace with @xyflow/react, custom node types, auto-layout, ghost cards, undo/redo — 4 PRs, ~120 tests. Library now has instant text search. Safari mobile bfcache blank screen fixed via lazyRetry + ErrorBoundary + pageshow handler. Backend: ~940 tests passing. Frontend: ~830 tests, TypeScript clean.
+**Last updated:** 2026-05-28 (Round 27 planned: Brain View 3D→2D rewrite — decision documented, implementation pending)
+**Status:** Live on Azure. Phases 1–7 shipped. Brain View currently 3D (Round 25-26) but scheduled for 2D rewrite (Round 27) — 3D is visually impressive but UX is poor (disorienting rotation, node occlusion, mobile touch conflicts). See DECISIONS.md § 22am. Library has instant text search. Safari mobile bfcache blank screen fixed. Backend: ~940 tests passing. Frontend: ~830 tests, TypeScript clean.
 
 ---
 
@@ -73,10 +73,11 @@ az containerapp secret list --name cortexks-api --resource-group cortex-rg --sho
 3. **Don't re-run the workforce.** All 5 phases (Requirements → Design → Critique → Coding → Review) have completed. Resume mode = direct fixes / new features, not multi-agent kickoff.
 4. **Use the same workforce config** (`.claude/workforce.json`) only if the user asks for a NEW feature pass (e.g., "add Phase 3 features"). For bugfixes, work directly.
 
-### 3b. Common pickup tasks (in priority order — refreshed post-Round 8)
+### 3b. Common pickup tasks (in priority order — refreshed 2026-05-28)
 
 | Priority | Task | Where to start |
 |---|---|---|
+| **P0 — NEXT** | **Brain View 3D → 2D rewrite** — Replace react-force-graph-3d + Three.js + GLB mesh with react-force-graph-2d + SVG brain outline. 3D is visually impressive but UX is poor (disorienting rotation, node occlusion, mobile touch conflicts). | See DECISIONS.md § 22am, PROGRESS.md Round 27, session `plan.md`. Files: `BrainViewPage.tsx` (rewrite), remove `three`/`react-force-graph-3d`/`brain.glb`, add SVG asset, update tests. |
 | **P0** | ~~End-to-end smoke test in a real browser~~ ✅ Round 9 (2026-05-06) | Confirmed: auth/refresh, capture (text + AI pipeline), library, insights (patterns only), sync. See PROGRESS § Round 9. |
 | **P0** | ~~Bootstrap Azure Key Vault for prod-grade secret rotation~~ ✅ Round 9 (2026-05-06) | `cortexks-kv` live; container app secrets reference KV via managed identity. See `docs/DEPLOYMENT.md` § "Key Vault — secret rotation" |
 | **P0** | ~~Container App auto-restart + health-check alerts~~ ✅ Round 13 (2026-05-07) — auto-restart already wired via Bicep probes; added 3 Azure Monitor alerts (restart spike + 5xx rate + synthetic /api/health ping) routing to `karths@microsoft.com` via shared Action Group `cortex-alerts-ag` | `docs/DEPLOYMENT.md` § "Health-Check Alerts" |

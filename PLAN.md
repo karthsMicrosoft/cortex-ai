@@ -2,7 +2,7 @@
 
 > **Living document.** Captures what we're building, what's done, what's next. Update as work progresses.
 
-**Last updated:** 2026-05-27 (Round 24 follow-ups: Library search bar + Safari mobile blank screen fix)
+**Last updated:** 2026-05-28 (Round 27 planned: Brain View 3D→2D rewrite — see DECISIONS.md § 22am)
 
 ---
 
@@ -115,7 +115,7 @@ Per spec § 2.1. Currently deployed in **`centralus`** with OpenAI in **`eastus`
 
 ---
 
-## 4 — Status snapshot (refreshed 2026-05-14)
+## 4 — Status snapshot (refreshed 2026-05-28)
 
 | Phase / Round | Status | Notes |
 |---|---|---|
@@ -132,8 +132,11 @@ Per spec § 2.1. Currently deployed in **`centralus`** with OpenAI in **`eastus`
 | **Round 22** (Log alert + test fixes) | ✅ 2026-05-14 | See PROGRESS.md § 22 |
 | **Round 23** (Test triage + ops) | ✅ 2026-05-14 | See PROGRESS.md § 23 — 900 passed / 0 failed baseline |
 | **Phase 7 / Round 24** (Visual Thinking Canvas) | ✅ 2026-05-22 | See PROGRESS.md § 24 — 4 PRs, ~100 new tests |
-| Backend tests | ✅ ~881 passing / 0 failing | Round 22 baseline (+20 log scrubber tests) |
-| Frontend tests | ✅ ~767 passing / 0 failing | vmThreads pool fix; suite no longer hangs |
+| **Round 25** (Brain View 3D Upgrade) | ✅ 2026-05-27 | See PROGRESS.md § 25 — being superseded by Round 27 |
+| **Round 26** (3D Node Containment Fix) | ✅ 2026-05-27 | See PROGRESS.md § 26 — being superseded by Round 27 |
+| **Round 27** (Brain View 3D→2D Rewrite) | 🔲 Planned | See DECISIONS.md § 22am — 3D UX poor, reverting to 2D + SVG brain outline |
+| Backend tests | ✅ ~940 passing / 0 failing | |
+| Frontend tests | ✅ ~830 passing / 0 failing | |
 | Extension tests | ✅ 7 passing | New surface from PR #48 |
 | TypeScript | ✅ Clean | |
 | E2E nightly cron | ✅ Green | |

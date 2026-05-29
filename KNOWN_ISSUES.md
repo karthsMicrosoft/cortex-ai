@@ -2,7 +2,19 @@
 
 > **Open work, bugs not fixed, gaps from "fully done."** Anything tagged P0/P1/P2 here is meant to be picked up by the next agent.
 
-**Last updated:** 2026-05-27 (Round 24 follow-ups: Library search bar + Safari mobile blank screen fix)
+**Last updated:** 2026-05-28 (Round 27 planned: Brain View 3D→2D rewrite)
+
+---
+
+## P0 — Brain View 3D UX (Round 27 — planned fix)
+
+The 3D brain view (Rounds 25-26) is visually impressive but has significant usability issues:
+- **3D rotation is disorienting** — users accidentally rotate and lose bearings
+- **Node occlusion** — nodes behind the mesh are hidden from default camera angle
+- **Camera auto-zoom is unpredictable** — jarring transitions when simulation re-settles
+- **Mobile touch conflicts** — orbit controls conflict with scroll/tap
+
+**Planned fix:** Revert to `react-force-graph-2d` + SVG brain outline background. See DECISIONS.md § 22am and PROGRESS.md Round 27. This is the NEXT task to implement.
 
 ---
 

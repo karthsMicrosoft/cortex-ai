@@ -2,7 +2,7 @@
 
 > **Architecture decisions and deviations from spec, with rationale.** When refactoring, preserve these unless the underlying constraint has changed.
 
-**Last updated:** 2026-05-27 (Round 25: Brain View 3D Upgrade — see § 22al)
+**Last updated:** 2026-05-28 (Round 27 planned: Brain View 3D→2D rewrite — see § 22am)
 
 ---
 
@@ -979,3 +979,52 @@ Replaced `react-force-graph-2d` with `react-force-graph-3d` (Three.js/WebGL). Ad
 - **Low-poly mesh only:** 1280 faces, trivial for any WebGL-capable GPU (iPhone A15+ handles heavy 3D games)
 - **Orbit controls:** `controlType="orbit"` for intuitive touch rotation on mobile (trackball is disorienting)
 - **Lazy loading:** BrainViewPage is already code-split via `React.lazy()` in App.tsx — Three.js bundle (~384KB gz) only loads when user navigates to Brain View
+
+> **NOTE (2026-05-28):** § 22al is being superseded by § 22am — the 3D brain view is being reverted to 2D. See § 22am for rationale.
+
+---
+
+## § 22am — Brain View 3D → 2D Rewrite (Round 27, 2026-05-28) — NOT YET IMPLEMENTED
+
+**Decision:** Replace the 3D brain view (react-force-graph-3d + Three.js/WebGL + GLB brain mesh) with a 2D brain view (react-force-graph-2d + SVG brain outline background).
+
+### Why revert from 3D to 2D
+
+**User feedback:** "Though look-wise the 3D brain view model is great, usability-wise the 3D model is not intuitive and distracting."
+
+**Specific UX problems with 3D:**
+1. **3D rotation is disorienting** — users accidentally rotate the brain and lose their bearings. No obvious "reset view" affordance.
+2. **Node occlusion** — nodes behind the brain mesh are hidden; users don't realize half their notes are invisible from the default camera angle.
+3. **Camera auto-zoom unpredictability** — the `onEngineStop` dynamic scaling + camera positioning creates jarring transitions when the simulation re-settles.
+4. **Mobile touch conflicts** — orbit controls (pan/rotate/zoom) conflict with normal page scroll and tap-to-select. Users accidentally rotate when trying to tap a node.
+5. **Visual distraction** — the rotating wireframe mesh draws attention away from the actual content (nodes = notes). The decoration overpowers the information.
+6. **WebGL dependency** — some older browsers / low-end Android devices have flaky WebGL support. 2D canvas is universally supported.
+
+**What 2D preserves:**
+- Brain-shaped recognition via SVG outline (top-down view) as a translucent background
+- Category → brain-region mapping (same 6 categories, projected to 2D x/y)
+- All functionality: search, filters, click-to-navigate, hover tooltip, "Open as Canvas"
+- Force-directed layout for organic clustering
+
+**What 2D gains:**
+- ~384KB gzipped bundle reduction (Three.js + WebGL removed)
+- Faster load time (no GLB fetch, no WebGL context initialization)
+- Universal browser compatibility (Canvas 2D vs WebGL)
+- Direct, intuitive interaction (click/drag, no rotation)
+- Simpler codebase (no scene management, lights, mesh loading, dynamic scaling)
+
+### Implementation approach
+- `ForceGraph2D` with `nodeCanvasObject` for colored circles + labels
+- SVG brain silhouette (top-down, ~2KB) positioned behind the canvas as a background
+- 2D category position forces (x, y only) pulling nodes toward brain-region anchors
+- Remove: `react-force-graph-3d`, `three`, `@types/three`, `brain.glb`
+
+### Category → 2D brain region anchors
+| Category | Region | Anchor (x, y) |
+|----------|--------|---------------|
+| Ideas | Frontal | (0, -60) |
+| Journal | Prefrontal | (0, -80) |
+| Learning | Left temporal | (-70, 10) |
+| Music | Right temporal | (70, 10) |
+| Spiritual | Parietal | (0, 40) |
+| Fitness | Motor cortex | (0, -20) |

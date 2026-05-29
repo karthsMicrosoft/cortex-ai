@@ -2,7 +2,7 @@
 
 > **Chronological log of what's been done.** New work appends to the end. Use this to verify "we already did X" before re-doing.
 
-**Last updated:** 2026-05-28 (Round 27 planned: Brain View 3D→2D rewrite)
+**Last updated:** 2026-05-29 (Round 27 SHIPPED: Brain View 3D→2D rewrite)
 
 ---
 
@@ -1374,33 +1374,84 @@ category-based position forces, and dynamic mesh scaling.
 
 ---
 
-## Round 27 — Brain View 3D → 2D Rewrite (NOT YET STARTED)
+## Round 27 — Brain View 3D → 2D Rewrite (2026-05-29) — SHIPPED
 
-**Decision:** Replace the 3D brain view (react-force-graph-3d + Three.js + GLB mesh) with a 2D brain view (react-force-graph-2d + SVG brain outline). The 3D view is visually impressive but not intuitive — 3D rotation is disorienting, nodes occlude each other, camera auto-zoom is unpredictable, and mobile touch interaction is awkward.
+Replaced the 3D brain view (`react-force-graph-3d` + Three.js/WebGL + GLB mesh)
+with a 2D brain view (`react-force-graph-2d` + SVG brain outline). The 3D view
+was visually impressive but not intuitive — 3D rotation was disorienting, nodes
+occluded each other behind the mesh, camera auto-zoom was unpredictable, and
+mobile orbit controls fought normal scroll/tap.
 
-### Planned changes
-- Replace `ForceGraph3D` → `ForceGraph2D` (already in package.json as `^1.25.0`)
-- Replace GLB brain mesh → SVG top-down brain silhouette as background
-- Replace `nodeThreeObject` (Three.js) → `nodeCanvasObject` (Canvas 2D API)
-- Replace 3D category position forces → 2D (x, y only)
-- Remove Three.js deps: `react-force-graph-3d`, `three`, `@types/three`
-- Delete `frontend/public/models/brain.glb`
-- Keep: search, filters, date, "Open as Canvas", click/hover, category legend, link styling
+### What changed
+- **`ForceGraph3D` → `ForceGraph2D`**: Same `react-force-graph` family, Canvas 2D
+  renderer instead of WebGL. Direct click/hover, no rotation, no occlusion.
+- **GLB brain mesh → SVG brain outline**: New `frontend/src/assets/brain-outline.svg`
+  (~1.3 KB top-down silhouette with longitudinal fissure + lateral sulcus hints +
+  cerebellum). Rendered as a translucent (`opacity-25`) `<img>` absolutely
+  positioned behind the canvas; canvas `backgroundColor="rgba(0,0,0,0)"` so the
+  outline shows through. `viewBox="-100 -100 200 200"` lines up with the 2D anchor
+  coordinate space.
+- **`nodeThreeObject` → `nodeCanvasObject`**: Each node is now a filled coloured
+  circle (radius 5) drawn directly on the canvas, with a truncated label below
+  scaled by `globalScale` so it stays legible at any zoom. `nodePointerAreaPaint`
+  matches the circle so hover/click hit-tests align with what users see.
+- **2D category position forces**: `categoryPositionForce('x', 0.08)` and
+  `categoryPositionForce('y', 0.08)` only. Charge tightened to `-30`. New 2D
+  anchors:
+  - Ideas → Frontal (0, -60)
+  - Journal → Prefrontal (0, -80)
+  - Learning → Left temporal (-70, 10)
+  - Music → Right temporal (70, 10)
+  - Spiritual → Parietal (0, 40)
+  - Fitness → Motor cortex (0, -20)
+- **`onEngineStop`**: Single `zoomToFit(400, 40)` call when the simulation
+  settles. No per-frame camera mutation, no scaling dance, no jitter.
 
-### 2D Category anchors (top-down brain)
-| Category | Region | Anchor (x, y) |
-|----------|--------|---------------|
-| Ideas | Frontal lobe | (0, -60) |
-| Journal | Prefrontal | (0, -80) |
-| Learning | Left temporal | (-70, 10) |
-| Music | Right temporal | (70, 10) |
-| Spiritual | Parietal | (0, 40) |
-| Fitness | Motor cortex | (0, -20) |
+### Preserved features (unchanged)
+- Search input, category filter chips, date picker, "Clear filters" button
+- "Open as Canvas" button with 50-node cap + export warning/error banner
+- Node click → navigate to `/note/{id}`
+- Node hover → tooltip with title + summary + category badge
+- Header with back button + node/link count
+- Link colors: semantic=gray (dashed), manual=blue (≥2px), wiki=purple (≥2px)
+- Category legend with 6 toggle chips
 
-### Expected benefits
-- ~384KB gz bundle reduction (Three.js removed)
-- No WebGL requirement — works on all browsers
-- Faster load (no GLB fetch, no WebGL context init)
-- Flat 2D graph — no rotation confusion, direct click/hover
+### Dependencies removed
+- `react-force-graph-3d` (runtime)
+- `three` (runtime)
+- `@types/three` (devDependency)
+- 19 transitive packages dropped (`npm install` reports `removed 19 packages`)
 
-See DECISIONS.md § 22am for rationale.
+### Files changed
+- `frontend/src/assets/brain-outline.svg` (NEW — top-down brain silhouette)
+- `frontend/src/pages/BrainViewPage.tsx` (REWRITE — 3D → 2D)
+- `frontend/public/models/brain.glb` (DELETED — and empty `models/` dir removed)
+- `frontend/package.json` + `frontend/package-lock.json` (3D deps removed)
+- `frontend/src/__tests__/BrainViewPage.test.tsx` (single `react-force-graph-2d`
+  mock replaces the previous three.js + GLTFLoader + 3D mocks; PERF-10 test
+  block updated to assert the 3D variant is gone)
+- `frontend/src/__tests__/BrainViewPage-canvas.test.tsx` (same mock swap)
+- `PROGRESS.md`, `DECISIONS.md`, `KNOWN_ISSUES.md`, `HANDOFF.md` (docs)
+
+### Test results
+- All 24 `BrainViewPage` tests pass with the new 2D mock
+- All 2 `BrainViewPage-canvas` tests pass
+- All 6 `App.lazy` tests pass (Dexie `DatabaseClosedError` tail-noise is a
+  pre-existing teardown flake — present on baseline too)
+- TypeScript: 0 errors (`npx tsc --noEmit` clean)
+- Full vitest: 832 pass / 1 skipped / 8 pre-existing failures (7 in
+  `api-ai.test.ts` — `ReferenceError: ReadableStream is not defined`, a jsdom
+  env issue unrelated to Brain View; 1 in `NoteDetailPage.test.tsx` Aliases test
+  unrelated to Brain View — verified by running the same files on baseline
+  with the 3D code restored and getting the identical 8 failures)
+
+### Expected user-visible benefits
+- ~384 KB gz bundle reduction (Three.js removed from the BrainViewPage chunk)
+- Universal browser compatibility — no WebGL requirement
+- Faster load — no GLB fetch, no WebGL context init
+- Direct, intuitive interaction — no accidental rotation, mobile tap/scroll
+  works normally
+- The decoration (faint brain outline) no longer overpowers the content
+  (notes = nodes)
+
+See DECISIONS.md § 22am for full rationale.

@@ -1,11 +1,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { ArrowLeft, Layout, Loader2, RefreshCw, Search } from 'lucide-react';
-import ForceGraph3D from 'react-force-graph-3d';
-import * as THREE from 'three';
-import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
+import ForceGraph2D from 'react-force-graph-2d';
 import { apiGet } from '../api/client';
 import { addCanvasItem, createCanvas } from '../api/canvas';
+import brainOutlineUrl from '../assets/brain-outline.svg';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -34,7 +33,6 @@ interface GraphData {
 interface FGNode extends GraphNode {
   x?: number;
   y?: number;
-  z?: number;
 }
 
 // ---------------------------------------------------------------------------
@@ -57,16 +55,19 @@ function categoryToHex(category: string): string {
 }
 
 // ---------------------------------------------------------------------------
-// Category → brain-lobe 3D anchor positions
+// Category → 2D brain-lobe anchor positions (top-down view).
+// See DECISIONS.md § 22am. The SVG outline at frontend/src/assets/brain-outline.svg
+// uses viewBox "-100 -100 200 200", so these anchors line up with the same
+// coordinate space when the canvas is centred on (0, 0).
 // ---------------------------------------------------------------------------
 
-const CATEGORY_ANCHOR: Record<string, { x: number; y: number; z: number }> = {
-  Ideas:     { x: 0,   y: 20,  z: 45  },  // Frontal lobe
-  Journal:   { x: 0,   y: 30,  z: 60  },  // Prefrontal cortex
-  Learning:  { x: -45, y: -5,  z: 0   },  // Left temporal
-  Music:     { x: 45,  y: -5,  z: 0   },  // Right temporal
-  Spiritual: { x: 0,   y: 40,  z: -25 },  // Parietal lobe
-  Fitness:   { x: 0,   y: 50,  z: 15  },  // Motor cortex
+const CATEGORY_ANCHOR: Record<string, { x: number; y: number }> = {
+  Ideas:     { x: 0,   y: -60 },  // Frontal lobe
+  Journal:   { x: 0,   y: -80 },  // Prefrontal cortex
+  Learning:  { x: -70, y: 10  },  // Left temporal
+  Music:     { x: 70,  y: 10  },  // Right temporal
+  Spiritual: { x: 0,   y: 40  },  // Parietal lobe
+  Fitness:   { x: 0,   y: -20 },  // Motor cortex
 };
 
 // ---------------------------------------------------------------------------
@@ -84,41 +85,15 @@ function styleFor(lt: string | undefined) {
 }
 
 // ---------------------------------------------------------------------------
-// Text sprite helper for 3D node labels
+// Custom d3 position force — pulls nodes toward their category anchor (2D).
 // ---------------------------------------------------------------------------
 
-function makeTextSprite(text: string): THREE.Sprite {
-  const canvas = document.createElement('canvas');
-  const ctx = canvas.getContext('2d')!;
-  const label = text.length > 20 ? `${text.slice(0, 20)}…` : text;
-  const fontSize = 48;
-  ctx.font = `${fontSize}px sans-serif`;
-  const metrics = ctx.measureText(label);
-  canvas.width = Math.ceil(metrics.width) + 16;
-  canvas.height = fontSize + 16;
-  ctx.font = `${fontSize}px sans-serif`;
-  ctx.fillStyle = '#cbd5e1';
-  ctx.textAlign = 'center';
-  ctx.textBaseline = 'middle';
-  ctx.fillText(label, canvas.width / 2, canvas.height / 2);
-  const texture = new THREE.CanvasTexture(canvas);
-  texture.needsUpdate = true;
-  const mat = new THREE.SpriteMaterial({ map: texture, transparent: true, depthWrite: false });
-  const sprite = new THREE.Sprite(mat);
-  sprite.scale.set(canvas.width / 10, canvas.height / 10, 1);
-  return sprite;
-}
-
-// ---------------------------------------------------------------------------
-// Custom d3 position force — pulls nodes toward their category anchor
-// ---------------------------------------------------------------------------
-
-function categoryPositionForce(axis: 'x' | 'y' | 'z', strength: number) {
+function categoryPositionForce(axis: 'x' | 'y', strength: number) {
   let nodes: Record<string, unknown>[] = [];
   function force(alpha: number) {
     for (const node of nodes) {
       const cat = (node as { category?: string }).category ?? '';
-      const anchor = CATEGORY_ANCHOR[cat] ?? { x: 0, y: 0, z: 0 };
+      const anchor = CATEGORY_ANCHOR[cat] ?? { x: 0, y: 0 };
       const target = anchor[axis];
       const pos = (node[axis] as number) || 0;
       const vel = `v${axis}`;
@@ -132,26 +107,31 @@ function categoryPositionForce(axis: 'x' | 'y' | 'z', strength: number) {
 }
 
 // ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+const NODE_RADIUS = 5;
+const LABEL_MAX_CHARS = 20;
+
+function truncateLabel(text: string): string {
+  return text.length > LABEL_MAX_CHARS ? `${text.slice(0, LABEL_MAX_CHARS)}…` : text;
+}
+
+// ---------------------------------------------------------------------------
 // BrainViewPage
 // ---------------------------------------------------------------------------
+
+type ForceGraph2DRef = {
+  d3Force: (name: string, force?: unknown) => { strength?: (v: number) => void } | undefined;
+  d3ReheatSimulation: () => void;
+  zoomToFit: (durationMs?: number, paddingPx?: number) => void;
+};
 
 export default function BrainViewPage(): React.ReactElement {
   const navigate = useNavigate();
   const containerRef = useRef<HTMLDivElement>(null);
-  const fgRef = useRef<{
-    scene: () => THREE.Scene;
-    renderer: () => THREE.WebGLRenderer;
-    d3Force: (name: string, force?: unknown) => { strength?: (v: number) => void };
-    d3ReheatSimulation: () => void;
-    cameraPosition: (pos: { x: number; y: number; z: number }, lookAt?: { x: number; y: number; z: number }, transitionMs?: number) => void;
-  } | null>(null);
+  const fgRef = useRef<ForceGraph2DRef | null>(null);
   const [dimensions, setDimensions] = useState({ width: 400, height: 600 });
-  // Track scene objects for cleanup
-  const sceneObjectsRef = useRef<THREE.Object3D[]>([]);
-  // Track the scene instance to detect remounts
-  const lastSceneRef = useRef<THREE.Scene | null>(null);
-  // Track brain mesh for dynamic scaling
-  const brainMeshRef = useRef<THREE.Object3D | null>(null);
 
   const [graphData, setGraphData] = useState<GraphData>({ nodes: [], links: [] });
   const [isLoading, setIsLoading] = useState(true);
@@ -215,10 +195,9 @@ export default function BrainViewPage(): React.ReactElement {
     if (graphData.nodes.length === 0) return;
     for (const n of graphData.nodes as FGNode[]) {
       if (n.x !== undefined) continue; // already positioned
-      const anchor = CATEGORY_ANCHOR[n.category] ?? { x: 0, y: 0, z: 0 };
+      const anchor = CATEGORY_ANCHOR[n.category] ?? { x: 0, y: 0 };
       n.x = anchor.x + (Math.random() - 0.5) * 20;
       n.y = anchor.y + (Math.random() - 0.5) * 20;
-      n.z = anchor.z + (Math.random() - 0.5) * 20;
     }
   }, [graphData]);
 
@@ -243,146 +222,31 @@ export default function BrainViewPage(): React.ReactElement {
     return { nodes, links };
   }, [graphData, search, activeCategories]);
 
-  // Whether the ForceGraph3D is conditionally rendered (nodes > 0)
   const graphVisible = !isLoading && !error && filteredGraph.nodes.length > 0;
 
-  // ---- Load brain mesh + configure renderer when graph mounts/remounts ----
-  useEffect(() => {
-    const fg = fgRef.current;
-    if (!fg || !graphVisible) return;
-
-    let currentScene: THREE.Scene;
-    try {
-      currentScene = fg.scene();
-    } catch {
-      return;
-    }
-
-    // Skip if same scene instance (no remount happened)
-    if (currentScene === lastSceneRef.current) return;
-    lastSceneRef.current = currentScene;
-
-    // Safely dispose tracked scene objects
-    const disposeTracked = () => {
-      for (const obj of sceneObjectsRef.current) {
-        try {
-          if ('removeFromParent' in obj) obj.removeFromParent();
-          if ('traverse' in obj) {
-            obj.traverse((child) => {
-              if ((child as THREE.Mesh).isMesh) {
-                const m = child as THREE.Mesh;
-                m.geometry?.dispose();
-                if (m.material) (m.material as THREE.Material).dispose();
-              }
-            });
-          }
-        } catch {
-          // Disposal failed — skip (object may already be gone)
-        }
-      }
-      sceneObjectsRef.current = [];
-    };
-
-    // Clean up previous scene objects
-    disposeTracked();
-
-    // Cap pixel ratio for mobile performance
-    try {
-      fg.renderer().setPixelRatio(Math.min(window.devicePixelRatio, 2));
-    } catch {
-      // Renderer not ready yet — skip
-    }
-
-    // Add ambient + directional lights
-    try {
-      const ambient = new THREE.AmbientLight(0xffffff, 0.6);
-      currentScene.add(ambient);
-      sceneObjectsRef.current.push(ambient);
-      const directional = new THREE.DirectionalLight(0xffffff, 0.8);
-      directional.position.set(50, 100, 80);
-      currentScene.add(directional);
-      sceneObjectsRef.current.push(directional);
-    } catch {
-      // Scene not ready — skip
-    }
-
-    // Load brain mesh as translucent wireframe shell
-    const loader = new GLTFLoader();
-    loader.load(
-      '/models/brain.glb',
-      (gltf) => {
-        try {
-          const brain = gltf.scene;
-          brain.traverse((child) => {
-            if ((child as THREE.Mesh).isMesh) {
-              (child as THREE.Mesh).material = new THREE.MeshBasicMaterial({
-                color: 0x6366f1,
-                transparent: true,
-                opacity: 0.15,
-                wireframe: true,
-              });
-            }
-          });
-          brain.scale.setScalar(2.0);
-          brainMeshRef.current = brain;
-          currentScene.add(brain);
-          sceneObjectsRef.current.push(brain);
-        } catch {
-          // Mesh processing failed — graceful fallback (nodes-only)
-        }
-      },
-      undefined,
-      () => {
-        console.warn('Brain mesh failed to load — falling back to nodes-only');
-      },
-    );
-
-    // Cleanup on unmount / before re-run
-    return () => {
-      disposeTracked();
-      lastSceneRef.current = null;
-      brainMeshRef.current = null;
-    };
-  }, [graphVisible]);
-
-  // ---- Configure d3 forces for brain-contained layout ----
+  // ---- Configure d3 forces for brain-region layout ----
   useEffect(() => {
     const fg = fgRef.current;
     if (!fg || !graphVisible) return;
     try {
-      // Moderate charge + position forces to keep nodes within the brain mesh
       const charge = fg.d3Force('charge');
-      if (charge?.strength) charge.strength(-15);
+      if (charge?.strength) charge.strength(-30);
       fg.d3Force('categoryX', categoryPositionForce('x', 0.08));
       fg.d3Force('categoryY', categoryPositionForce('y', 0.08));
-      fg.d3Force('categoryZ', categoryPositionForce('z', 0.08));
       fg.d3ReheatSimulation();
     } catch {
-      // Force configuration failed — use defaults
+      // Force configuration failed — fall back to library defaults.
     }
   }, [graphVisible]);
 
-  // ---- Scale brain mesh to contain nodes when simulation stops ----
+  // ---- One-shot zoom-to-fit after the simulation settles ----
   const handleEngineStop = useCallback(() => {
-    const brain = brainMeshRef.current;
-    if (!brain) return;
-    const nodes = filteredGraph.nodes as FGNode[];
-    if (nodes.length === 0) return;
-    let maxDist = 0;
-    for (const n of nodes) {
-      const d = Math.sqrt((n.x ?? 0) ** 2 + (n.y ?? 0) ** 2 + (n.z ?? 0) ** 2);
-      if (d > maxDist) maxDist = d;
-    }
-    // Scale mesh to contain all nodes with 30% padding; mesh raw radius ~65 units
-    const meshRawRadius = 65;
-    const targetScale = Math.max((maxDist / meshRawRadius) * 1.3, 1.0);
-    brain.scale.setScalar(targetScale);
-    // Zoom camera to frame the scaled brain
     try {
-      const camDist = targetScale * meshRawRadius * 2.5;
-      fgRef.current?.cameraPosition({ x: 0, y: 0, z: camDist }, { x: 0, y: 0, z: 0 }, 800);
-    } catch { /* skip */ }
-  }, [filteredGraph]);
+      fgRef.current?.zoomToFit(400, 40);
+    } catch {
+      // zoomToFit not available — skip.
+    }
+  }, []);
 
   const handleNodeClick = useCallback(
     (node: FGNode) => {
@@ -443,19 +307,48 @@ export default function BrainViewPage(): React.ReactElement {
     });
   };
 
-  // ---- 3D node rendering ----
-  const nodeThreeObject = useCallback((node: object) => {
-    const n = node as FGNode;
-    const hex = categoryToHex(n.category);
-    const color = new THREE.Color(hex);
-    const geo = new THREE.SphereGeometry(3, 16, 12);
-    const mat = new THREE.MeshLambertMaterial({ color, transparent: true, opacity: 0.85 });
-    const mesh = new THREE.Mesh(geo, mat);
-    const sprite = makeTextSprite(n.label);
-    sprite.position.set(0, 5, 0);
-    mesh.add(sprite);
-    return mesh;
-  }, []);
+  // ---- 2D node rendering (Canvas 2D API) ----
+  const nodeCanvasObject = useCallback(
+    (node: object, ctx: CanvasRenderingContext2D, globalScale: number) => {
+      const n = node as FGNode;
+      const x = n.x ?? 0;
+      const y = n.y ?? 0;
+
+      // Filled coloured circle for the node.
+      ctx.beginPath();
+      ctx.arc(x, y, NODE_RADIUS, 0, Math.PI * 2, false);
+      ctx.fillStyle = categoryToHex(n.category);
+      ctx.globalAlpha = 0.9;
+      ctx.fill();
+      ctx.globalAlpha = 1;
+
+      // Truncated label below the node, scaled so it stays legible at any zoom.
+      const label = truncateLabel(n.label ?? '');
+      if (label) {
+        const fontSize = Math.max(10 / globalScale, 2);
+        ctx.font = `${fontSize}px sans-serif`;
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'top';
+        ctx.fillStyle = '#cbd5e1';
+        ctx.fillText(label, x, y + NODE_RADIUS + 2);
+      }
+    },
+    [],
+  );
+
+  // Hit area matches the rendered circle so hover/click line up with what users see.
+  const nodePointerAreaPaint = useCallback(
+    (node: object, color: string, ctx: CanvasRenderingContext2D) => {
+      const n = node as FGNode;
+      const x = n.x ?? 0;
+      const y = n.y ?? 0;
+      ctx.beginPath();
+      ctx.arc(x, y, NODE_RADIUS + 2, 0, Math.PI * 2, false);
+      ctx.fillStyle = color;
+      ctx.fill();
+    },
+    [],
+  );
 
   return (
     <div className="flex min-h-screen flex-col bg-[#0F172A]">
@@ -569,7 +462,15 @@ export default function BrainViewPage(): React.ReactElement {
       </div>
 
       {/* Graph canvas */}
-      <div ref={containerRef} className="relative flex-1">
+      <div ref={containerRef} className="relative flex-1 overflow-hidden">
+        {/* Translucent brain silhouette behind the canvas. Purely decorative. */}
+        <img
+          src={brainOutlineUrl}
+          alt=""
+          aria-hidden="true"
+          className="pointer-events-none absolute inset-0 m-auto h-4/5 w-4/5 max-h-[80vh] max-w-[80vh] object-contain opacity-25"
+        />
+
         {isLoading && (
           <div className="absolute inset-0 flex items-center justify-center">
             <div className="flex items-center gap-2 text-sm text-slate-400">
@@ -595,7 +496,7 @@ export default function BrainViewPage(): React.ReactElement {
 
         {!isLoading && !error && filteredGraph.nodes.length > 0 && (
           <>
-            <ForceGraph3D
+            <ForceGraph2D
               ref={fgRef as React.MutableRefObject<never>}
               width={dimensions.width}
               height={dimensions.height}
@@ -603,10 +504,11 @@ export default function BrainViewPage(): React.ReactElement {
               nodeId="id"
               linkSource="source"
               linkTarget="target"
-              nodeThreeObject={nodeThreeObject}
+              nodeCanvasObject={nodeCanvasObject}
+              nodePointerAreaPaint={nodePointerAreaPaint}
               linkColor={(link) => styleFor((link as GraphLink).link_type).color}
               linkWidth={(link) => styleFor((link as GraphLink).link_type).width}
-              linkOpacity={0.6}
+              linkLineDash={(link) => styleFor((link as GraphLink).link_type).dash ?? []}
               warmupTicks={40}
               d3AlphaDecay={0.02}
               onNodeClick={(node) => handleNodeClick(node as FGNode)}
@@ -614,8 +516,7 @@ export default function BrainViewPage(): React.ReactElement {
                 handleNodeHover((node as FGNode | null) ?? null);
               }}
               onEngineStop={handleEngineStop}
-              backgroundColor="#0F172A"
-              controlType="orbit"
+              backgroundColor="rgba(0,0,0,0)"
             />
 
             {hoverNode && (

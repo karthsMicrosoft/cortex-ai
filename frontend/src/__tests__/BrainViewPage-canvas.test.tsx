@@ -6,45 +6,19 @@ import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import React from 'react';
 import { MemoryRouter } from 'react-router-dom';
 
-// Mock three.js
-vi.mock('three', () => {
-  const mockMaterial = { color: 0, transparent: false, opacity: 1, wireframe: false, map: null, depthWrite: true };
-  const mockMesh = { add: vi.fn(), position: { set: vi.fn() }, scale: { set: vi.fn(), setScalar: vi.fn() }, traverse: vi.fn(), isMesh: true, material: mockMaterial };
-  return {
-    SphereGeometry: vi.fn(),
-    MeshLambertMaterial: vi.fn(() => ({ ...mockMaterial })),
-    MeshBasicMaterial: vi.fn(() => ({ ...mockMaterial })),
-    Mesh: vi.fn(() => ({ ...mockMesh })),
-    Color: vi.fn(),
-    SpriteMaterial: vi.fn(() => ({ ...mockMaterial })),
-    Sprite: vi.fn(() => ({ position: { set: vi.fn() }, scale: { set: vi.fn() } })),
-    CanvasTexture: vi.fn(() => ({ needsUpdate: false })),
-    AmbientLight: vi.fn(() => ({})),
-    DirectionalLight: vi.fn(() => ({ position: { set: vi.fn() } })),
-  };
-});
-
-vi.mock('three/examples/jsm/loaders/GLTFLoader.js', () => ({
-  GLTFLoader: vi.fn().mockImplementation(() => ({
-    load: vi.fn(),
-  })),
-}));
-
-// Mock react-force-graph-3d
-vi.mock('react-force-graph-3d', () => {
+// Mock react-force-graph-2d (Canvas 2D — jsdom has no canvas implementation)
+vi.mock('react-force-graph-2d', () => {
   const React = require('react');
-  const ForceGraph3DMock = React.forwardRef((props: Record<string, unknown>, ref: React.Ref<unknown>) => {
+  const ForceGraph2DMock = React.forwardRef((props: Record<string, unknown>, ref: React.Ref<unknown>) => {
     const graphData = (props.graphData ?? { nodes: [], links: [] }) as {
       nodes: { id: string; label: string; category: string }[];
       links: unknown[];
     };
 
     React.useImperativeHandle(ref, () => ({
-      scene: () => ({ add: () => {} }),
-      renderer: () => ({ setPixelRatio: () => {} }),
       d3Force: () => ({ strength: () => {} }),
       d3ReheatSimulation: () => {},
-      cameraPosition: () => {},
+      zoomToFit: () => {},
     }));
 
     return React.createElement('div', {
@@ -61,8 +35,8 @@ vi.mock('react-force-graph-3d', () => {
       )
     );
   });
-  ForceGraph3DMock.displayName = 'ForceGraph3DMock';
-  return { default: ForceGraph3DMock };
+  ForceGraph2DMock.displayName = 'ForceGraph2DMock';
+  return { default: ForceGraph2DMock };
 });
 
 const { mockNavigate } = vi.hoisted(() => ({ mockNavigate: vi.fn() }));

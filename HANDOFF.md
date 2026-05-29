@@ -2,8 +2,8 @@
 
 > **Read this first.** This document briefs an incoming agent (Claude / Copilot / Aider / human) on the state of the project so work can resume without context loss.
 
-**Last updated:** 2026-05-28 (Round 27 planned: Brain View 3D→2D rewrite — decision documented, implementation pending)
-**Status:** Live on Azure. Phases 1–7 shipped. Brain View currently 3D (Round 25-26) but scheduled for 2D rewrite (Round 27) — 3D is visually impressive but UX is poor (disorienting rotation, node occlusion, mobile touch conflicts). See DECISIONS.md § 22am. Library has instant text search. Safari mobile bfcache blank screen fixed. Backend: ~940 tests passing. Frontend: ~830 tests, TypeScript clean.
+**Last updated:** 2026-05-29 (Round 27 SHIPPED: Brain View 3D→2D rewrite — `react-force-graph-2d` + SVG outline live; Three.js/WebGL removed)
+**Status:** Live on Azure. Phases 1–7 shipped. Brain View now 2D (Round 27) — see DECISIONS.md § 22am. Rounds 25–26's 3D view is superseded. Library has instant text search. Safari mobile bfcache blank screen fixed. Backend: ~940 tests passing. Frontend: ~830 tests, TypeScript clean.
 
 ---
 
@@ -77,7 +77,8 @@ az containerapp secret list --name cortexks-api --resource-group cortex-rg --sho
 
 | Priority | Task | Where to start |
 |---|---|---|
-| **P0 — NEXT** | **Brain View 3D → 2D rewrite** — Replace react-force-graph-3d + Three.js + GLB mesh with react-force-graph-2d + SVG brain outline. 3D is visually impressive but UX is poor (disorienting rotation, node occlusion, mobile touch conflicts). | See DECISIONS.md § 22am, PROGRESS.md Round 27, session `plan.md`. Files: `BrainViewPage.tsx` (rewrite), remove `three`/`react-force-graph-3d`/`brain.glb`, add SVG asset, update tests. |
+| **P0 — NEXT** | _(none currently — Round 27 closed)_ | — |
+| ✅ Round 27 | ~~Brain View 3D → 2D rewrite~~ ✅ Round 27 (2026-05-29) — replaced react-force-graph-3d + Three.js + GLB brain mesh with react-force-graph-2d + SVG brain outline. Three.js deps removed, `brain.glb` deleted, 24+2 Brain View tests + TypeScript clean | `PROGRESS.md` Round 27, `DECISIONS.md` § 22am |
 | **P0** | ~~End-to-end smoke test in a real browser~~ ✅ Round 9 (2026-05-06) | Confirmed: auth/refresh, capture (text + AI pipeline), library, insights (patterns only), sync. See PROGRESS § Round 9. |
 | **P0** | ~~Bootstrap Azure Key Vault for prod-grade secret rotation~~ ✅ Round 9 (2026-05-06) | `cortexks-kv` live; container app secrets reference KV via managed identity. See `docs/DEPLOYMENT.md` § "Key Vault — secret rotation" |
 | **P0** | ~~Container App auto-restart + health-check alerts~~ ✅ Round 13 (2026-05-07) — auto-restart already wired via Bicep probes; added 3 Azure Monitor alerts (restart spike + 5xx rate + synthetic /api/health ping) routing to `karths@microsoft.com` via shared Action Group `cortex-alerts-ag` | `docs/DEPLOYMENT.md` § "Health-Check Alerts" |

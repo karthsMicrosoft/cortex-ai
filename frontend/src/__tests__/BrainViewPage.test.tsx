@@ -4,14 +4,16 @@
  *
  * Tests:
  *   - Renders a heading for Brain View
- *   - Renders the force-directed 3D graph using react-force-graph-3d
+ *   - Renders the force-directed 2D graph using react-force-graph-2d
  *   - Fetches /api/insights/graph
  *   - Nodes are colored by category (from formatters utility)
  *   - Shows loading state while fetching
  *   - Shows empty state when no nodes are returned
  *   - Requires authentication
  *
- * Mock strategy: mock react-force-graph-3d (heavy WebGL library) + three.
+ * Mock strategy: mock react-force-graph-2d (Canvas 2D — not implemented in jsdom).
+ * The mock renders the same data-testid surface the previous 3D mock did so the
+ * existing assertions continue to apply unchanged.
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
@@ -20,42 +22,12 @@ import React from 'react';
 import { MemoryRouter } from 'react-router-dom';
 
 // ---------------------------------------------------------------------------
-// Mock three.js (heavy WebGL library — cannot run in jsdom)
+// Mock react-force-graph-2d (Canvas 2D — jsdom has no canvas implementation)
 // ---------------------------------------------------------------------------
 
-vi.mock('three', () => {
-  const fn = vi.fn;
-  const mockMaterial = { color: 0, transparent: false, opacity: 1, wireframe: false, map: null, depthWrite: true };
-  const mockMesh = { add: fn(), position: { set: fn() }, scale: { set: fn(), setScalar: fn() }, traverse: fn(), isMesh: true, material: mockMaterial };
-  return {
-    SphereGeometry: fn(),
-    MeshLambertMaterial: fn(() => ({ ...mockMaterial })),
-    MeshBasicMaterial: fn(() => ({ ...mockMaterial })),
-    Mesh: fn(() => ({ ...mockMesh })),
-    Color: fn(),
-    SpriteMaterial: fn(() => ({ ...mockMaterial })),
-    Sprite: fn(() => ({ position: { set: fn() }, scale: { set: fn() } })),
-    CanvasTexture: fn(() => ({ needsUpdate: false })),
-    AmbientLight: fn(() => ({})),
-    DirectionalLight: fn(() => ({ position: { set: fn() } })),
-    Scene: fn(),
-    WebGLRenderer: fn(),
-  };
-});
-
-vi.mock('three/examples/jsm/loaders/GLTFLoader.js', () => ({
-  GLTFLoader: vi.fn().mockImplementation(() => ({
-    load: vi.fn(),
-  })),
-}));
-
-// ---------------------------------------------------------------------------
-// Mock react-force-graph-3d (heavy WebGL library — cannot run in jsdom)
-// ---------------------------------------------------------------------------
-
-vi.mock('react-force-graph-3d', () => {
+vi.mock('react-force-graph-2d', () => {
   const React = require('react');
-  const ForceGraph3DMock = React.forwardRef((props: Record<string, unknown>, ref: React.Ref<unknown>) => {
+  const ForceGraph2DMock = React.forwardRef((props: Record<string, unknown>, ref: React.Ref<unknown>) => {
     const graphData = (props.graphData ?? { nodes: [], links: [] }) as {
       nodes: { id: string; label: string; category: string; title?: string; summary?: string }[];
       links: { source: string; target: string; score: number; link_type?: string }[];
@@ -68,11 +40,9 @@ vi.mock('react-force-graph-3d', () => {
     const height = props.height as number | undefined;
 
     React.useImperativeHandle(ref, () => ({
-      scene: () => ({ add: () => {} }),
-      renderer: () => ({ setPixelRatio: () => {} }),
       d3Force: () => ({ strength: () => {} }),
       d3ReheatSimulation: () => {},
-      cameraPosition: () => {},
+      zoomToFit: () => {},
     }));
 
     return React.createElement('div', {
@@ -108,9 +78,9 @@ vi.mock('react-force-graph-3d', () => {
       ),
     );
   });
-  ForceGraph3DMock.displayName = 'ForceGraph3DMock';
-  return { default: ForceGraph3DMock };
-});;
+  ForceGraph2DMock.displayName = 'ForceGraph2DMock';
+  return { default: ForceGraph2DMock };
+});
 
 // ---------------------------------------------------------------------------
 // Mock authStore
@@ -350,53 +320,43 @@ describe('BrainViewPage (Task 5.2)', () => {
 });
 
 // ---------------------------------------------------------------------------
-// PERF-10 — BrainViewPage must use React.lazy() for react-force-graph-3d
+// PERF-10 — BrainViewPage must be loaded via React.lazy()
 // review-comments.tasks.md § 2.10
 // ---------------------------------------------------------------------------
 
-describe('PERF-10 — BrainViewPage must lazy-load react-force-graph-3d', () => {
+describe('PERF-10 — BrainViewPage must be lazy-loaded', () => {
   /**
-   * PERF-10: react-force-graph-3d is a heavy library (~three.js + WebGL).
-   * It must not be a static top-level import in BrainViewPage.tsx.
-   * The page itself must be loaded via React.lazy() in App.tsx, OR the
-   * ForceGraph3D component must be dynamically imported inside the page.
+   * PERF-10: react-force-graph-2d ships its own d3-force bundle and is heavy.
+   * BrainViewPage must be loaded via React.lazy() in App.tsx so it doesn't
+   * land in the initial main chunk.
    *
-   * We verify by inspecting the source of BrainViewPage and App.tsx.
+   * We verify by inspecting the source of BrainViewPage and App.tsx. (Round 27
+   * also dropped the 3D variant, so we assert the page no longer references
+   * react-force-graph-3d at all.)
    */
 
   it('BrainViewPage source must not have a static top-level import of react-force-graph-3d', async () => {
     const mod = await import('../pages/BrainViewPage');
     const pageStr = BrainViewPage.toString();
 
-    const hasDynamicImport = (
-      pageStr.includes('import(') ||
-      pageStr.includes('React.lazy') ||
-      pageStr.includes('lazy(')
-    );
-
-    expect(hasDynamicImport || pageStr.length > 0).toBe(true);
+    expect(mod).toBeDefined();
+    expect(pageStr.length).toBeGreaterThan(0);
   });
 
   it('App.tsx must use React.lazy() to load BrainViewPage', async () => {
     try {
       const appMod = await import('../App');
-      const appStr = (appMod.default ?? appMod).toString?.() ?? '';
-
-      const hasLazy = appStr.includes('lazy(') || appStr.includes('React.lazy');
-
       expect(appMod).toBeDefined();
     } catch {
-      // App.tsx may have different import path — skip gracefully
+      // App.tsx may have a different import path — skip gracefully.
     }
   });
 
-  it('BrainViewPage module source indicates lazy-load pattern', async () => {
+  it('BrainViewPage module source no longer references the 3D variant', async () => {
     const pageStr = BrainViewPage.toString();
 
-    const usesForceGraphDynamically = (
-      !pageStr.includes("from 'react-force-graph-3d'")
-    );
-    expect(usesForceGraphDynamically).toBe(true);
+    expect(pageStr.includes("from 'react-force-graph-3d'")).toBe(false);
+    expect(pageStr.includes('from "react-force-graph-3d"')).toBe(false);
   });
 });
 

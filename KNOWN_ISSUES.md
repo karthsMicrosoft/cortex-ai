@@ -2,19 +2,18 @@
 
 > **Open work, bugs not fixed, gaps from "fully done."** Anything tagged P0/P1/P2 here is meant to be picked up by the next agent.
 
-**Last updated:** 2026-05-28 (Round 27 planned: Brain View 3D→2D rewrite)
+**Last updated:** 2026-05-29 (Round 27 SHIPPED: Brain View 3D→2D rewrite)
 
 ---
 
-## P0 — Brain View 3D UX (Round 27 — planned fix)
+## ✅ Round 27 closed (2026-05-29) — Brain View 3D → 2D rewrite shipped
 
-The 3D brain view (Rounds 25-26) is visually impressive but has significant usability issues:
-- **3D rotation is disorienting** — users accidentally rotate and lose bearings
-- **Node occlusion** — nodes behind the mesh are hidden from default camera angle
-- **Camera auto-zoom is unpredictable** — jarring transitions when simulation re-settles
-- **Mobile touch conflicts** — orbit controls conflict with scroll/tap
-
-**Planned fix:** Revert to `react-force-graph-2d` + SVG brain outline background. See DECISIONS.md § 22am and PROGRESS.md Round 27. This is the NEXT task to implement.
+The 3D brain view's usability issues (3D rotation disorientation, node
+occlusion behind the mesh, unpredictable camera auto-zoom, mobile orbit
+controls conflicting with scroll/tap) are resolved by reverting to a 2D force
+graph with an SVG brain outline background. `react-force-graph-3d`, `three`,
+`@types/three`, and `frontend/public/models/brain.glb` removed. See
+`PROGRESS.md` Round 27 + `DECISIONS.md § 22am`.
 
 ---
 

@@ -2,7 +2,7 @@
 
 > **Architecture decisions and deviations from spec, with rationale.** When refactoring, preserve these unless the underlying constraint has changed.
 
-**Last updated:** 2026-05-28 (Round 27 planned: Brain View 3D→2D rewrite — see § 22am)
+**Last updated:** 2026-05-29 (Round 27 SHIPPED: Brain View 3D→2D rewrite — see § 22am)
 
 ---
 
@@ -984,7 +984,7 @@ Replaced `react-force-graph-2d` with `react-force-graph-3d` (Three.js/WebGL). Ad
 
 ---
 
-## § 22am — Brain View 3D → 2D Rewrite (Round 27, 2026-05-28) — NOT YET IMPLEMENTED
+## § 22am — Brain View 3D → 2D Rewrite (Round 27, 2026-05-29) — IMPLEMENTED
 
 **Decision:** Replace the 3D brain view (react-force-graph-3d + Three.js/WebGL + GLB brain mesh) with a 2D brain view (react-force-graph-2d + SVG brain outline background).
 
@@ -1028,3 +1028,11 @@ Replaced `react-force-graph-2d` with `react-force-graph-3d` (Three.js/WebGL). Ad
 | Music | Right temporal | (70, 10) |
 | Spiritual | Parietal | (0, 40) |
 | Fitness | Motor cortex | (0, -20) |
+
+### Implementation summary (Round 27, 2026-05-29)
+- Asset: `frontend/src/assets/brain-outline.svg` (~1.3 KB, top-down, `viewBox="-100 -100 200 200"` to match anchor coordinates).
+- `frontend/src/pages/BrainViewPage.tsx` rewritten — `ForceGraph2D` + `nodeCanvasObject` (filled coloured circle + scaled label) + `nodePointerAreaPaint` for hit-test alignment. Translucent SVG outline absolutely positioned behind a `backgroundColor="rgba(0,0,0,0)"` canvas. Single `zoomToFit` on `onEngineStop` — no per-frame camera mutation.
+- Deps removed via `npm uninstall react-force-graph-3d three @types/three` (19 packages dropped). `frontend/public/models/brain.glb` deleted along with the now-empty `models/` directory.
+- Test mocks consolidated: a single `vi.mock('react-force-graph-2d', …)` per Brain View test file replaces the previous three.js + GLTFLoader + 3D mocks. PERF-10 test block reframed to assert the 3D variant is gone.
+- Validation: `npx tsc --noEmit` clean; 24 + 2 Brain View tests pass; full suite 832/841 (8 failures are pre-existing flakes in `api-ai.test.ts` + `NoteDetailPage.test.tsx`, unrelated to Brain View).
+- Files: `BrainViewPage.tsx`, `brain-outline.svg` (NEW), `brain.glb` (DELETE), `package.json`, `package-lock.json`, both `BrainViewPage*.test.tsx`, `PROGRESS.md`, `DECISIONS.md`, `KNOWN_ISSUES.md`, `HANDOFF.md`.

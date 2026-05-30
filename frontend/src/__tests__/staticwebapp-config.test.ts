@@ -89,3 +89,42 @@ describe('staticwebapp.config.json — CSP + security headers (Round 20 / PR del
     expect(headers['X-Content-Type-Options']).toBe('nosniff');
   });
 });
+
+// ---------------------------------------------------------------------------
+// Round 30 — Azure Blob audio playback regression
+//
+// The Round 20 CSP omitted a `media-src` directive, which silently fell
+// back to `default-src 'self'` and blocked every `<audio>` (and WaveSurfer
+// internal fetch) for Azure Blob SAS URLs. Voice notes uploaded fine and
+// transcribed fine, but the player on Note Detail threw a CSP error. The
+// fix adds media-src + extends connect-src + adds the blob: scheme to
+// img-src for offline image previews. These tests pin the contract so a
+// future CSP tightening can't silently re-break voice playback.
+// ---------------------------------------------------------------------------
+
+describe('staticwebapp.config.json — Round 30 media + blob CSP', () => {
+  const BLOB_HOST = 'https://*.blob.core.windows.net';
+
+  it('media-src directive is set (otherwise it falls back to default-src and blocks <audio>)', () => {
+    expect(directive('media-src')).not.toBe('');
+  });
+
+  it("media-src allows 'self', blob:, and Azure Blob (https://*.blob.core.windows.net)", () => {
+    const media = directive('media-src');
+    expect(media).toContain("'self'");
+    expect(media).toContain('blob:');
+    expect(media).toContain(BLOB_HOST);
+  });
+
+  it('connect-src includes Azure Blob so WaveSurfer fetch() can load audio bytes', () => {
+    expect(directive('connect-src')).toContain(BLOB_HOST);
+  });
+
+  it('img-src includes blob: scheme for offline image previews (URL.createObjectURL)', () => {
+    expect(directive('img-src')).toContain('blob:');
+  });
+
+  it('img-src still allows Azure Blob (https://*.blob.core.windows.net)', () => {
+    expect(directive('img-src')).toContain(BLOB_HOST);
+  });
+});

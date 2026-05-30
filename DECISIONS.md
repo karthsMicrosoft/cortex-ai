@@ -2,7 +2,7 @@
 
 > **Architecture decisions and deviations from spec, with rationale.** When refactoring, preserve these unless the underlying constraint has changed.
 
-**Last updated:** 2026-05-30 (Round 29 SHIPPED: per-user local data isolation — see § 22ao)
+**Last updated:** 2026-05-30 (Round 30 SHIPPED: CSP media-src + blob.core.windows.net fix — see § 22ap)
 
 ---
 
@@ -1210,3 +1210,66 @@ someone else signs in). But it misses:
 Backed by `__tests__/localUserData.test.ts` (10 unit tests),
 `__tests__/authStore.test.ts` (signOut wipe tests), and
 `__tests__/SessionGate-user-change.test.tsx` (four scenarios).
+
+---
+
+## § 22ap — Voice-note playback CSP fix (Round 30, 2026-05-30)
+
+**Decision:** Add explicit `media-src 'self' blob: https://*.blob.core.windows.net`
+and extend `connect-src` to include `https://*.blob.core.windows.net`
+in the SWA Content-Security-Policy.
+
+### Why this matters
+The Round 20 strict CSP closed the localStorage-XSS gap from § 22v but
+omitted two directives that voice-note playback relied on:
+
+1. **`media-src` is what gates `<audio src=...>` and `<video src=...>`.**
+   When `media-src` is not specified, the browser falls back to
+   `default-src`, which we set to `'self'`. Azure Blob URLs are not
+   `'self'` → every voice note silently failed to play.
+2. **`connect-src` is what gates `fetch()` / `XHR` / `WebSocket`.**
+   The `wavesurfer.js` v7 waveform player on Music-category notes
+   internally `fetch()`es the audio URL to decode the waveform. With
+   `connect-src` limited to `'self'` + the API origin, the player
+   broke immediately on initialisation.
+
+Bonus side-effect: any image note pending-upload preview using
+`URL.createObjectURL(blob)` was blocked by `img-src` missing the
+`blob:` scheme. This wasn't user-reported but would have surfaced as
+soon as someone captured an image offline.
+
+### Why a wildcard `https://*.blob.core.windows.net` is acceptable
+- Azure Blob domains are tightly controlled by Microsoft — every
+  subdomain is an Azure storage account managed by a paying tenant. No
+  untrusted user content is hosted there.
+- We already had `https://*.blob.core.windows.net` in `img-src`
+  (Round 20). Extending it to `media-src` and `connect-src` matches
+  the precedent.
+- A more restrictive `https://cortexksstorage.blob.core.windows.net`
+  would lock us to the current storage account name. We've already
+  renamed once during deploy (the original `cortex` account name was
+  globally taken, hence `cortexks`-prefix everywhere). Leaving the
+  wildcard avoids future `LocationIsOfferRestricted` / rename pain.
+
+### What we did NOT change
+- `script-src`, `style-src`, `object-src`, `frame-ancestors`,
+  `base-uri`, `form-action`, `upgrade-insecure-requests` — all
+  preserved verbatim. The XSS hardening from § 22v is intact.
+- Backend `StrictCspMiddleware` (`default-src 'none'; frame-ancestors
+  'none'`) is unaffected — backend serves only JSON and never returns
+  HTML/audio/images to a browser.
+
+### Regression pinning
+`frontend/src/__tests__/staticwebapp-config.test.ts` now has 5 explicit
+assertions for the media + blob contract. If a future security audit
+tries to remove `https://*.blob.core.windows.net` from `media-src`
+or `connect-src` without first migrating audio to a same-origin
+proxy, the tests fail loudly.
+
+### Future option (not done now)
+If we ever want to remove Azure Blob from the CSP entirely, the path is:
+- Proxy audio + image bytes through the FastAPI backend
+  (`GET /api/notes/{id}/audio` → 302 redirect or streaming response).
+- That would let `media-src` and `connect-src` shrink to `'self'`
+  + the API origin. Tradeoff: backend bandwidth + latency vs CSP purity.
+  Not worth it for a single-tenant MVP.

@@ -2,7 +2,7 @@
 
 > **Chronological log of what's been done.** New work appends to the end. Use this to verify "we already did X" before re-doing.
 
-**Last updated:** 2026-05-30 (Round 29 SHIPPED: per-user local data isolation — `clearLocalUserData()` on signOut + SessionGate user-change detection)
+**Last updated:** 2026-05-30 (Round 30 SHIPPED: fix voice-note playback — CSP was blocking Azure Blob audio URLs)
 
 ---
 
@@ -1638,3 +1638,76 @@ Two-layer isolation:
   new regressions.
 
 See DECISIONS.md § 22ao for full rationale.
+---
+
+## Round 30 — Voice-note playback CSP fix (2026-05-30) — SHIPPED
+
+User-reported bug: after recording a voice note, the audio player on
+`/note/{id}` failed to play with a browser CSP error. Upload +
+transcription + note creation all succeeded; the symptom was purely on
+the playback path.
+
+### Root cause
+The Round 20 strict CSP in `frontend/public/staticwebapp.config.json`
+had two gaps that only manifest in production (vite dev server doesn't
+apply the SWA headers):
+
+1. **No `media-src` directive.** CSP spec says when `media-src` is
+   missing, it falls back to `default-src`. `default-src` is set to
+   `'self'` → the browser blocks every `<audio src="https://...blob.core.windows.net/...">`
+   because Azure Blob isn't `'self'`.
+2. **`connect-src` did not include Azure Blob.** WaveSurfer (the
+   wavesurfer.js v7 waveform player on Music-category voice notes) uses
+   `fetch()` internally to download the audio bytes for waveform
+   decoding. `connect-src` only allowed `'self'` + the API origin →
+   the fetch was blocked the moment the player initialised.
+
+Bonus: `img-src` did not include the `blob:` scheme, so any offline
+pending-image preview (`URL.createObjectURL(localNote.imageBlob)` in
+`NoteDetailPage` and `CapturePage`) would silently fail to render.
+
+### Fix — single CSP line edited
+`frontend/public/staticwebapp.config.json` `globalHeaders.Content-Security-Policy`:
+- Added `media-src 'self' blob: https://*.blob.core.windows.net`.
+- Extended `connect-src` to include `https://*.blob.core.windows.net`.
+- Added `blob:` to `img-src`.
+- Dropped the redundant `https://cortexksblob.blob.core.windows.net`
+  entry from `img-src` (typo — actual storage account is
+  `cortexksstorage`; the wildcard `https://*.blob.core.windows.net`
+  covers all Azure Blob domains we use).
+
+Net diff: one JSON value replaced.
+
+### Tests
+`frontend/src/__tests__/staticwebapp-config.test.ts` — added a new
+`Round 30 media + blob CSP` describe block with 5 pinning assertions
+so a future CSP tightening cannot silently re-break voice playback:
+- `media-src` directive is set (not falling back to default-src)
+- `media-src` allows `'self'`, `blob:`, and Azure Blob wildcard
+- `connect-src` includes Azure Blob (for WaveSurfer fetch)
+- `img-src` includes `blob:` (for offline image previews)
+- `img-src` still allows Azure Blob
+
+### Files changed
+- `frontend/public/staticwebapp.config.json` (one CSP line)
+- `frontend/src/__tests__/staticwebapp-config.test.ts` (+5 tests)
+- `PROGRESS.md`, `DECISIONS.md` § 22ap, `KNOWN_ISSUES.md`,
+  `HANDOFF.md`
+
+### Validation
+- `npx tsc --noEmit` clean.
+- Targeted: `staticwebapp-config.test.ts` (15 tests, +5 new) +
+  `MusicPlayer.test.tsx` (23 tests) = 38/38 pass.
+- Full vitest: **858 pass / 1 skip / 8 pre-existing failures** (same
+  `api-ai.test.ts` `ReadableStream` + `NoteDetailPage` Aliases set
+  as Round 29 baseline; +5 net new tests this round).
+
+### How to verify on production (browser only — curl can't catch this)
+1. Sign in.
+2. Capture a voice note (any category).
+3. Open the note detail page.
+4. **Before Round 30**: the `<audio>` element fails with a CSP error
+   (or WaveSurfer shows "Audio load failed" for Music notes).
+   **After Round 30**: audio plays back normally.
+
+See `DECISIONS.md` § 22ap for full rationale.

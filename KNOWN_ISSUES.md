@@ -2,7 +2,27 @@
 
 > **Open work, bugs not fixed, gaps from "fully done."** Anything tagged P0/P1/P2 here is meant to be picked up by the next agent.
 
-**Last updated:** 2026-05-30 (Round 29 SHIPPED: per-user local data isolation — cross-user library leak fixed)
+**Last updated:** 2026-05-30 (Round 30 SHIPPED: voice-note playback fix — CSP media-src + Azure Blob in connect-src)
+
+---
+
+## ✅ Round 30 closed (2026-05-30) — Voice playback CSP regression fixed
+
+User-reported bug: after recording a voice note, playback on Note Detail
+failed with a browser CSP error. Upload + transcribe + note creation
+worked normally; only the `<audio>` element / WaveSurfer player broke.
+
+Root cause: the Round 20 strict CSP in `frontend/public/staticwebapp.config.json`
+omitted a `media-src` directive (silently falling back to `default-src 'self'`
+→ blocked the Azure Blob SAS URL) AND omitted `https://*.blob.core.windows.net`
+from `connect-src` (so WaveSurfer's internal `fetch()` to download the
+audio bytes was also blocked).
+
+Fix: add explicit `media-src 'self' blob: https://*.blob.core.windows.net`,
+add `https://*.blob.core.windows.net` to `connect-src`, and add `blob:`
+to `img-src` for offline pending-image previews
+(`URL.createObjectURL(localNote.imageBlob)`). See `PROGRESS.md` Round 30
++ `DECISIONS.md` § 22ap.
 
 ---
 

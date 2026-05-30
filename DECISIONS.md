@@ -2,7 +2,7 @@
 
 > **Architecture decisions and deviations from spec, with rationale.** When refactoring, preserve these unless the underlying constraint has changed.
 
-**Last updated:** 2026-05-29 (Round 27 SHIPPED: Brain View 3D→2D rewrite — see § 22am)
+**Last updated:** 2026-05-29 (Round 28 SHIPPED: Canvas feature behind `VITE_FEATURE_CANVAS` flag — see § 22an)
 
 ---
 
@@ -1036,3 +1036,65 @@ Replaced `react-force-graph-2d` with `react-force-graph-3d` (Three.js/WebGL). Ad
 - Test mocks consolidated: a single `vi.mock('react-force-graph-2d', …)` per Brain View test file replaces the previous three.js + GLTFLoader + 3D mocks. PERF-10 test block reframed to assert the 3D variant is gone.
 - Validation: `npx tsc --noEmit` clean; 24 + 2 Brain View tests pass; full suite 832/841 (8 failures are pre-existing flakes in `api-ai.test.ts` + `NoteDetailPage.test.tsx`, unrelated to Brain View).
 - Files: `BrainViewPage.tsx`, `brain-outline.svg` (NEW), `brain.glb` (DELETE), `package.json`, `package-lock.json`, both `BrainViewPage*.test.tsx`, `PROGRESS.md`, `DECISIONS.md`, `KNOWN_ISSUES.md`, `HANDOFF.md`.
+
+
+---
+
+## § 22an — Canvas feature behind feature flag (Round 28, 2026-05-29)
+
+**Decision:** Hide the Phase 7 Visual-Thinking Canvas feature behind a
+`VITE_FEATURE_CANVAS` env var that defaults to `false`. The implementation
+stays in the repo — UI surfaces are gated, not deleted.
+
+### Why a flag (not removal)
+- **User opted out, not ruled out**: The user said "I don't see myself
+  using the canvas feature. That can be removed. let the implementation
+  be there, let's hide it behind a feature flag though." That's a clear
+  request for a reversible hide, not a delete.
+- **Phase 7 was non-trivial**: 4 frontend pages/components, a Zustand
+  store, an undo/redo hook, a canvas API client, a backend module
+  (`backend/app/api/canvases.py`), 3 SQLAlchemy models, alembic migration
+  `012_canvas_tables`, and ~6 dedicated test files. Deleting all of that
+  is a destructive change that's hard to back out of.
+- **No bundle cost (in practice)**: `CanvasListPage` and
+  `CanvasEditorPage` are already lazy-loaded via `React.lazy()` from
+  `App.tsx`. With the routes unregistered, those chunks are never
+  fetched. `AddToCanvasModal` is statically imported into
+  `NoteDetailPage` but its impact on the Note Detail chunk is small (a
+  modal component without heavy deps).
+- **Trivial to revert if the user changes their mind**: flip the env var,
+  rebuild, redeploy. No code churn.
+
+### Mechanism
+- New module `frontend/src/featureFlags.ts` exports a function
+  `isCanvasEnabled(): boolean` that returns
+  `import.meta.env.VITE_FEATURE_CANVAS === 'true'`.
+- Function-not-constant pattern so `vi.stubEnv('VITE_FEATURE_CANVAS', …)`
+  in tests works without any reload trickery.
+- `vite-env.d.ts` declares the env var on `ImportMetaEnv`.
+
+### Frontend surfaces gated
+| Location | Gate |
+|---|---|
+| `BottomNav` — "Canvas" tab | filtered out of the `ALL_TABS` array |
+| `App.tsx` — `/canvases` + `/canvas/:id` routes | `{isCanvasEnabled() && ( … )}` |
+| `BrainViewPage` — "Open as Canvas" button + export-status banner | `{isCanvasEnabled() && ( … )}` |
+| `NoteDetailPage` — "Add to Canvas" button + modal + toast | `{isCanvasEnabled() && ( … )}` |
+
+### Backend NOT gated
+`/api/canvases/*` keeps responding normally. No reason to break URL
+consumers (e.g., the future-self with a bookmark, or a manually crafted
+curl). The flag is a UX choice, not a security boundary.
+
+### Test impact
+- `BottomNav.test.tsx` — 2 existing assertions updated to the new
+  default-5-tabs behaviour; 3 new tests pin both flag states.
+- `BrainViewPage-canvas.test.tsx` + `NoteDetailPage-canvas.test.tsx` —
+  add `vi.stubEnv('VITE_FEATURE_CANVAS', 'true')` in `beforeEach` so the
+  gated UI renders for these tests; `afterAll` calls `vi.unstubAllEnvs()`
+  to keep test isolation clean.
+- All other Canvas test files unchanged — they instantiate modules
+  directly and don't depend on the gated UI surface.
+
+### How to re-enable
+Set `VITE_FEATURE_CANVAS=true` in `frontend/.env.production` and rebuild.

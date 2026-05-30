@@ -2,7 +2,7 @@
 
 > **Chronological log of what's been done.** New work appends to the end. Use this to verify "we already did X" before re-doing.
 
-**Last updated:** 2026-05-29 (Round 27 SHIPPED: Brain View 3D→2D rewrite)
+**Last updated:** 2026-05-29 (Round 28 SHIPPED: Canvas feature behind `VITE_FEATURE_CANVAS` flag, default off)
 
 ---
 
@@ -1455,3 +1455,89 @@ mobile orbit controls fought normal scroll/tap.
   (notes = nodes)
 
 See DECISIONS.md § 22am for full rationale.
+
+---
+
+## Round 28 — Canvas feature behind feature flag (2026-05-29) — SHIPPED
+
+User opted out of the Heptabase-style visual-thinking Canvas feature
+(Phase 7, Round 24). Rather than rip out ~6 components + 2 routes + a
+backend module + 5 migrations, the entire feature is now gated behind
+a single `VITE_FEATURE_CANVAS` env var that defaults to `false`. All
+implementation stays in the repo — flip the flag on by setting
+`VITE_FEATURE_CANVAS=true` in `frontend/.env.production` and rebuilding.
+
+### What changed (frontend only)
+- **NEW** `frontend/src/featureFlags.ts` — `isCanvasEnabled()` reads
+  `import.meta.env.VITE_FEATURE_CANVAS === 'true'`. Function (not constant)
+  so `vi.stubEnv` works in tests without module-reload tricks.
+- **`vite-env.d.ts`** — added `VITE_FEATURE_CANVAS?: string` to
+  `ImportMetaEnv`.
+- **`components/BottomNav.tsx`** — `ALL_TABS` now tagged with `flag:
+  'always' | 'canvas'`; `visibleTabs()` filters Canvas out when the flag is
+  off. Default nav drops from 6 → 5 tabs (Capture, Library, Ask, Insights,
+  Create).
+- **`App.tsx`** — both `<Route path="/canvases">` and `<Route
+  path="/canvas/:id">` wrapped in `{isCanvasEnabled() && ( … )}`. With the
+  flag off these paths fall through to the `*` wildcard which redirects to
+  `/`. `CanvasListPage`/`CanvasEditorPage` imports stay (lazy chunks, no
+  cost when the routes aren't registered).
+- **`pages/BrainViewPage.tsx`** — `{isCanvasEnabled() && ( … )}` around
+  the "Open as Canvas" toolbar button AND the `brain-view-export-status`
+  banner. `handleOpenAsCanvas` + the `addCanvasItem`/`createCanvas`
+  imports stay (dead in default config; restored when flag flips).
+- **`pages/NoteDetailPage.tsx`** — `{isCanvasEnabled() && ( … )}` around
+  the "Add to Canvas" toolbar button, the `AddToCanvasModal` render, and
+  the `canvas-toast` block. State (`addToCanvasOpen`, `canvasToast`) and
+  the `AddToCanvasModal` import stay.
+
+### Backend
+Backend `/api/canvases/*` routes are **unaffected**. They keep working for
+anyone hitting the URLs directly; only the frontend UI surface is hidden.
+
+### Tests
+- `__tests__/BottomNav.test.tsx` — old "renders exactly six nav tab links"
+  and "each tab has an icon (>= 6)" assertions updated to the new
+  default-5 behaviour. New `Round 28 — Canvas feature flag` describe block
+  exercises both flag states (3 new tests: flag on → 6 tabs + Canvas link
+  present; flag unset or `'false'` → 5 tabs + no Canvas link).
+- `__tests__/BrainViewPage-canvas.test.tsx` — added
+  `vi.stubEnv('VITE_FEATURE_CANVAS', 'true')` in `beforeEach` so the
+  gated "Open as Canvas" button renders for these tests.
+- `__tests__/NoteDetailPage-canvas.test.tsx` — same stub.
+- All other Canvas-adjacent tests untouched — they exercise modules
+  directly (`AddToCanvasModal`, `api/canvas`, `canvas-keyboard`,
+  `canvasStore`, `CanvasEditorPage`, `CanvasListPage`) and never go
+  through the gated UI surface.
+
+### Validation
+- `npx tsc --noEmit` clean
+- BottomNav: 27/27 pass (was 23 → +4 new flag tests)
+- Brain View targeted: 24 + 2 + 6 + canvas/note tests all pass
+- Full suite: **836 pass / 1 skipped / 8 pre-existing failures** (same 8
+  as Round 27 baseline — 7 api-ai `ReadableStream` + 1 NoteDetailPage
+  Aliases — confirmed via grep of failure list)
+
+### Files changed
+- `frontend/src/featureFlags.ts` (NEW)
+- `frontend/src/vite-env.d.ts`
+- `frontend/src/components/BottomNav.tsx`
+- `frontend/src/App.tsx`
+- `frontend/src/pages/BrainViewPage.tsx`
+- `frontend/src/pages/NoteDetailPage.tsx`
+- `frontend/src/__tests__/BottomNav.test.tsx`
+- `frontend/src/__tests__/BrainViewPage-canvas.test.tsx`
+- `frontend/src/__tests__/NoteDetailPage-canvas.test.tsx`
+- `PROGRESS.md`, `DECISIONS.md` (new § 22an), `KNOWN_ISSUES.md`, `HANDOFF.md`
+
+### How to re-enable
+Add to `frontend/.env.production` (or a local `.env`):
+
+```
+VITE_FEATURE_CANVAS=true
+```
+
+Rebuild + redeploy. The Canvas tab, routes, "Add to Canvas" / "Open as
+Canvas" entry points all reappear instantly.
+
+See DECISIONS.md § 22an for rationale.

@@ -5,6 +5,7 @@ import ForceGraph2D from 'react-force-graph-2d';
 import { apiGet } from '../api/client';
 import { addCanvasItem, createCanvas } from '../api/canvas';
 import brainOutlineUrl from '../assets/brain-outline.svg';
+import { isCanvasEnabled } from '../featureFlags';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -401,23 +402,25 @@ export default function BrainViewPage(): React.ReactElement {
             Clear filters
           </button>
         )}
-        <button
-          type="button"
-          onClick={() => void handleOpenAsCanvas()}
-          disabled={isExporting || filteredGraph.nodes.length === 0}
-          data-testid="brain-view-open-as-canvas"
-          className="ml-auto flex items-center gap-1.5 rounded-md border border-indigo-600 bg-indigo-600 px-2.5 py-1 text-xs font-medium text-white hover:bg-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-400 disabled:cursor-not-allowed disabled:opacity-50"
-        >
-          {isExporting ? (
-            <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden="true" />
-          ) : (
-            <Layout className="h-3.5 w-3.5" aria-hidden="true" />
-          )}
-          Open as Canvas
-        </button>
+        {isCanvasEnabled() && (
+          <button
+            type="button"
+            onClick={() => void handleOpenAsCanvas()}
+            disabled={isExporting || filteredGraph.nodes.length === 0}
+            data-testid="brain-view-open-as-canvas"
+            className="ml-auto flex items-center gap-1.5 rounded-md border border-indigo-600 bg-indigo-600 px-2.5 py-1 text-xs font-medium text-white hover:bg-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-400 disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            {isExporting ? (
+              <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden="true" />
+            ) : (
+              <Layout className="h-3.5 w-3.5" aria-hidden="true" />
+            )}
+            Open as Canvas
+          </button>
+        )}
       </div>
 
-      {(exportError || exportWarning) && (
+      {isCanvasEnabled() && (exportError || exportWarning) && (
         <div
           data-testid="brain-view-export-status"
           className={`border-b px-4 py-1 text-xs ${

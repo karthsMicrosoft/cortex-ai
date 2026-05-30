@@ -2,7 +2,7 @@
 
 > **Open work, bugs not fixed, gaps from "fully done."** Anything tagged P0/P1/P2 here is meant to be picked up by the next agent.
 
-**Last updated:** 2026-05-29 (Round 27 SHIPPED: Brain View 3D→2D rewrite)
+**Last updated:** 2026-05-29 (Round 28 SHIPPED: Canvas feature hidden behind `VITE_FEATURE_CANVAS` flag)
 
 ---
 
@@ -17,7 +17,13 @@ graph with an SVG brain outline background. `react-force-graph-3d`, `three`,
 
 ---
 
-## Phase 7 — Visual Thinking Canvas (Round 24) — known limitations
+## ✅ Phase 7 — Visual Thinking Canvas (Round 24) — feature gated as of Round 28
+
+The Phase 7 Canvas feature is now hidden behind `VITE_FEATURE_CANVAS`
+(default off) as of Round 28 (2026-05-29) — user opted out. The
+implementation remains in the repo; the limitations below are deferred
+indefinitely (they only matter if the flag flips back on). See
+`DECISIONS.md` § 22an.
 
 These are intentional V1 scoping decisions, not bugs. Tracked as P3 follow-ups for a future iteration.
 

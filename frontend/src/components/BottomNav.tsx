@@ -1,18 +1,24 @@
 import { NavLink } from 'react-router-dom';
 import { Mic, BookOpen, BarChart2, PenSquare, MessageCircle, Layout } from 'lucide-react';
+import { isCanvasEnabled } from '../featureFlags';
 
 // ---------------------------------------------------------------------------
 // Tab config
 // ---------------------------------------------------------------------------
 
-const TABS = [
-  { to: '/',          label: 'Capture',  Icon: Mic           },
-  { to: '/library',   label: 'Library',  Icon: BookOpen      },
-  { to: '/canvases',  label: 'Canvas',   Icon: Layout        },
-  { to: '/ask',       label: 'Ask',      Icon: MessageCircle },
-  { to: '/insights',  label: 'Insights', Icon: BarChart2     },
-  { to: '/create',    label: 'Create',   Icon: PenSquare     },
+const ALL_TABS = [
+  { to: '/',          label: 'Capture',  Icon: Mic,           flag: 'always' as const },
+  { to: '/library',   label: 'Library',  Icon: BookOpen,      flag: 'always' as const },
+  { to: '/canvases',  label: 'Canvas',   Icon: Layout,        flag: 'canvas' as const },
+  { to: '/ask',       label: 'Ask',      Icon: MessageCircle, flag: 'always' as const },
+  { to: '/insights',  label: 'Insights', Icon: BarChart2,     flag: 'always' as const },
+  { to: '/create',    label: 'Create',   Icon: PenSquare,     flag: 'always' as const },
 ] as const;
+
+function visibleTabs() {
+  const canvasOn = isCanvasEnabled();
+  return ALL_TABS.filter((t) => t.flag === 'always' || (t.flag === 'canvas' && canvasOn));
+}
 
 // ---------------------------------------------------------------------------
 // Component
@@ -30,7 +36,7 @@ export function BottomNav(): React.ReactElement {
       aria-label="Main navigation"
       className="fixed bottom-0 left-0 right-0 z-40 w-full flex h-16 items-stretch border-t border-slate-700 bg-slate-900/95 backdrop-blur-sm"
     >
-      {TABS.map(({ to, label, Icon }) => (
+      {visibleTabs().map(({ to, label, Icon }) => (
         <NavLink
           key={to}
           to={to}

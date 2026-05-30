@@ -18,6 +18,7 @@ import { ShadowReaderPrompt } from '../components/ShadowReaderPrompt';
 import { WikiContent } from '../components/WikiContent';
 import { AddToCanvasModal } from '../components/AddToCanvasModal';
 import { CATEGORY_COLORS, formatDateTime } from '../utils/formatters';
+import { isCanvasEnabled } from '../featureFlags';
 
 // ---------------------------------------------------------------------------
 // Music metadata label editor
@@ -915,8 +916,8 @@ export default function NoteDetailPage(): React.ReactElement {
           </span>
           <ProcessingBadge status={processingStatus as LocalNote['processingStatus']} />
         </div>
-        {/* Add to Canvas (PR C) */}
-        {(serverNote?.id ?? localNote?.serverId) && (
+        {/* Add to Canvas (PR C) — gated by VITE_FEATURE_CANVAS (Round 28) */}
+        {isCanvasEnabled() && (serverNote?.id ?? localNote?.serverId) && (
           <button
             type="button"
             aria-label="Add to canvas"
@@ -1108,8 +1109,8 @@ export default function NoteDetailPage(): React.ReactElement {
         )}
       </main>
 
-      {/* Add to Canvas modal (PR C) */}
-      {(serverNote?.id ?? localNote?.serverId) && (
+      {/* Add to Canvas modal (PR C) — gated by VITE_FEATURE_CANVAS (Round 28) */}
+      {isCanvasEnabled() && (serverNote?.id ?? localNote?.serverId) && (
         <AddToCanvasModal
           noteId={(serverNote?.id ?? localNote?.serverId) as string}
           noteTitle={serverNote?.title ?? undefined}
@@ -1121,8 +1122,8 @@ export default function NoteDetailPage(): React.ReactElement {
         />
       )}
 
-      {/* Toast (PR C) */}
-      {canvasToast && (
+      {/* Toast (PR C) — gated by VITE_FEATURE_CANVAS (Round 28) */}
+      {isCanvasEnabled() && canvasToast && (
         <div
           data-testid="canvas-toast"
           className="fixed inset-x-0 top-4 z-[60] mx-auto w-fit rounded-lg border border-emerald-700 bg-emerald-900/90 px-4 py-2 text-sm text-emerald-100 shadow-lg"

@@ -1,7 +1,7 @@
 /**
  * NoteDetailPage-canvas.test.tsx — PR C: "Add to Canvas" button on note detail.
  */
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterAll } from 'vitest';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import React from 'react';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
@@ -87,6 +87,9 @@ const SERVER_NOTE = {
 };
 
 beforeEach(() => {
+  // Round 28: Canvas feature is hidden behind a flag (default off). These
+  // tests exercise the gated UI, so opt in for the duration of the suite.
+  vi.stubEnv('VITE_FEATURE_CANVAS', 'true');
   vi.clearAllMocks();
   mockDbGet.mockResolvedValue(undefined);
   mockDbWhere.mockReturnValue({
@@ -95,6 +98,10 @@ beforeEach(() => {
   mockGetNote.mockResolvedValue(SERVER_NOTE);
   mockGetNoteLinks.mockResolvedValue({ outgoing: [], incoming: [] });
   mockSearchSimilar.mockResolvedValue([]);
+});
+
+afterAll(() => {
+  vi.unstubAllEnvs();
 });
 
 function renderPage() {

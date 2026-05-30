@@ -9,7 +9,7 @@
  *   - Visible on every page (rendered inside protected layout)
  */
 
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterAll } from 'vitest';
 import { render, screen } from '@testing-library/react';
 import React from 'react';
 import { MemoryRouter, Routes, Route } from 'react-router-dom';
@@ -57,12 +57,17 @@ describe('BottomNav (Task 5 / 3.1)', () => {
     expect(nav.className).toMatch(/fixed|bottom/i);
   });
 
-  // --- Four tabs ---
+  // --- Five visible tabs (default; Canvas hidden behind VITE_FEATURE_CANVAS, Round 28) ---
 
-  it('renders exactly six nav tab links', () => {
+  it('renders exactly five nav tab links by default (Canvas hidden)', () => {
     renderBottomNav();
     const links = screen.getAllByRole('link');
-    expect(links.length).toBe(6);
+    expect(links.length).toBe(5);
+  });
+
+  it('does NOT render a Canvas tab by default', () => {
+    renderBottomNav();
+    expect(screen.queryByRole('link', { name: /^canvas$/i })).toBeNull();
   });
 
   it('has a Capture tab', () => {
@@ -178,7 +183,7 @@ describe('BottomNav (Task 5 / 3.1)', () => {
     const nav = screen.getByRole('navigation');
     // Lucide icons render as SVG elements
     const icons = nav.querySelectorAll('svg');
-    expect(icons.length).toBeGreaterThanOrEqual(6);
+    expect(icons.length).toBeGreaterThanOrEqual(5);
   });
 
   // --- Accessibility ---
@@ -205,5 +210,36 @@ describe('BottomNav (Task 5 / 3.1)', () => {
     renderBottomNav();
     const nav = screen.getByRole('navigation');
     expect(nav.className).toMatch(/bottom-0/);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Round 28 — Canvas feature flag (VITE_FEATURE_CANVAS)
+// ---------------------------------------------------------------------------
+
+describe('BottomNav — Canvas feature flag (Round 28)', () => {
+  afterAll(() => {
+    vi.unstubAllEnvs();
+  });
+
+  it('renders the Canvas tab when VITE_FEATURE_CANVAS=true', () => {
+    vi.stubEnv('VITE_FEATURE_CANVAS', 'true');
+    renderBottomNav();
+    expect(screen.getByRole('link', { name: /^canvas$/i })).toBeInTheDocument();
+    expect(screen.getAllByRole('link').length).toBe(6);
+  });
+
+  it('hides the Canvas tab when VITE_FEATURE_CANVAS is unset', () => {
+    vi.stubEnv('VITE_FEATURE_CANVAS', '');
+    renderBottomNav();
+    expect(screen.queryByRole('link', { name: /^canvas$/i })).toBeNull();
+    expect(screen.getAllByRole('link').length).toBe(5);
+  });
+
+  it('hides the Canvas tab when VITE_FEATURE_CANVAS=false', () => {
+    vi.stubEnv('VITE_FEATURE_CANVAS', 'false');
+    renderBottomNav();
+    expect(screen.queryByRole('link', { name: /^canvas$/i })).toBeNull();
+    expect(screen.getAllByRole('link').length).toBe(5);
   });
 });

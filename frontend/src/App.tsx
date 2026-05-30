@@ -45,6 +45,7 @@ import { AppHeader } from './components/AppHeader';
 import { SessionGate } from './components/SessionGate';
 import { RouteLoading } from './components/RouteLoading';
 import { ErrorBoundary } from './components/ErrorBoundary';
+import { isCanvasEnabled } from './featureFlags';
 
 // ---------------------------------------------------------------------------
 // Protected layout — AuthGate + AppHeader + BottomNav
@@ -196,22 +197,26 @@ export default function App(): React.ReactElement {
             </AuthGate>
           }
         />
-        <Route
-          path="/canvases"
-          element={
-            <AuthGate>
-              <CanvasListPage />
-            </AuthGate>
-          }
-        />
-        <Route
-          path="/canvas/:id"
-          element={
-            <AuthGate>
-              <CanvasEditorPage />
-            </AuthGate>
-          }
-        />
+        {isCanvasEnabled() && (
+          <Route
+            path="/canvases"
+            element={
+              <AuthGate>
+                <CanvasListPage />
+              </AuthGate>
+            }
+          />
+        )}
+        {isCanvasEnabled() && (
+          <Route
+            path="/canvas/:id"
+            element={
+              <AuthGate>
+                <CanvasEditorPage />
+              </AuthGate>
+            }
+          />
+        )}
 
         {/* Wildcard: redirect unknown paths */}
         <Route

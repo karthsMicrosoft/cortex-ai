@@ -1,7 +1,7 @@
 /**
  * BrainViewPage-canvas.test.tsx — PR C tests for "Open as Canvas" button.
  */
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterAll } from 'vitest';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import React from 'react';
 import { MemoryRouter } from 'react-router-dom';
@@ -80,8 +80,15 @@ function setupFetch(data = MOCK_GRAPH) {
 import BrainViewPage from '../pages/BrainViewPage';
 
 beforeEach(() => {
+  // Round 28: Canvas feature is hidden behind a flag (default off). These
+  // tests exercise the "Open as Canvas" button, so opt in for the suite.
+  vi.stubEnv('VITE_FEATURE_CANVAS', 'true');
   vi.clearAllMocks();
   setupFetch();
+});
+
+afterAll(() => {
+  vi.unstubAllEnvs();
 });
 
 describe('BrainViewPage — Open as Canvas (PR C)', () => {

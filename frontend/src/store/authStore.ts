@@ -1,5 +1,6 @@
 import { create } from 'zustand';
 import { logout as logoutApi } from '../api/auth';
+import { clearLocalUserData } from '../services/localUserData';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -60,6 +61,11 @@ export const useAuthStore = create<AuthState>()((set) => ({
     } catch {
       // Best-effort — even if backend revoke fails we still clear local state
       // (e.g. user is offline, token already expired, etc.)
+    }
+    try {
+      await clearLocalUserData();
+    } catch {
+      // Best-effort — local data cleanup must never block sign-out.
     }
     set({ accessToken: null, user: null, isRestoring: false });
   },

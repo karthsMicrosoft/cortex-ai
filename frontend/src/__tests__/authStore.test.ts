@@ -7,7 +7,21 @@
  *   - Token stored in MEMORY only (not localStorage / sessionStorage)
  */
 
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, vi } from 'vitest';
+
+const authStoreMocks = vi.hoisted(() => ({
+  clearLocalUserData: vi.fn().mockResolvedValue(undefined),
+  logoutApi: vi.fn().mockResolvedValue(undefined),
+}));
+
+vi.mock('../services/localUserData', () => ({
+  clearLocalUserData: authStoreMocks.clearLocalUserData,
+}));
+
+vi.mock('../api/auth', () => ({
+  logout: authStoreMocks.logoutApi,
+}));
+
 import { useAuthStore } from '../store/authStore';
 
 // Helper: reset store between tests by calling logout
@@ -109,5 +123,53 @@ describe('User type shape', () => {
     expect(user.email).toBe('x@y.com');
     // display_name is optional in some flows but type should allow string
     expect(user.display_name).toBe('X');
+  });
+});
+
+describe('authStore — signOut wipes local user data (Round 29)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    authStoreMocks.logoutApi.mockResolvedValue(undefined);
+    authStoreMocks.clearLocalUserData.mockResolvedValue(undefined);
+    resetStore();
+  });
+
+  it('signOut calls clearLocalUserData', async () => {
+    const user = { id: 'u-round-29', email: 'round29@example.com', display_name: 'Round 29' };
+    useAuthStore.getState().login('round-29-token', user);
+
+    await useAuthStore.getState().signOut();
+
+    expect(authStoreMocks.logoutApi).toHaveBeenCalledTimes(1);
+    expect(authStoreMocks.clearLocalUserData).toHaveBeenCalledTimes(1);
+    expect(useAuthStore.getState().accessToken).toBeNull();
+    expect(useAuthStore.getState().user).toBeNull();
+  });
+
+  it('signOut clears accessToken and user even if clearLocalUserData rejects', async () => {
+    const user = { id: 'u-dexie-error', email: 'dexie@example.com', display_name: 'Dexie Error' };
+    authStoreMocks.clearLocalUserData.mockRejectedValueOnce(new Error('Dexie clear failed'));
+    useAuthStore.getState().login('token-before-dexie-error', user);
+
+    await useAuthStore.getState().signOut();
+
+    expect(authStoreMocks.clearLocalUserData).toHaveBeenCalledTimes(1);
+    expect(useAuthStore.getState().accessToken).toBeNull();
+    expect(useAuthStore.getState().user).toBeNull();
+    expect(useAuthStore.getState().isRestoring).toBe(false);
+  });
+
+  it('signOut still clears state when the backend logout API throws', async () => {
+    const user = { id: 'u-logout-error', email: 'logout@example.com', display_name: 'Logout Error' };
+    authStoreMocks.logoutApi.mockRejectedValueOnce(new Error('Backend logout failed'));
+    useAuthStore.getState().login('token-before-logout-error', user);
+
+    await useAuthStore.getState().signOut();
+
+    expect(authStoreMocks.logoutApi).toHaveBeenCalledTimes(1);
+    expect(authStoreMocks.clearLocalUserData).toHaveBeenCalledTimes(1);
+    expect(useAuthStore.getState().accessToken).toBeNull();
+    expect(useAuthStore.getState().user).toBeNull();
+    expect(useAuthStore.getState().isRestoring).toBe(false);
   });
 });

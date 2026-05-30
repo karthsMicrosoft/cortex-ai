@@ -2,7 +2,24 @@
 
 > **Open work, bugs not fixed, gaps from "fully done."** Anything tagged P0/P1/P2 here is meant to be picked up by the next agent.
 
-**Last updated:** 2026-05-29 (Round 28 SHIPPED: Canvas feature hidden behind `VITE_FEATURE_CANVAS` flag)
+**Last updated:** 2026-05-30 (Round 29 SHIPPED: per-user local data isolation — cross-user library leak fixed)
+
+---
+
+## ✅ Round 29 closed (2026-05-30) — Cross-user library leak fixed
+
+User-reported bug: signing out of account A and signing in as account B on
+the same browser left A's notes visible in Library. Root cause was that
+Dexie (`cortex-db`) was a browser singleton, not user-scoped, and `signOut`
+never touched it. Fix: new `frontend/src/services/localUserData.ts` exports
+`clearLocalUserData()` which wipes the five Dexie tables, removes the
+`cortex_last_user_id` localStorage pointer, and deletes the Workbox
+`api-cache` + `blob-cache` runtime caches. `authStore.signOut` awaits this
+helper between backend revoke and in-memory clear (primary defense), and
+`SessionGate` wipes again on login whenever the new `user.id` differs from
+the cached one (defense-in-depth — covers tab-closed-without-sign-out then
+different account opens the browser). See `PROGRESS.md` Round 29 +
+`DECISIONS.md` § 22ao.
 
 ---
 

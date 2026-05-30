@@ -2,7 +2,7 @@
 
 > **Architecture decisions and deviations from spec, with rationale.** When refactoring, preserve these unless the underlying constraint has changed.
 
-**Last updated:** 2026-05-29 (Round 28 SHIPPED: Canvas feature behind `VITE_FEATURE_CANVAS` flag — see § 22an)
+**Last updated:** 2026-05-30 (Round 29 SHIPPED: per-user local data isolation — see § 22ao)
 
 ---
 
@@ -1098,3 +1098,115 @@ curl). The flag is a UX choice, not a security boundary.
 
 ### How to re-enable
 Set `VITE_FEATURE_CANVAS=true` in `frontend/.env.production` and rebuild.
+
+---
+
+## § 22ao — Per-user local data isolation (Round 29, 2026-05-30)
+
+**Decision:** Wipe browser-local user-scoped data on sign-out, and again
+on login if the incoming user differs from the cached "last user". The
+single Dexie database `cortex-db` stays — clearing on transition is
+simpler than splitting into per-user databases.
+
+### Why this matters
+Before Round 29, signing out of account A and signing in (or registering)
+as account B on the same browser left A's notes in IndexedDB. `useNotes`
+(`useLiveQuery` over Dexie) showed them in Library; the next pull
+merged B's server notes on top without ever removing A's. This is a real
+privacy issue for any shared device.
+
+### What gets wiped
+`clearLocalUserData()` in `frontend/src/services/localUserData.ts`:
+- **Dexie tables**: `notes`, `syncQueue`, `deadLetter`, `meta`,
+  `shared_inbox`. All five tables hold user-scoped data; clearing them
+  brings IndexedDB back to a freshly-installed state.
+- **localStorage**: the `cortex_last_user_id` pointer (the refresh
+  token lives under `cortex_refresh` and is removed separately by
+  `auth.logout()` so the order doesn't matter).
+- **CacheStorage** (Workbox runtimeCaching): `api-cache` (24h
+  NetworkFirst over `/api/*`) and `blob-cache` (7d CacheFirst over
+  Azure Blob URLs). Without this, a slow network on user B's first page
+  load could serve A's responses from cache. The Workbox precache
+  (app shell JS/CSS) is intentionally NOT cleared — it's user-agnostic
+  static assets.
+
+Each surface is in its own try/catch so a missing CacheStorage API or a
+Dexie schema migration in flight can't block the others.
+
+### Two-layer activation
+
+**Layer 1 — sign-out** (`authStore.signOut`):
+`
+try { await logoutApi(); }        // backend revoke
+try { await clearLocalUserData(); }
+set({ accessToken: null, user: null, isRestoring: false });
+`
+The wipe happens BEFORE clearing in-memory user so `syncManager.stop()`
+(inside `clearLocalUserData`) sees a still-authenticated state and
+doesn't try to push leftover dirty rows on its way out.
+
+**Layer 2 — login** (`SessionGate` user-change effect):
+`
+if (cached && cached !== user.id) await clearLocalUserData();
+setCachedUserId(user.id);
+syncManager.start();
+drainShareInbox();
+`
+Subscribes to `user` so the effect fires on both the fresh-login path
+(`LoginPage` calls `useAuthStore.login`) and the session-restore path
+(`SessionGate` Step 1 `refresh → me → login`). The wipe runs BEFORE
+`syncManager.start` so the new user doesn't see stale rows even
+momentarily.
+
+### Why not per-user IndexedDB databases
+`new Dexie('cortex-db-' + userId)` would isolate users without ever
+wiping, BUT:
+- Multi-DB cleanup story is non-trivial. A user who tries five accounts
+  on the same browser accumulates five Dexie instances + five sets of
+  Workbox cache entries unless we GC them somewhere.
+- IndexedDB doesn't expose a reliable "list all databases" API across
+  every browser we support, so we'd lean on a localStorage manifest —
+  which has the same single-point-of-truth concerns this design has.
+- The MVP user count per browser is tiny (1–2). Wiping on transition
+  is cheap (a handful of `clear()` calls) and the cognitive model
+  ("local state == current user's state") matches user expectations.
+- Per-user databases would also need a Dexie schema-migration story
+  per database, doubling the surface area for the v3 → v4 migration
+  we'll inevitably need.
+
+### Why not just clear Dexie on sign-out
+Layer 1 alone covers the common path (user explicitly signs out, then
+someone else signs in). But it misses:
+- **Browser closed mid-session, then someone else opens the tab and the
+  refresh cookie + localStorage token are still valid → SessionGate
+  restores user A's session.** If the new occupant logs in as user B
+  without going through `signOut` first, Layer 1 never fires. Layer 2
+  catches this via the cached-id comparison.
+- **Multiple accounts on the same device family** (Family Sharing etc.)
+  where `signOut` may be forgotten.
+
+### What is NOT changed
+- Backend authorization — `/api/*` always scoped notes by user; the
+  leak was purely a browser-side cache artifact.
+- Dexie schema — still at v3. The migration story doesn't change.
+- The refresh token storage location — still `cortex_refresh` in
+  localStorage, still cleared by `auth.logout()`. The new
+  `cortex_last_user_id` is a separate, additive key.
+- `shared_inbox` semantics — the PWA share-target stash is treated as
+  user-scoped (it gets wiped on transition). Rationale: a payload
+  shared by user A while logged out is intended to land in user A's
+  notes. If user B opens the browser and drains the inbox, B would
+  absorb A's shared payload — also a privacy leak. Wiping
+  `shared_inbox` on transition is the conservative choice.
+
+### How to verify
+1. Sign in as A, capture a note.
+2. Sign out via the AppHeader sign-out button (or kill the tab and let
+   a different user open the browser).
+3. Sign in as B (or register a new account).
+4. Open `/library`.
+5. Expect: empty Library (until B captures or pulls their own data).
+
+Backed by `__tests__/localUserData.test.ts` (10 unit tests),
+`__tests__/authStore.test.ts` (signOut wipe tests), and
+`__tests__/SessionGate-user-change.test.tsx` (four scenarios).

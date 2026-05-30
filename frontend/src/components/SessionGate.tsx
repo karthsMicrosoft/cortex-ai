@@ -3,6 +3,7 @@ import { useAuthStore } from '../store/authStore';
 import { refresh, me } from '../api/auth';
 import { syncManager } from '../sync/syncManager';
 import { drain as drainShareInbox } from '../services/shareInbox';
+import { clearLocalUserData, getCachedUserId, setCachedUserId } from '../services/localUserData';
 
 /**
  * SessionGate — runs ONCE at app boot.
@@ -28,6 +29,7 @@ import { drain as drainShareInbox } from '../services/shareInbox';
 export function SessionGate({ children }: { children: ReactNode }): React.ReactElement {
   const accessToken = useAuthStore((s) => s.accessToken);
   const isRestoring = useAuthStore((s) => s.isRestoring);
+  const user = useAuthStore((s) => s.user);
 
   // Step 1 — attempt session restore on first mount
   useEffect(() => {
@@ -59,13 +61,38 @@ export function SessionGate({ children }: { children: ReactNode }): React.ReactE
   // Phase 5 / PR 5.1 also drains any share-target payloads that were stashed
   // while the user was logged out.
   useEffect(() => {
-    if (accessToken) {
-      void syncManager.start();
-      void drainShareInbox();
-    } else {
+    if (!accessToken || !user) {
       syncManager.stop();
+      return;
     }
-  }, [accessToken]);
+
+    let cancelled = false;
+    (async () => {
+      try {
+        // Round 29 defense-in-depth: if the cached id from a previous
+        // session differs from the user we just authenticated as, wipe
+        // leftover local data before the sync engine pulls.
+        const cached = getCachedUserId();
+        if (cached && cached !== user.id) {
+          await clearLocalUserData();
+        }
+        if (cancelled) return;
+        setCachedUserId(user.id);
+        if (cancelled) return;
+        void syncManager.start();
+        void drainShareInbox();
+      } catch {
+        if (!cancelled) {
+          void syncManager.start();
+          void drainShareInbox();
+        }
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [accessToken, user?.id]);
 
   // While we're still trying refresh on first load, show a splash so AuthGate
   // doesn't yank an authenticated user to /login during the round trip.

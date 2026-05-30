@@ -2,8 +2,8 @@
 
 > **Read this first.** This document briefs an incoming agent (Claude / Copilot / Aider / human) on the state of the project so work can resume without context loss.
 
-**Last updated:** 2026-05-29 (Round 28 SHIPPED: Canvas feature behind `VITE_FEATURE_CANVAS` flag, default off — implementation kept in repo, UI hidden per user preference)
-**Status:** Live on Azure. Phases 1–7 shipped. Brain View now 2D (Round 27) — see DECISIONS.md § 22am. Canvas feature gated behind `VITE_FEATURE_CANVAS` env var (Round 28) — see DECISIONS.md § 22an. Library has instant text search. Safari mobile bfcache blank screen fixed. Backend: ~940 tests passing. Frontend: ~836 tests, TypeScript clean.
+**Last updated:** 2026-05-30 (Round 29 SHIPPED: per-user local data isolation — cross-user library leak fixed)
+**Status:** Live on Azure. Phases 1–7 shipped. Brain View now 2D (Round 27) — see DECISIONS.md § 22am. Canvas feature gated behind `VITE_FEATURE_CANVAS` env var (Round 28) — see DECISIONS.md § 22an. Per-user local data isolation enforced on signOut + login (Round 29) — see DECISIONS.md § 22ao. Library has instant text search. Safari mobile bfcache blank screen fixed. Backend: ~940 tests passing. Frontend: ~853 tests, TypeScript clean.
 
 ---
 
@@ -77,7 +77,8 @@ az containerapp secret list --name cortexks-api --resource-group cortex-rg --sho
 
 | Priority | Task | Where to start |
 |---|---|---|
-| **P0 — NEXT** | _(none currently — Rounds 27 + 28 closed)_ | — |
+| **P0 — NEXT** | _(none currently — Rounds 27 + 28 + 29 closed)_ | — |
+| ✅ Round 29 | ~~Cross-user library leak~~ ✅ Round 29 (2026-05-30) — sign out of A, sign in as B left A's notes visible. New `clearLocalUserData()` wipes Dexie + Workbox caches on signOut (primary defense) and on user-change detection in SessionGate (defense-in-depth). 17 new tests | `PROGRESS.md` Round 29, `DECISIONS.md` § 22ao |
 | ✅ Round 28 | ~~Hide Canvas feature~~ ✅ Round 28 (2026-05-29) — `VITE_FEATURE_CANVAS` env var (default off) gates Canvas tab + routes + "Open as Canvas" + "Add to Canvas". Implementation kept; flip env to re-enable | `PROGRESS.md` Round 28, `DECISIONS.md` § 22an |
 | ✅ Round 27 | ~~Brain View 3D → 2D rewrite~~ ✅ Round 27 (2026-05-29) — replaced react-force-graph-3d + Three.js + GLB brain mesh with react-force-graph-2d + SVG brain outline. Three.js deps removed, `brain.glb` deleted, 24+2 Brain View tests + TypeScript clean | `PROGRESS.md` Round 27, `DECISIONS.md` § 22am |
 | **P0** | ~~End-to-end smoke test in a real browser~~ ✅ Round 9 (2026-05-06) | Confirmed: auth/refresh, capture (text + AI pipeline), library, insights (patterns only), sync. See PROGRESS § Round 9. |

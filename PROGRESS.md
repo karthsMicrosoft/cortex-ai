@@ -2,7 +2,7 @@
 
 > **Chronological log of what's been done.** New work appends to the end. Use this to verify "we already did X" before re-doing.
 
-**Last updated:** 2026-05-29 (Round 28 SHIPPED: Canvas feature behind `VITE_FEATURE_CANVAS` flag, default off)
+**Last updated:** 2026-05-30 (Round 29 SHIPPED: per-user local data isolation — `clearLocalUserData()` on signOut + SessionGate user-change detection)
 
 ---
 
@@ -1541,3 +1541,100 @@ Rebuild + redeploy. The Canvas tab, routes, "Add to Canvas" / "Open as
 Canvas" entry points all reappear instantly.
 
 See DECISIONS.md § 22an for rationale.
+---
+
+## Round 29 — Per-user local data isolation (2026-05-30) — SHIPPED
+
+User-reported bug: signing out of account A and signing in to account B on
+the same browser left A's notes visible in Library. New account should
+start empty.
+
+### Root cause
+The Dexie database `cortex-db` is a browser singleton, not user-scoped.
+`signOut()` only cleared in-memory `accessToken` + `user` and removed
+the localStorage refresh token; it never touched the IndexedDB tables
+(`notes`, `syncQueue`, `deadLetter`, `meta`, `shared_inbox`).
+The Workbox runtime caches (`api-cache`, `blob-cache`) also persisted
+across sessions, so even a fresh sync could briefly serve user A's
+`/api/*` responses to user B from cache.
+
+### Fix
+Two-layer isolation:
+
+1. **Primary defense — `signOut()` wipes local data.** `authStore.signOut`
+   now does `backend revoke → await clearLocalUserData() → clear in-memory
+   auth state`. Order matters: clearing local data BEFORE clearing
+   in-memory user lets `syncManager.stop()` catch the still-authenticated
+   state and prevents an immediate re-push of leftover dirty rows.
+2. **Defense-in-depth — `SessionGate` user-change detection.** When
+   `user` becomes non-null, compare `user.id` against the cached
+   `cortex_last_user_id` in localStorage. If they differ, `await
+   clearLocalUserData()` BEFORE `syncManager.start()` so the new user
+   doesn't see stale rows even momentarily. Always write the new id to the
+   cache after the comparison. This covers the case where someone closes
+   the tab without signing out (Round-7 localStorage refresh token still
+   valid) and another account opens the browser.
+
+### Files changed
+- `frontend/src/services/localUserData.ts` (NEW) — `clearLocalUserData()`
+  (stops syncManager, clears five Dexie tables, removes the cached user-id
+  from localStorage, deletes Workbox `api-cache` + `blob-cache`),
+  `getCachedUserId / setCachedUserId / clearCachedUserId`. Each surface
+  in its own try/catch so partial failures (missing CacheStorage, schema
+  migration in flight) never block the others.
+- `frontend/src/__tests__/localUserData.test.ts` (NEW) — 10 unit tests
+  covering all Dexie tables cleared, localStorage pointer removed,
+  CacheStorage caches deleted, no-op-safe when CacheStorage missing,
+  empty-Dexie safe, sync-stop-before-clear order, partial cache-failure
+  resilience, localStorage key contract.
+- `frontend/src/store/authStore.ts` — `signOut` now `await`s
+  `clearLocalUserData()` between the backend revoke and the in-memory
+  state clear. Wrapped in try/catch so Dexie hiccups never block sign-out.
+- `frontend/src/components/SessionGate.tsx` — subscribes to `user` too;
+  the existing "start sync on auth" effect now first checks
+  `getCachedUserId()` vs `user.id` and wipes if different, then writes
+  the current id to the cache and starts the sync engine.
+- `frontend/src/__tests__/authStore.test.ts` — new describe block for
+  `signOut` wipes local user data (calls `clearLocalUserData`; still
+  clears in-memory state even if the wipe rejects; still clears in-memory
+  state even if the backend logout API throws).
+- `frontend/src/__tests__/SessionGate-user-change.test.tsx` (NEW) — four
+  scenarios: different user → wipe + reseed cache; same user → no wipe;
+  first-ever login → no wipe + set cache; unauthenticated → no wipe,
+  syncManager.stop fires.
+- `PROGRESS.md`, `DECISIONS.md` § 22ao, `KNOWN_ISSUES.md`,
+  `HANDOFF.md` (docs).
+
+### What is NOT changed
+- Backend `/api/*` routes are untouched. Authentication / authorization
+  always scoped notes by user — the leak was purely a browser-side cache
+  artifact.
+- Dexie schema is unchanged. The migration story stays at v3
+  (`shared_inbox`). No per-user database split — clearing on transition
+  is simpler and avoids a multi-DB cleanup story for users who switch back
+  and forth.
+- The PWA install / service worker registration is untouched —
+  `clearLocalUserData` only deletes the two runtimeCaching entries
+  (`api-cache`, `blob-cache`), not the precache that hosts the app
+  shell.
+
+### How to reproduce the original bug (regression check)
+1. Sign in as A, capture a note.
+2. Sign out via the AppHeader sign-out button.
+3. Sign in (or register) as a different user B.
+4. Open `/library`.
+5. **Before Round 29**: A's notes were visible.
+   **After Round 29**: Library is empty until B captures or pulls their own.
+
+### Validation
+- `npx tsc --noEmit` clean.
+- `localUserData.test.ts`: 10/10 pass.
+- `authStore.test.ts`: existing 11 + new signOut wipe tests pass.
+- `SessionGate-user-change.test.tsx`: all scenarios pass.
+- `regression-2026-05-01-fixes.test.ts`: SessionGate guard-rails (S1
+  imports syncManager, calls `syncManager.start`) still pass.
+- Full vitest: 8 pre-existing failures (`api-ai.test.ts`
+  `ReadableStream` + `NoteDetailPage.test.tsx` Aliases) — no
+  new regressions.
+
+See DECISIONS.md § 22ao for full rationale.

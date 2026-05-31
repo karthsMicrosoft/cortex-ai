@@ -66,9 +66,41 @@ resource storage 'Microsoft.Storage/storageAccounts@2023-05-01' = {
   sku: { name: 'Standard_LRS' }
 }
 
+// Round 31 (2026-05-31): blob CORS. iOS Safari refuses to play <audio>
+// from a SAS-signed Azure Blob URL when there are no CORS rules on the
+// storage account, because wavesurfer.js (and Safari's stricter cross-
+// origin policy for media) needs Access-Control-Allow-Origin on both
+// the fetch() for waveform peaks AND the <audio> element. See
+// DECISIONS.md § 22aq.
+resource storageBlobServices 'Microsoft.Storage/storageAccounts/blobServices@2023-05-01' = {
+  parent: storage
+  name: 'default'
+  properties: {
+    cors: {
+      corsRules: [
+        {
+          allowedOrigins: [
+            frontendOrigin
+            'http://localhost:5173'
+          ]
+          allowedMethods: [
+            'GET'
+            'HEAD'
+            'OPTIONS'
+          ]
+          allowedHeaders: [ '*' ]
+          exposedHeaders: [ '*' ]
+          maxAgeInSeconds: 3600
+        }
+      ]
+    }
+  }
+}
+
 resource storageBlob 'Microsoft.Storage/storageAccounts/blobServices/containers@2023-05-01' = {
   name: '${storage.name}/default/cortex-media'
   properties: { publicAccess: 'None' }
+  dependsOn: [ storageBlobServices ]
 }
 
 // ---------- Azure OpenAI (OQ-1: must be in westus, NOT westus2) ----------

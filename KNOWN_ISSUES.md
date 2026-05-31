@@ -2,27 +2,29 @@
 
 > **Open work, bugs not fixed, gaps from "fully done."** Anything tagged P0/P1/P2 here is meant to be picked up by the next agent.
 
-**Last updated:** 2026-05-30 (Round 30 SHIPPED: voice-note playback fix — CSP media-src + Azure Blob in connect-src)
+**Last updated:** 2026-05-31 (Round 31 SHIPPED: Azure Blob CORS rules — fixes iOS Safari voice playback)
 
 ---
 
-## ✅ Round 30 closed (2026-05-30) — Voice playback CSP regression fixed
+## ✅ Round 31 closed (2026-05-31) — iOS Safari audio playback CORS fix
 
-User-reported bug: after recording a voice note, playback on Note Detail
-failed with a browser CSP error. Upload + transcribe + note creation
-worked normally; only the `<audio>` element / WaveSurfer player broke.
+User-reported follow-up: after Round 30 fixed the CSP, voice-note
+playback worked on desktop Chrome/Edge but **still failed on iPhone
+Safari**. Root cause: the Azure Blob storage account `cortexksstorage`
+had no CORS rules configured. iOS Safari enforces CORS strictly for
+cross-origin audio: wavesurfer.js sets `crossOrigin="anonymous"` on its
+internal `<audio>` element and uses `fetch()` to download the audio
+bytes for waveform peak computation — both paths require
+`Access-Control-Allow-Origin` from the Blob endpoint, which the storage
+account never returned.
 
-Root cause: the Round 20 strict CSP in `frontend/public/staticwebapp.config.json`
-omitted a `media-src` directive (silently falling back to `default-src 'self'`
-→ blocked the Azure Blob SAS URL) AND omitted `https://*.blob.core.windows.net`
-from `connect-src` (so WaveSurfer's internal `fetch()` to download the
-audio bytes was also blocked).
-
-Fix: add explicit `media-src 'self' blob: https://*.blob.core.windows.net`,
-add `https://*.blob.core.windows.net` to `connect-src`, and add `blob:`
-to `img-src` for offline pending-image previews
-(`URL.createObjectURL(localNote.imageBlob)`). See `PROGRESS.md` Round 30
-+ `DECISIONS.md` § 22ap.
+Fix: ran `az storage cors add` against `cortexksstorage` to allow
+GET/HEAD/OPTIONS from the SWA origin + `http://localhost:5173`, then
+codified the rule in `infra/main.bicep` AND
+`infra/modules/storage.bicep` as a `blobServices/default` resource with
+`corsRules` so future redeploys preserve it. Backed by 13 new bicep
+guard-rail tests in `backend/tests/test_infra_storage_cors.py`. See
+`PROGRESS.md` Round 31 + `DECISIONS.md` § 22aq.
 
 ---
 

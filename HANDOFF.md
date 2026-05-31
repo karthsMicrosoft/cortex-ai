@@ -2,8 +2,8 @@
 
 > **Read this first.** This document briefs an incoming agent (Claude / Copilot / Aider / human) on the state of the project so work can resume without context loss.
 
-**Last updated:** 2026-05-30 (Round 30 SHIPPED: voice-note playback fix — CSP media-src + Azure Blob added to connect-src)
-**Status:** Live on Azure. Phases 1–7 shipped. Brain View now 2D (Round 27). Canvas feature gated behind `VITE_FEATURE_CANVAS` env var (Round 28). Per-user local data isolation enforced (Round 29). Voice-note audio playback restored — CSP media-src + Azure Blob added to connect-src (Round 30). Library has instant text search. Safari mobile bfcache blank screen fixed. Backend: ~940 tests passing. Frontend: ~858 tests, TypeScript clean.
+**Last updated:** 2026-05-31 (Round 31 SHIPPED: Azure Blob CORS rules — fixes iOS Safari voice playback)
+**Status:** Live on Azure. Phases 1–7 shipped. Brain View now 2D (Round 27). Canvas feature gated behind `VITE_FEATURE_CANVAS` env var (Round 28). Per-user local data isolation enforced (Round 29). Voice-note audio playback CSP fixed (Round 30) + Azure Blob CORS rules added so iOS Safari can also play audio (Round 31). Library has instant text search. Safari mobile bfcache blank screen fixed. Backend: ~953 tests passing (+13 Round 31). Frontend: ~858 tests, TypeScript clean.
 
 ---
 
@@ -77,7 +77,8 @@ az containerapp secret list --name cortexks-api --resource-group cortex-rg --sho
 
 | Priority | Task | Where to start |
 |---|---|---|
-| **P0 — NEXT** | _(none currently — Rounds 27 + 28 + 29 + 30 closed)_ | — |
+| **P0 — NEXT** | _(none currently — Rounds 27 + 28 + 29 + 30 + 31 closed)_ | — |
+| ✅ Round 31 | ~~iOS Safari voice playback still broken~~ ✅ Round 31 (2026-05-31) — after Round 30 CSP fix, iPhone Safari still failed. Root cause: Azure Blob storage account had no CORS rules; wavesurfer.js + Safari's strict cross-origin media policy require `Access-Control-Allow-Origin`. Fixed live with `az storage cors add`, codified in `infra/main.bicep` + `infra/modules/storage.bicep`, pinned with 13 bicep guard-rail tests. | `PROGRESS.md` Round 31, `DECISIONS.md` § 22aq |
 | ✅ Round 30 | ~~Voice-note playback failed~~ ✅ Round 30 (2026-05-30) — CSP omitted `media-src` (fell back to `default-src 'self'` → blocked Azure Blob SAS audio URLs) and omitted blob.core in `connect-src` (broke WaveSurfer fetch). Added explicit media-src + connect-src additions + blob: scheme in img-src for offline previews. 5 new pinning tests. | `PROGRESS.md` Round 30, `DECISIONS.md` § 22ap |
 | ✅ Round 29 | ~~Cross-user library leak~~ ✅ Round 29 (2026-05-30) — sign out of A, sign in as B left A's notes visible. New `clearLocalUserData()` wipes Dexie + Workbox caches on signOut (primary defense) and on user-change detection in SessionGate (defense-in-depth). 17 new tests | `PROGRESS.md` Round 29, `DECISIONS.md` § 22ao |
 | ✅ Round 28 | ~~Hide Canvas feature~~ ✅ Round 28 (2026-05-29) — `VITE_FEATURE_CANVAS` env var (default off) gates Canvas tab + routes + "Open as Canvas" + "Add to Canvas". Implementation kept; flip env to re-enable | `PROGRESS.md` Round 28, `DECISIONS.md` § 22an |

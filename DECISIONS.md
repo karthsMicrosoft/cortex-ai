@@ -2,7 +2,7 @@
 
 > **Architecture decisions and deviations from spec, with rationale.** When refactoring, preserve these unless the underlying constraint has changed.
 
-**Last updated:** 2026-05-30 (Round 30 SHIPPED: CSP media-src + blob.core.windows.net fix — see § 22ap)
+**Last updated:** 2026-05-31 (Round 31 SHIPPED: Azure Blob CORS rules — see § 22aq)
 
 ---
 
@@ -1273,3 +1273,98 @@ If we ever want to remove Azure Blob from the CSP entirely, the path is:
 - That would let `media-src` and `connect-src` shrink to `'self'`
   + the API origin. Tradeoff: backend bandwidth + latency vs CSP purity.
   Not worth it for a single-tenant MVP.
+
+---
+
+## § 22aq — Azure Blob CORS for iOS Safari audio playback (Round 31, 2026-05-31)
+
+**Decision:** Configure `GET/HEAD/OPTIONS` CORS rules on the
+`cortexksstorage` Azure Blob storage account allowing the SWA origin
++ `http://localhost:5173`. Apply live via `az storage cors add`
+AND codify in `infra/main.bicep` + `infra/modules/storage.bicep` so
+the rule survives a redeploy.
+
+### Why this matters
+Round 30 fixed the SWA Content-Security-Policy (added `media-src` +
+`https://*.blob.core.windows.net` in `connect-src`). That was the
+correct fix for the page-level policy, but a second layer was still
+broken: the Azure Blob endpoint itself returned no `Access-Control-*`
+headers because the storage account had no CORS rules. iOS Safari
+refuses to play cross-origin media when the response is missing those
+headers — even though Chrome/Edge let it through.
+
+### Why Safari is stricter
+- **wavesurfer.js** (our waveform player on Music-category voice notes)
+  sets `crossOrigin="anonymous"` on its internal `<audio>` element
+  so it can analyze the audio bytes. The moment `crossOrigin` is
+  attached, the browser enforces full CORS on the media load. Without
+  `Access-Control-Allow-Origin`, the audio fails.
+- **wavesurfer.js also fetches the audio via `fetch()`** to compute
+  waveform peaks. `fetch()` is always CORS-checked.
+- **Safari mobile is the strictest tier**. Where Chrome may degrade
+  gracefully (block canvas reads but still play audio), Safari blocks
+  the playback up front.
+
+### Why `allowedHeaders=[*]` and `exposedHeaders=[*]`
+- Read-only methods (GET/HEAD/OPTIONS) only. SAS tokens still gate
+  which blobs can be read.
+- Allowing all request headers covers `Range` (Safari uses it for
+  seeking), `If-Modified-Since` (service-worker cache validation),
+  `Authorization` (future-proofing), and `x-ms-*` (Azure SDK).
+- Exposing all response headers lets wavesurfer.js read
+  `Content-Length` / `Content-Range` for peak computation buffer
+  sizing.
+
+A stricter `allowedHeaders=[range, if-modified-since]` would work
+today but creates a fragility tax — every new browser feature or SDK
+header would silently break audio. The trade-off is acceptable because
+the methods list is read-only and SAS tokens enforce authorization.
+
+### Why we DON'T allow PUT/DELETE
+The storage account is read-only from the browser. All writes go
+through the FastAPI backend using the connection-string credential.
+Allowing browser-side PUT/DELETE would defeat the SAS-tokens-only
+security model — anyone who could intercept a write CORS preflight
+could attempt direct blob writes.
+
+### Why two layers (live + Bicep)
+- `az storage cors add` fixed the live production deploy
+  immediately, no redeploy required. Critical for user-facing audio
+  bug.
+- `infra/main.bicep` + `infra/modules/storage.bicep` codification
+  ensures the rule isn't lost when someone runs `bash
+  infra/deploy.sh` next. Bicep is the source of truth for the
+  infrastructure.
+
+### Pinning
+`backend/tests/test_infra_storage_cors.py` — 13 tests that statically
+parse both bicep files and assert:
+- A `blobServices` resource is declared in both files.
+- `corsRules` is set on the `blobServices` resource.
+- `GET`, `HEAD`, `OPTIONS` are all in `allowedMethods`.
+- `allowedOrigins` references the `frontendOrigin` Bicep param
+  (not a hardcoded literal — so the same template works across
+  environments).
+- `http://localhost:5173` is in the allowed origins list so the
+  vite dev server works.
+
+If a future Bicep refactor (e.g. moving the storage resource into a
+new module) drops the CORS rule, these tests fail loudly before the
+change ships.
+
+### Not changed
+- Frontend bundle is untouched. The Round 30 CSP changes are
+  preserved. The MusicPlayer + bare-audio components are unchanged.
+- Backend `CORSMiddleware` (gates the FastAPI API) is unaffected —
+  this is purely storage-account-level CORS.
+- SAS-token generation in `app/services/blob_storage.py` is
+  unchanged. SAS still grants read-only access for 24h.
+- Backend `StrictCspMiddleware` is unaffected.
+
+### Future option (not done now)
+If we ever want to remove cross-origin audio entirely, the path is to
+proxy audio through the FastAPI backend
+(`GET /api/notes/{id}/audio` → streaming response or 302 redirect).
+That would let us drop the storage CORS rules. Trade-off: backend
+bandwidth + latency vs CORS surface. Not worth it for a single-tenant
+MVP.

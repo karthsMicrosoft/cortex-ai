@@ -2,7 +2,7 @@
 
 > **Chronological log of what's been done.** New work appends to the end. Use this to verify "we already did X" before re-doing.
 
-**Last updated:** 2026-05-30 (Round 30 SHIPPED: fix voice-note playback — CSP was blocking Azure Blob audio URLs)
+**Last updated:** 2026-05-31 (Round 31 SHIPPED: Azure Blob CORS rules — fixes iOS Safari voice playback)
 
 ---
 
@@ -1711,3 +1711,119 @@ so a future CSP tightening cannot silently re-break voice playback:
    **After Round 30**: audio plays back normally.
 
 See `DECISIONS.md` § 22ap for full rationale.
+---
+
+## Round 31 — iOS Safari voice playback CORS fix (2026-05-31) — SHIPPED
+
+User-reported follow-up to Round 30: voice-note playback worked on
+desktop Chrome/Edge but `still not fixed in safari browser in
+iphone`. Round 30 fixed the SWA Content-Security-Policy, but a second,
+deeper layer was still blocking Safari — the Azure Blob storage
+account itself had no CORS rules.
+
+### Root cause (Safari iOS specific)
+Three things conspire on iPhone Safari that don't bite Chrome/Edge:
+
+1. **wavesurfer.js sets `crossOrigin="anonymous"` on the underlying
+   `<audio>` element** so it can use the bytes for waveform peak
+   computation. The moment `crossOrigin` is set, the browser
+   enforces full CORS — the audio URL must return
+   `Access-Control-Allow-Origin` matching the page origin or the
+   media silently fails to load.
+2. **wavesurfer.js fetches the audio bytes via `fetch()`** to
+   compute waveform peaks. `fetch()` always triggers CORS.
+3. **Safari mobile is the strictest browser** for cross-origin media.
+   Where Chrome may load the audio anyway and only block the canvas
+   read, Safari blocks the playback up front.
+
+The probe confirmed: `az storage cors list --account-name cortexksstorage
+--services b` returned an empty list. With no CORS rules, the Blob
+endpoint responds without any `Access-Control-*` headers, and Safari
+refuses to even attempt playback.
+
+### Fix (two layers)
+
+**Layer 1 — live, immediate**:
+`
+az storage cors add \
+  --services b \
+  --methods GET HEAD OPTIONS \
+  --origins "https://gentle-river-06c1e4e10.7.azurestaticapps.net" \
+            "http://localhost:5173" \
+  --allowed-headers "*" \
+  --exposed-headers "*" \
+  --max-age 3600 \
+  --account-name cortexksstorage
+`
+
+This works for current users right now without a redeploy. Verified
+with an OPTIONS preflight that now returns:
+`
+HTTP/1.1 200 OK
+Access-Control-Allow-Origin: https://gentle-river-06c1e4e10.7.azurestaticapps.net
+Access-Control-Allow-Methods: GET
+Access-Control-Allow-Headers: range
+Access-Control-Max-Age: 3600
+Access-Control-Allow-Credentials: true
+`
+
+**Layer 2 — codified in Bicep** so the rule survives a future redeploy:
+
+- `infra/main.bicep` — added a
+  `Microsoft.Storage/storageAccounts/blobServices@2023-05-01` resource
+  named `default` with `corsRules` referencing the
+  `frontendOrigin` Bicep parameter + `http://localhost:5173`,
+  allowing GET/HEAD/OPTIONS, allowed/exposed headers `[*]`, max age
+  3600. Added `dependsOn: [storageBlobServices]` to the container
+  resource so the CORS rule deploys before the container.
+- `infra/modules/storage.bicep` — same change, plus a new
+  `frontendOrigin` Bicep param (defaults to the SWA convention) so
+  the module can be reused.
+
+### Why `allowedHeaders=[*]` and `exposedHeaders=[*]`
+- Only GET/HEAD/OPTIONS are allowed -- this is read-only.
+- SAS tokens already gate which blobs the request can reach.
+- Allowing all request headers covers `Range` (Safari uses it for
+  audio seeking), `If-Modified-Since` (service-worker cache),
+  `Authorization` (future-proofing if we ever switch from SAS to
+  managed-identity), and the various `x-ms-*` headers the Azure SDK
+  emits.
+- Exposing all response headers lets wavesurfer.js read
+  `Content-Length` for peak computation buffer sizing and
+  `Content-Range` for partial fetches.
+
+### Why GET, HEAD, OPTIONS only (no PUT/DELETE)
+The storage account is read-only from the browser. All writes go
+through the FastAPI backend using the connection-string credential.
+Allowing browser-side PUT/DELETE would defeat the SAS-tokens-only
+security model.
+
+### Files changed
+- `infra/main.bicep` — new blobServices/default resource with CORS
+- `infra/modules/storage.bicep` — same + new `frontendOrigin` param
+- `backend/tests/test_infra_storage_cors.py` (NEW) — 13 guard-rail
+  tests pinning the Bicep contract (blobServices exists, GET/HEAD/OPTIONS
+  allowed, frontendOrigin referenced, localhost dev origin included)
+- `PROGRESS.md`, `DECISIONS.md` § 22aq, `KNOWN_ISSUES.md`,
+  `HANDOFF.md`
+
+### Validation
+- `az storage cors list --services b --account-name cortexksstorage`
+  shows the rule live.
+- `curl -X OPTIONS -H 'Origin: <swa>' -H 'Access-Control-Request-Method:
+  GET' <blob-url>` returns `200 OK` with all expected
+  `Access-Control-*` headers.
+- `python -m pytest tests/test_infra_storage_cors.py` — 13 passed.
+
+### How to verify on production (browser only)
+1. On iPhone Safari, sign in.
+2. Capture a voice note (any category).
+3. Open `/note/<id>` → audio plays back normally.
+
+### No app redeploy required
+The fix activated the moment `az storage cors add` completed. The
+Bicep + test changes are pushed to `main` to ensure the rule
+survives a future `bash infra/deploy.sh` run. The frontend bundle
+itself is unchanged.
+
+See `DECISIONS.md` § 22aq for full rationale.

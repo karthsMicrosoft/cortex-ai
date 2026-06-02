@@ -1,9 +1,8 @@
 """Tests for the bulk Note import script (scripts/import_notes.py).
 
 Smoke-tests the dry-run path against tiny in-memory Keep + Notion
-fixtures. We never hit the network — the script's `_post_all` is only
-invoked when `--dry-run` is OFF + `--token` is set, and these tests
-always pass `--dry-run`.
+fixtures. HTTP import paths are covered with respx mocks so tests never
+hit the real network.
 
 The point of these tests is to pin:
   - parsing logic survives a refactor (titles, tags, checklist
@@ -20,7 +19,9 @@ import json
 import logging
 from pathlib import Path
 
+import httpx
 import pytest
+import respx
 
 # Project layout: backend/scripts/import_notes.py
 # Tests live in backend/tests/, so we can import scripts.* directly.
@@ -390,6 +391,84 @@ class TestImportedNote:
 # ---------------------------------------------------------------------------
 # CLI smoke — --dry-run end-to-end (no HTTP, no token required)
 # ---------------------------------------------------------------------------
+
+class TestCLIHTTPRelink:
+    def _run_keep_import(self, keep_dir: Path, *extra_args: str) -> int:
+        return main([
+            "--source", "google-keep",
+            "--path", str(keep_dir),
+            "--api-url", "http://test.example",
+            "--token", "test-token",
+            *extra_args,
+        ])
+
+    def test_relink_called_when_creates_succeed(self, keep_dir: Path):
+        with respx.mock(base_url="http://test.example", assert_all_called=False) as httpx_mock:
+            httpx_mock.post("/api/notes").mock(
+                return_value=httpx.Response(201, json={"id": "note-id"})
+            )
+            relink_route = httpx_mock.post("/api/notes/relink-all").mock(
+                return_value=httpx.Response(
+                    200,
+                    json={"created": 5, "updated": 0, "duration_ms": 100, "skipped_recent": False},
+                )
+            )
+
+            rc = self._run_keep_import(keep_dir)
+
+        assert rc == 0
+        assert relink_route.call_count == 1
+
+    def test_no_relink_flag_skips(self, keep_dir: Path):
+        with respx.mock(base_url="http://test.example", assert_all_called=False) as httpx_mock:
+            httpx_mock.post("/api/notes").mock(
+                return_value=httpx.Response(201, json={"id": "note-id"})
+            )
+            relink_route = httpx_mock.post("/api/notes/relink-all").mock(
+                return_value=httpx.Response(
+                    200,
+                    json={"created": 5, "updated": 0, "duration_ms": 100, "skipped_recent": False},
+                )
+            )
+
+            rc = self._run_keep_import(keep_dir, "--no-relink")
+
+        assert rc == 0
+        assert relink_route.call_count == 0
+
+    def test_relink_skipped_when_nothing_created(self, keep_dir: Path):
+        with respx.mock(base_url="http://test.example", assert_all_called=False) as httpx_mock:
+            httpx_mock.post("/api/notes").mock(
+                return_value=httpx.Response(200, json={"id": "existing-note-id"})
+            )
+            relink_route = httpx_mock.post("/api/notes/relink-all").mock(
+                return_value=httpx.Response(
+                    200,
+                    json={"created": 5, "updated": 0, "duration_ms": 100, "skipped_recent": False},
+                )
+            )
+
+            rc = self._run_keep_import(keep_dir)
+
+        assert rc == 0
+        assert relink_route.call_count == 0
+
+    def test_relink_failure_is_non_fatal(self, keep_dir: Path, caplog):
+        caplog.set_level(logging.WARNING, logger="import_notes")
+        with respx.mock(base_url="http://test.example", assert_all_called=False) as httpx_mock:
+            httpx_mock.post("/api/notes").mock(
+                return_value=httpx.Response(201, json={"id": "note-id"})
+            )
+            relink_route = httpx_mock.post("/api/notes/relink-all").mock(
+                return_value=httpx.Response(500, json={"detail": "boom"})
+            )
+
+            rc = self._run_keep_import(keep_dir)
+
+        assert rc == 0
+        assert relink_route.call_count == 1
+        assert any("backfill_semantic_links" in r.message for r in caplog.records)
+
 
 class TestCLIDryRun:
     def test_dry_run_keep_exits_zero(self, keep_dir: Path, caplog):

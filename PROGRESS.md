@@ -2,7 +2,7 @@
 
 > **Chronological log of what's been done.** New work appends to the end. Use this to verify "we already did X" before re-doing.
 
-**Last updated:** 2026-05-31 (Round 31 SHIPPED: Azure Blob CORS rules — fixes iOS Safari voice playback)
+**Last updated:** 2026-06-02 (Round 32 SHIPPED: composite-scored auto-linking for new + imported notes — `/api/notes/relink-all` + `backfill_semantic_links.py` + import auto-relink + G1 PUT fix)
 
 ---
 
@@ -1827,3 +1827,90 @@ survives a future `bash infra/deploy.sh` run. The frontend bundle
 itself is unchanged.
 
 See `DECISIONS.md` § 22aq for full rationale.
+---
+
+## Round 32 — Robust auto-linking for new + imported notes (2026-06-02) — SHIPPED
+
+Follow-up to the bulk-import script (commit `d2057a0`). The user
+asked: "What about connections to relevant notes after import? Will it
+automatically connect relevant notes based on semantic meaning?"
+
+The honest answer was: **mostly yes** (the AI pipeline already runs
+`_link_similar_notes` after embedding every new note), but four real
+gaps were hurting the actual user experience after a bulk import:
+
+| # | Gap | Why it bites |
+|---|---|---|
+| G1 | `PUT /api/notes/{id}` reset `processing_status='raw'` but never scheduled the pipeline. | Every note edit silently dropped the note out of the auto-link graph until a manual re-trigger. |
+| G2 | Bulk-import cold-start: note #1 has no peers, gets 0 semantic links. | The oldest ~50 notes from a Keep/Notion import end up "lonely" with no Related Notes. |
+| G4 | `import_notes.py` did not run a final relink pass. | Pairs with G2 -- without a post-import relink, the tail of the import stays orphaned. |
+| G6 | Pure cosine similarity could miss two notes that share a tag or title token but use different language. | Two notes both tagged `#projects/cortex` with different sentence structure missed each other. |
+
+### What shipped
+
+1. **A1 -- `PUT /api/notes/{id}` now schedules the pipeline.** Added a
+   `BackgroundTasks` parameter to `update_note` and called
+   `background_tasks.add_task(_run_pipeline, note_id)` when
+   `content_changed`. Three new tests in `test_note_update.py` pin
+   the contract (schedules on real content change; no-op on metadata-
+   only PUT; no-op when content is set to identical value).
+
+2. **A3 -- New `app/services/semantic_links.py` module** owns the
+   linker. Both the per-note pipeline AND the new endpoint call
+   `rebuild_user_links` / `relink_single_note` so the scoring
+   stays in exactly one place. Replaces the in-line SQL block that
+   was in `app/pipeline/processor.py::_link_similar_notes`.
+
+3. **A5 -- Composite scoring (G6).** New scoring function:
+   `composite = 0.7 * sem + 0.2 * tag_jaccard + 0.1 * title_jaccard`.
+   - `sem` = pgvector cosine similarity (unchanged).
+   - `tag_jaccard` = Jaccard overlap of tag-name sets.
+   - `title_jaccard` = Jaccard overlap of tokenised, stopword-filtered
+     titles.
+   - Threshold `>= 0.55` AND at least one component clears its floor
+     (`sem >= 0.65 OR tag >= 0.5 OR title >= 0.5`). The floor stops
+     pure-tag-only or pure-title-only false positives.
+   - Pre-filter remains pgvector top-20 by cosine so we don't have to
+     score every (n, m) pair in Python.
+
+4. **A3.2 -- `POST /api/notes/relink-all` endpoint.** One-shot
+   rebuild of every link for the caller's notes. Rate-limited to one
+   call per user per 5 minutes (in-process dict TTL -- fine for the
+   single-instance Container App; revisit if we go multi-instance).
+   Returns `{created, updated, duration_ms, skipped_recent}`.
+
+5. **A4 -- `scripts/backfill_semantic_links.py`** companion CLI.
+   `--email <user> --dry-run --limit-notes N`. Calls the shared
+   service with `last_relink_window=0` so operator runs are never
+   short-circuited by the rate limit.
+
+6. **B1 -- `import_notes.py` auto-relink.** After `_post_all`
+   completes and `counters.created > 0`, POST to `/api/notes/relink-
+   all` once. `--no-relink` opts out. Non-fatal: if the relink call
+   fails, log a hint to run the backfill script manually. Closes G4 end-
+   to-end.
+
+### Files
+
+| File | Change |
+|---|---|
+| `backend/app/api/notes.py` | A1: `BackgroundTasks` in `update_note`. A3.2: new `POST /api/notes/relink-all` endpoint. |
+| `backend/app/services/semantic_links.py` | NEW. Composite scoring + `rebuild_user_links` + `relink_single_note` + per-user in-process rate-limit. |
+| `backend/app/pipeline/processor.py` | `_link_similar_notes` refactored to call `relink_single_note` so single-note + bulk paths share scoring. |
+| `backend/scripts/backfill_semantic_links.py` | NEW companion CLI. |
+| `backend/scripts/import_notes.py` | Auto-relink + `--no-relink` flag. |
+| `backend/tests/test_note_update.py` | +3 G1 tests. |
+| `backend/tests/test_semantic_links.py` | NEW. Composite helpers + `relink_single_note` + `rebuild_user_links` + rate-limit. |
+| `backend/tests/test_backfill_semantic_links.py` | NEW. |
+| `backend/tests/test_import_notes.py` | +4 relink-wiring tests. |
+| `docs/IMPORT.md` | Auto-relink section. |
+| `PROGRESS.md`, `DECISIONS.md` § 22ar, `KNOWN_ISSUES.md`, `HANDOFF.md` | docs |
+
+### Validation
+TBD after sub-agents complete -- placeholder.
+
+### Out of scope (per user decision in plan-mode prompt)
+- **G3 bidirectional inserts** -- semantic links still only land as `(new -> existing)`. Backlinks UI already shows both sides via outgoing + incoming so the user-visible "Related Notes" + "Backlinks" lists are correct. Tracked as P3 future polish for Brain View edge-count symmetry.
+- **G5 in-app "Re-link this note" button** -- `POST /api/notes/{id}/pipeline` already exists. UI button is a P3 nice-to-have.
+
+See `DECISIONS.md` § 22ar for full rationale on the composite-scoring weights and the rate-limit choice.

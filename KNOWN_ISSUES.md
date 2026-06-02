@@ -2,29 +2,32 @@
 
 > **Open work, bugs not fixed, gaps from "fully done."** Anything tagged P0/P1/P2 here is meant to be picked up by the next agent.
 
-**Last updated:** 2026-05-31 (Round 31 SHIPPED: Azure Blob CORS rules — fixes iOS Safari voice playback)
+**Last updated:** 2026-06-02 (Round 32 SHIPPED: composite-scored auto-linking for new + imported notes)
 
 ---
 
-## ✅ Round 31 closed (2026-05-31) — iOS Safari audio playback CORS fix
+## ✅ Round 32 closed (2026-06-02) — Composite-scored auto-linking
 
-User-reported follow-up: after Round 30 fixed the CSP, voice-note
-playback worked on desktop Chrome/Edge but **still failed on iPhone
-Safari**. Root cause: the Azure Blob storage account `cortexksstorage`
-had no CORS rules configured. iOS Safari enforces CORS strictly for
-cross-origin audio: wavesurfer.js sets `crossOrigin="anonymous"` on its
-internal `<audio>` element and uses `fetch()` to download the audio
-bytes for waveform peak computation — both paths require
-`Access-Control-Allow-Origin` from the Blob endpoint, which the storage
-account never returned.
+Follow-up to the bulk import tooling. The user asked whether imported
+notes get auto-linked to each other and to existing notes. Answer:
+mostly yes (the pipeline already runs `_link_similar_notes` after every
+note's embedding step), but four gaps were hurting the actual UX:
 
-Fix: ran `az storage cors add` against `cortexksstorage` to allow
-GET/HEAD/OPTIONS from the SWA origin + `http://localhost:5173`, then
-codified the rule in `infra/main.bicep` AND
-`infra/modules/storage.bicep` as a `blobServices/default` resource with
-`corsRules` so future redeploys preserve it. Backed by 13 new bicep
-guard-rail tests in `backend/tests/test_infra_storage_cors.py`. See
-`PROGRESS.md` Round 31 + `DECISIONS.md` § 22aq.
+- **G1**: `PUT /api/notes/{id}` reset `processing_status='raw'` but
+  never scheduled the pipeline. Edits silently dropped notes out of
+  the auto-link graph.
+- **G2**: bulk-import cold-start — note #1 has no peers to link to.
+- **G4**: `import_notes.py` did not run a final relink pass.
+- **G6**: pure cosine similarity missed tag-only / title-only matches.
+
+All four closed. New `app/services/semantic_links.py` owns composite
+scoring (`0.7 × sem + 0.2 × tag_jaccard + 0.1 × title_jaccard` with a
+per-component floor). New `POST /api/notes/relink-all` endpoint (rate-
+limited 5 min/user) rebuilds links for all the caller's notes.
+`scripts/backfill_semantic_links.py` is the operator equivalent.
+`import_notes.py` auto-POSTs to `relink-all` at the end of every bulk
+import (opt-out via `--no-relink`). 1017 backend tests passing (+28
+from baseline). See `PROGRESS.md` Round 32 + `DECISIONS.md` § 22ar.
 
 ---
 

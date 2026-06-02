@@ -122,6 +122,17 @@ the script.
 different importer — one row per Cortex note, with column → tag
 mapping. Out of scope for this script; ping back if you need it.
 
+### Auto re-link after import
+
+After all note POSTs land, the script makes one final POST to
+`/api/notes/relink-all`. This gives the earliest-imported notes (which
+had no peers at create time) their composite-scored semantic links.
+
+The endpoint is rate-limited to once every 5 minutes. If the response
+shows `skipped_recent=true`, run
+`python -m scripts.backfill_semantic_links --email <yours>` later to
+force a rebuild. Pass `--no-relink` to opt out of the automatic step.
+
 ---
 
 ## 4 — Verify
@@ -155,8 +166,8 @@ counts. To verify in the app:
 
 ## Tests
 
-`backend/tests/test_import_notes.py` — 36 unit tests covering parsing,
-filters, category resolution, idempotency, CLI exit codes. No HTTP. Run
+`backend/tests/test_import_notes.py` — 40 unit tests covering parsing,
+filters, category resolution, idempotency, CLI exit codes, and mocked HTTP. Run
 with:
 
 ```bash

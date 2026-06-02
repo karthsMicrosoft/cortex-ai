@@ -2,7 +2,7 @@
 
 > **Architecture decisions and deviations from spec, with rationale.** When refactoring, preserve these unless the underlying constraint has changed.
 
-**Last updated:** 2026-05-31 (Round 31 SHIPPED: Azure Blob CORS rules — see § 22aq)
+**Last updated:** 2026-06-02 (Round 32 SHIPPED: composite-scored auto-linking — see § 22ar)
 
 ---
 
@@ -1368,3 +1368,120 @@ proxy audio through the FastAPI backend
 That would let us drop the storage CORS rules. Trade-off: backend
 bandwidth + latency vs CORS surface. Not worth it for a single-tenant
 MVP.
+
+---
+
+## § 22ar -- Composite-scored auto-linking for new + imported notes (Round 32, 2026-06-02)
+
+**Decision:** Replace pure-cosine semantic linking with a composite
+score of `0.7 * sem + 0.2 * tag_jaccard + 0.1 * title_jaccard`, with a
+per-component floor so pure-tag or pure-title matches need at least one
+strong anchor. Move the linker into a shared service module so the
+per-note pipeline AND a new `POST /api/notes/relink-all` endpoint
+share the exact same scoring. Add an `import_notes.py` auto-relink
+hook so bulk imports don't leave their tail orphaned.
+
+### Why composite (G6)
+Pure cosine over OpenAI `text-embedding-3-small` is good at "two
+notes about the same topic phrased differently" but misses two
+important user patterns:
+1. **Same tag, different language.** Two `#projects/cortex` notes
+   that approach the project from very different angles -- cost
+   tracking vs UX critique. Cosine alone scores them ~0.3-0.4 and they
+   never link.
+2. **Same title token, different body.** Two notes both titled
+   `"Morning workout 2026-06-01"` -- one a quick checkbox list, the
+   other a long-form reflection. Cosine misses the obvious "same
+   journal entry" connection because the bodies don't overlap.
+
+Jaccard is the obvious primitive for both: cheap (set ops on small
+collections), well-understood, and gives values directly in `[0, 1]`
+so the composite math is clean.
+
+### Why these weights
+- `sem = 0.7` -- pgvector still does the heavy lifting; cosine
+  similarity remains the strongest signal for "is this about the same
+  topic at all?".
+- `tag = 0.2` -- explicit user signal. If you bothered to tag both
+  notes with the same tag, that means something.
+- `title = 0.1` -- weakest signal because Notion auto-titles are
+  often boring ("Page 1", "Untitled"). The floor takes care of cases
+  where the title is actually a strong match.
+
+Threshold `composite >= 0.55` (lowered from the pure-cosine `0.75`
+because composite is generally higher than its sem component alone).
+
+### Why a per-component floor
+Without the floor, two notes that share one tag and nothing else would
+get `composite = 0.7*0 + 0.2*1 + 0.1*0 = 0.2` -- which would fall
+below the threshold anyway. But if titles also happened to share one
+common token (`"my notes about X"` -- `"my notes about Y"` ->
+title_jaccard ~ 0.5 after stopword removal), the composite could
+sneak above threshold without any semantic anchor and link two
+genuinely unrelated notes. The floor (`sem >= 0.65 OR tag >= 0.5 OR
+title >= 0.5`) requires at least ONE component to be confidently
+saying "these belong together", not just three weak signals.
+
+### Why a shared service module
+Before Round 32 the linker was an inline `text(...)` SQL block in
+`app/pipeline/processor.py::_link_similar_notes`. Moving it to
+`app/services/semantic_links.py` gives us:
+- One implementation that handles both per-note (pipeline) and bulk
+  (relink-all) paths -- no chance for the two to drift.
+- A natural home for the composite scoring helpers
+  (`tag_jaccard`, `title_jaccard`, `composite_score`,
+  `passes_floor`) so they can be unit-tested without spinning up a
+  pgvector fixture.
+- A clean place to evolve the algorithm (cross-encoder reranker,
+  graph-walk boosting, etc.) without poking at the orchestrator.
+
+### Why `POST /api/notes/relink-all` (not per-note re-pipeline) for imports
+- A 500-note Keep import would trigger 500 pipeline runs at the
+  per-note granularity -- including 500 LLM calls for tag extraction
+  + 500 embedding calls. The pipeline already does that ONCE per note
+  at create time. We just need to re-run the LINKING step in the tail.
+- The relink-all endpoint does no LLM work -- it only re-ranks already-
+  embedded notes against each other. One short SQL pass per note (no
+  external calls). Fast and cheap.
+
+### Why an in-process rate-limit dict
+- The user-facing rate limit (5 min) exists to stop accidental UI spam
+  (eg. holding down a hypothetical "re-link" button), not as a DoS
+  defense.
+- Container App runs at `minReplicas=1, maxReplicas=3`. With one
+  pod, an in-process dict is correct. With three, a user could hit a
+  different pod and bypass the limit. For Round 32 we accept that --
+  the worst case is three back-to-back rebuilds of an already-linked
+  set, which is just wasted SQL.
+- The operator script (`backfill_semantic_links.py`) passes
+  `last_relink_window=0` so it's never rate-limited.
+
+### Why G1 (PUT scheduling) was a bug
+Pre-Round-32 `update_note` set `processing_status='raw'` when
+`content_changed` but never actually scheduled the pipeline. The
+note sat at 'raw' forever -- its embedding still pointed at the OLD
+content, so all of its semantic links became silently wrong. Fix is
+trivial: `BackgroundTasks` param + `add_task(_run_pipeline,
+note_id)`. The three new tests in `test_note_update.py` pin it.
+
+### What we did NOT change
+- Backend `CORSMiddleware` is unaffected.
+- The `note_links` schema is unchanged. The composite score still
+  lands in the existing `similarity_score` float column. No
+  migration required.
+- The semantic-link insert direction is still `(new -> existing)`
+  only (G3 deferred). The Backlinks UI already merges outgoing +
+  incoming so the user-visible "Related Notes" lists stay correct.
+  Tracked as P3 future for Brain View edge-count symmetry.
+- The in-app "Re-link this note" button (G5) is deferred --
+  `POST /api/notes/{id}/pipeline` already exists for power users.
+
+### Future option (not done now)
+- Move the rate-limit out of an in-process dict and into a tiny
+  Postgres table (or Redis) when we go multi-pod.
+- Tune the composite weights by holding out a labelled link set and
+  scoring precision @ k. For Round 32 the weights are an informed
+  guess validated by the unit tests.
+- Cross-encoder reranker (eg. `BAAI/bge-reranker`) for the top-N
+  shortlist. Big quality win, but adds latency + cost. Defer until
+  we have user feedback on whether composite alone is enough.

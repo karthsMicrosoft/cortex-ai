@@ -20,16 +20,15 @@ from enum import Enum
 from typing import Optional
 
 from openai import AsyncAzureOpenAI
-from sqlalchemy import select, text
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.models.note import Note
-from app.models.note_link import NoteLink
-from app.models.tag import Tag, note_tags as note_tags_table
 from app.pipeline.music import process_music_note
 from app.pipeline.shadow_reader import run_shadow_reader_stage
 from app.pipeline.wiki_links import parse_and_link_wiki_refs
+from app.services.semantic_links import relink_single_note
 from app.utils.db_helpers import get_or_create_tags_batch
 
 logger = logging.getLogger(__name__)
@@ -283,31 +282,11 @@ class AIPipeline:
             return
 
         try:
-            link_sql = text("""
-                INSERT INTO note_links (id, source_note_id, target_note_id, similarity_score, link_type)
-                SELECT gen_random_uuid(), :note_id, n.id,
-                       1 - (n.embedding <=> CAST(:embedding AS vector)) AS score,
-                       'semantic'
-                FROM notes n
-                WHERE n.id != :note_id
-                  AND n.user_id = :user_id
-                  AND n.embedding IS NOT NULL
-                  AND 1 - (n.embedding <=> CAST(:embedding AS vector)) > :threshold
-                ORDER BY n.embedding <=> CAST(:embedding AS vector)
-                LIMIT :limit
-                ON CONFLICT (source_note_id, target_note_id)
-                DO UPDATE SET similarity_score = EXCLUDED.similarity_score
-            """)
-            embedding_str = "[" + ",".join(str(x) for x in note.embedding) + "]"
-            await self.db.execute(
-                link_sql,
-                {
-                    "note_id": str(note.id),
-                    "embedding": embedding_str,
-                    "user_id": str(note.user_id),
-                    "threshold": threshold,
-                    "limit": limit,
-                },
+            await relink_single_note(
+                self.db,
+                note,
+                top_n=limit,
+                sem_threshold=threshold,
             )
         except Exception as exc:  # noqa: BLE001
             # pgvector not available in SQLite test env — skip gracefully

@@ -482,6 +482,35 @@ async def _post_one(
         log.error("Gave up on %s after retries: %s", note.source_key, last_exc)
 
 
+async def _trigger_relink_all(
+    client: httpx.AsyncClient,
+    *,
+    api_url: str,
+    token: str,
+) -> dict | None:
+    try:
+        resp = await client.post(
+            f"{api_url.rstrip('/')}/api/notes/relink-all",
+            headers={"Authorization": f"Bearer {token}"},
+            timeout=httpx.Timeout(300.0),
+        )
+    except httpx.HTTPError as exc:
+        log.warning("Network error during relink-all: %s", exc)
+        return None
+
+    if resp.status_code == 200:
+        return resp.json()
+    if resp.status_code in (401, 403):
+        log.error("auth failure during relink-all")
+        return None
+    if resp.status_code == 429 or 500 <= resp.status_code < 600:
+        log.warning("Relink-all returned HTTP %s: %s", resp.status_code, (resp.text or "")[:200])
+        return None
+
+    log.warning("Relink-all returned unexpected HTTP %s: %s", resp.status_code, (resp.text or "")[:200])
+    return None
+
+
 async def _post_all(
     notes: list[ImportedNote],
     *,
@@ -489,6 +518,7 @@ async def _post_all(
     token: str,
     extra_tags: list[str],
     concurrency: int,
+    relink: bool,
 ) -> Counters:
     counters = Counters()
     sem = asyncio.Semaphore(max(1, concurrency))
@@ -512,6 +542,22 @@ async def _post_all(
                 log.info(
                     "Progress: %d/%d (created=%d skipped=%d failed=%d)",
                     done, len(notes), counters.created, counters.skipped, counters.failed,
+                )
+
+        if relink and counters.created > 0:
+            relink_result = await _trigger_relink_all(client, api_url=api_url, token=token)
+            if relink_result is None:
+                log.warning(
+                    "Relink step skipped or failed -- run 'python -m scripts.backfill_semantic_links --email <yours>' manually to rebuild semantic links."
+                )
+            else:
+                skipped_recent = bool(relink_result.get("skipped_recent"))
+                log.info(
+                    "Re-linked notes: created=%d updated=%d duration_ms=%d%s",
+                    int(relink_result.get("created", 0)),
+                    int(relink_result.get("updated", 0)),
+                    int(relink_result.get("duration_ms", 0)),
+                    " (skipped due to recent run)" if skipped_recent else "",
                 )
     return counters
 
@@ -547,6 +593,10 @@ def _build_argparser() -> argparse.ArgumentParser:
                          "(repeatable). E.g. --tag '2024-archive'.")
     ap.add_argument("--concurrency", type=int, default=5,
                     help="Concurrent POSTs (default 5).")
+    ap.add_argument("--no-relink", dest="relink", action="store_false",
+                    help="Skip the automatic POST /api/notes/relink-all after the import "
+                         "(by default we trigger it once -- ~5s -- to fix cold-start.)")
+    ap.set_defaults(relink=True)
     ap.add_argument("--include-trashed", action="store_true",
                     help="Google Keep only: also import trashed notes.")
     ap.add_argument("--include-archived", action="store_true",
@@ -624,6 +674,7 @@ def main(argv: Optional[list[str]] = None) -> int:
             token=args.token,
             extra_tags=args.tag or [],
             concurrency=args.concurrency,
+            relink=args.relink,
         )
     )
     log.info(

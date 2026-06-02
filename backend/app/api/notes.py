@@ -265,6 +265,7 @@ async def get_note(
 async def update_note(
     note_id: uuid.UUID,
     payload: NoteUpdate,
+    background_tasks: BackgroundTasks,
     current_user_id: uuid.UUID = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> NoteOut:
@@ -273,7 +274,10 @@ async def update_note(
     absent fields from explicit None (B8 / mitigation #6).
 
     Rules:
-    - Changing `content` → resets processing_status to 'raw' (re-pipeline trigger).
+    - Changing `content` → resets processing_status to 'raw' AND schedules
+      the AI pipeline so semantic links + tags + embedding are recomputed
+      (Round 32 — G1 fix: previously the status reset never triggered a
+      re-pipeline, so edited notes silently lost their auto-links).
     - Changing category/tags/mood/music_metadata → does NOT re-trigger pipeline.
     """
     note = await _fetch_note(db, note_id, current_user_id)
@@ -289,9 +293,11 @@ async def update_note(
             content_changed = True
         setattr(note, field, value)
 
-    # If content changed, reset pipeline status
+    # If content changed, reset pipeline status AND schedule a re-run so
+    # the AI pipeline regenerates the embedding + semantic links + tags.
     if content_changed:
         note.processing_status = "raw"
+        background_tasks.add_task(_run_pipeline, note_id)
 
     # Delta-apply tags if provided
     if new_tags is not None:
@@ -437,6 +443,38 @@ async def trigger_pipeline(
     background_tasks.add_task(_run_pipeline, note_id)
     logger.info("trigger_pipeline: scheduled note_id=%s status=%s", note_id, note.processing_status)
     return {"detail": "Pipeline scheduled", "note_id": str(note_id)}
+
+
+# ---------------------------------------------------------------------------
+# POST /api/notes/relink-all  — bulk semantic-link rebuild (Round 32 / G2+G4)
+# ---------------------------------------------------------------------------
+
+@router.post("/relink-all", status_code=status.HTTP_200_OK)
+async def relink_all(
+    current_user_id: uuid.UUID = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """Rebuild semantic links for every note owned by the caller.
+
+    Use cases:
+      - After a bulk import (``scripts/import_notes.py`` calls this
+        automatically once all POSTs complete) so the oldest imported
+        notes -- which had no peers to link to at create time -- finally
+        get their composite-scored links.
+      - Operator / cron rebuild after a model upgrade or threshold tweak.
+
+    Rate-limited to one call per user per 5 minutes (see
+    ``app.services.semantic_links.rebuild_user_links``). A subsequent call
+    inside the window returns ``200`` with ``skipped_recent=true`` so
+    clients can retry without burning auth.
+
+    Returns: ``{created, updated, duration_ms, skipped_recent}``.
+    """
+    from app.services.semantic_links import rebuild_user_links
+
+    result = await rebuild_user_links(db, current_user_id)
+    await db.commit()
+    return result.to_dict()
 
 
 # ---------------------------------------------------------------------------

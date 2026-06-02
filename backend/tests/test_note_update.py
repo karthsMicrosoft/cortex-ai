@@ -194,3 +194,97 @@ async def test_patch_note_other_user_404(
     assert resp.status_code == 404, (
         f"Cross-user title update must 404, got {resp.status_code}"
     )
+
+
+# ---------------------------------------------------------------------------
+# Round 32 (G1): editing content must re-schedule the AI pipeline so the
+# semantic links + tags + embedding stay in sync with the new text. Previously
+# `processing_status` got reset to 'raw' but nothing actually scheduled
+# `_run_pipeline`, so edited notes drifted out of the auto-link graph.
+# ---------------------------------------------------------------------------
+
+class TestUpdateNoteSchedulesPipeline:
+
+    @pytest.mark.asyncio
+    async def test_content_change_schedules_pipeline(
+        self, client: AsyncClient, auth_headers: dict, monkeypatch
+    ):
+        from app.api import notes as notes_module
+
+        calls: list[tuple] = []
+
+        async def _spy(note_id):
+            calls.append(("run_pipeline", str(note_id)))
+
+        monkeypatch.setattr(notes_module, "_run_pipeline", _spy)
+
+        note = await _create_note(client, auth_headers, content="first draft")
+        # Creation may have scheduled the pipeline once; reset the spy so we
+        # only observe the PUT's behaviour.
+        calls.clear()
+
+        resp = await client.put(
+            f"/api/notes/{note['id']}",
+            json={"content": "totally new content that should re-trigger linking"},
+            headers=auth_headers,
+        )
+        assert resp.status_code == 200, resp.text
+        assert resp.json()["content"] == "totally new content that should re-trigger linking"
+        assert resp.json()["processing_status"] == "raw"
+        assert calls == [("run_pipeline", note["id"])], (
+            "PUT with new content must schedule _run_pipeline once "
+            "so semantic links + embedding are recomputed (Round 32 / G1)."
+        )
+
+    @pytest.mark.asyncio
+    async def test_non_content_change_does_not_schedule_pipeline(
+        self, client: AsyncClient, auth_headers: dict, monkeypatch
+    ):
+        from app.api import notes as notes_module
+
+        calls: list[tuple] = []
+
+        async def _spy(note_id):
+            calls.append(("run_pipeline", str(note_id)))
+
+        monkeypatch.setattr(notes_module, "_run_pipeline", _spy)
+
+        note = await _create_note(client, auth_headers, content="stays the same")
+        calls.clear()
+
+        resp = await client.put(
+            f"/api/notes/{note['id']}",
+            json={"title": "New Title Only", "tags": ["only-meta-change"]},
+            headers=auth_headers,
+        )
+        assert resp.status_code == 200, resp.text
+        assert calls == [], (
+            "PUT that only changes metadata (title, tags) must NOT schedule "
+            "_run_pipeline — the embedding is still valid for the unchanged "
+            "content."
+        )
+
+    @pytest.mark.asyncio
+    async def test_content_change_to_identical_value_does_not_schedule(
+        self, client: AsyncClient, auth_headers: dict, monkeypatch
+    ):
+        """If the caller PUTs the SAME content, treat as no-op."""
+        from app.api import notes as notes_module
+
+        calls: list[tuple] = []
+
+        async def _spy(note_id):
+            calls.append(str(note_id))
+
+        monkeypatch.setattr(notes_module, "_run_pipeline", _spy)
+
+        note = await _create_note(client, auth_headers, content="unchanged body")
+        calls.clear()
+
+        resp = await client.put(
+            f"/api/notes/{note['id']}",
+            json={"content": "unchanged body"},
+            headers=auth_headers,
+        )
+        assert resp.status_code == 200, resp.text
+        assert calls == [], "Identical content must not re-trigger the pipeline."

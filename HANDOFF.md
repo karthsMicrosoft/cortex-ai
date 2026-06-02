@@ -2,8 +2,8 @@
 
 > **Read this first.** This document briefs an incoming agent (Claude / Copilot / Aider / human) on the state of the project so work can resume without context loss.
 
-**Last updated:** 2026-05-31 (Round 31 SHIPPED: Azure Blob CORS rules — fixes iOS Safari voice playback)
-**Status:** Live on Azure. Phases 1–7 shipped. Brain View now 2D (Round 27). Canvas feature gated behind `VITE_FEATURE_CANVAS` env var (Round 28). Per-user local data isolation enforced (Round 29). Voice-note audio playback CSP fixed (Round 30) + Azure Blob CORS rules added so iOS Safari can also play audio (Round 31). Library has instant text search. Safari mobile bfcache blank screen fixed. Backend: ~953 tests passing (+13 Round 31). Frontend: ~858 tests, TypeScript clean.
+**Last updated:** 2026-06-02 (Bulk import tooling — `backend/scripts/import_notes.py` for Google Keep + Notion exports; see `docs/IMPORT.md`)
+**Status:** Live on Azure. Phases 1–7 shipped. Brain View now 2D (Round 27). Canvas feature gated behind `VITE_FEATURE_CANVAS` env var (Round 28). Per-user local data isolation enforced (Round 29). Voice-note audio playback CSP fixed (Round 30) + Azure Blob CORS rules added so iOS Safari can also play audio (Round 31). Bulk import script for Google Keep + Notion shipped — `backend/scripts/import_notes.py` (`docs/IMPORT.md`). Library has instant text search. Safari mobile bfcache blank screen fixed. Backend: ~989 tests passing (+36 import). Frontend: ~858 tests, TypeScript clean.
 
 ---
 

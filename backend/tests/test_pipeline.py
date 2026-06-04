@@ -58,6 +58,7 @@ def make_fake_note(
     raw_transcription="um uh so like I had this idea about machine learning",
     category="Ideas",
     shadow_reader_status="pending",
+    title=None,
 ):
     note = MagicMock()
     note.id = FAKE_NOTE_ID
@@ -73,6 +74,8 @@ def make_fake_note(
     note.mood = None
     note.entities = []
     note.music_metadata = {}
+    note.title = title
+    note.tags = []
     return note
 
 
@@ -488,6 +491,72 @@ class TestStageOrganize:
 
         assert captured_params.get("threshold") == 0.75
         assert captured_params.get("limit") == 5
+
+
+class TestAutoTitle:
+    async def _run_auto_title_case(
+        self,
+        llm_title=None,
+        existing_title=None,
+        include_title=True,
+    ):
+        from app.pipeline.processor import AIPipeline
+
+        note = make_fake_note(processing_status="processed", title=existing_title)
+        mock_db = AsyncMock(spec=AsyncSession)
+        mock_openai = AsyncMock()
+
+        payload = {
+            "tags": [],
+            "category": "Ideas",
+            "mood": "neutral",
+            "summary": "Summary.",
+            "entities": [],
+        }
+        if include_title:
+            payload["title"] = llm_title
+
+        mock_response = MagicMock()
+        mock_response.choices = [MagicMock()]
+        mock_response.choices[0].message.content = json.dumps(payload)
+        mock_openai.chat.completions.create = AsyncMock(return_value=mock_response)
+
+        pipeline = AIPipeline(openai_client=mock_openai, db=mock_db)
+        await pipeline._auto_tag_and_categorize(note)
+        return note
+
+    async def test_pipeline_sets_title_when_none(self):
+        note = await self._run_auto_title_case(llm_title="Lynch Film Meetup")
+
+        assert note.title == "Lynch Film Meetup"
+
+    async def test_pipeline_preserves_user_title(self):
+        note = await self._run_auto_title_case(
+            llm_title="Generated Different Title",
+            existing_title="My Custom Title",
+        )
+
+        assert note.title == "My Custom Title"
+
+    async def test_pipeline_truncates_long_title(self):
+        note = await self._run_auto_title_case(llm_title="A" * 200)
+
+        assert len(note.title) <= 120
+
+    async def test_pipeline_strips_surrounding_quotes(self):
+        note = await self._run_auto_title_case(llm_title='"Quoted Title"')
+
+        assert note.title == "Quoted Title"
+
+    async def test_pipeline_handles_missing_title_key(self):
+        note = await self._run_auto_title_case(include_title=False)
+
+        assert note.title is None
+
+    async def test_pipeline_handles_empty_string_title(self):
+        note = await self._run_auto_title_case(llm_title="  ")
+
+        assert note.title is None
 
 
 # ---------------------------------------------------------------------------

@@ -2,7 +2,7 @@
 
 > **Chronological log of what's been done.** New work appends to the end. Use this to verify "we already did X" before re-doing.
 
-**Last updated:** 2026-06-04 (Round 33 SHIPPED: phrase signal + strong-single-anchor path — fixes "Film Meetup didn't link" reproducer)
+**Last updated:** 2026-06-04 (Round 34 SHIPPED: auto-titles + Brain View title-as-label + mobile long-press tooltip)
 
 ---
 
@@ -2001,3 +2001,67 @@ Round 32 added composite scoring (sem + tag + title) but missed two cases:
 
 See ``DECISIONS.md`` § 22as for the design rationale (why body-only
 phrase set, why a two-path qualifier, why max() for the stored score).
+---
+
+## Round 34 — Auto-titles + Brain View label + mobile long-press (2026-06-04) — SHIPPED
+
+User feedback after Round 33: (a) notes default to "Untitled note" -- the
+AI already understands the note enough to extract tags, category, summary
+-- it should generate a meaningful title too. (b) Brain View has no
+equivalent of hover on mobile. (c) Brain View currently shows a truncated
+AI summary below each dot; the title would be more useful.
+
+### What shipped
+
+1. **Auto-title in the pipeline** (closes the "Untitled note" papercut).
+   - ``backend/app/pipeline/processor.py::_auto_tag_and_categorize``
+     extends its JSON prompt to also produce a ``title`` field
+     (3-8 words capturing the essence). After the LLM call, the title
+     is set only when ``note.title`` is currently None/empty -- never
+     overwriting a user-edited title. Truncated at 120 chars to match
+     the DB column.
+   - ``backend/scripts/backfill_titles.py`` (NEW) is the companion
+     CLI: ``--email <user>`` retroactively titles every untitled note
+     for that user using a lighter title-only LLM call. ``--dry-run``
+     + ``--limit-notes N`` for safety. Idempotent.
+
+2. **Brain View shows the title below dots** (not the AI summary).
+   ``frontend/src/pages/BrainViewPage.tsx`` ``nodeCanvasObject`` now
+   renders ``n.title ?? n.label`` (falling back to the legacy summary
+   if a note hasn't been titled yet). Backend already sends ``title``
+   in ``GraphNode`` (insights.py).
+
+3. **Mobile long-press tooltip in Brain View**.
+   ``frontend/src/pages/BrainViewPage.tsx``:
+   - Fixed a latent bug where ``hoverPos`` was destructured from
+     ``useState`` WITHOUT its setter, so the tooltip always rendered
+     at ``(0, 0)`` regardless of which node was hovered. Tooltip now
+     follows the cursor.
+   - New ``pointerdown`` / ``pointermove`` / ``pointerup`` listeners
+     detect a 500ms long-press (with a 10px movement tolerance) on
+     touch / pen pointer types only -- mouse already has hover, no
+     need. When the timer fires, ``screen2GraphCoords`` converts the
+     touch coords to graph coords, finds the nearest node within a
+     10-unit radius, and sets ``hoverNode``. ``navigator.vibrate(15)``
+     gives a brief haptic confirmation when the API is available.
+   - Tooltip lost ``pointer-events-none`` (it was blocking touches).
+     A small close ``X`` button only visible on coarse-pointer devices
+     (``[@media(pointer:coarse)]:flex``) dismisses the tooltip on tap.
+
+### Files changed
+- ``backend/app/pipeline/processor.py`` -- ``_auto_tag_and_categorize`` JSON prompt + title persistence.
+- ``backend/scripts/backfill_titles.py`` (NEW) -- companion CLI.
+- ``backend/tests/test_pipeline.py`` -- 6 new title tests.
+- ``backend/tests/test_backfill_titles.py`` (NEW) -- backfill tests.
+- ``frontend/src/pages/BrainViewPage.tsx`` -- title-as-label, hoverPos fix, long-press handler, dismiss button.
+- ``frontend/src/__tests__/BrainViewPage.test.tsx`` -- new Round 34 tests + mock now exposes ``screen2GraphCoords``.
+- ``PROGRESS.md``, ``DECISIONS.md`` sec 22at, ``HANDOFF.md``.
+
+### Validation
+TBD after sub-agents complete.
+
+### Deploy + backfill
+- Backend redeploy via CI ``Deploy Backend``.
+- After live: ``az containerapp exec --command "python -m scripts.backfill_titles --email iamkarths@gmail.com"`` so existing notes get retroactive AI titles.
+
+See ``DECISIONS.md`` sec 22at for design rationale.

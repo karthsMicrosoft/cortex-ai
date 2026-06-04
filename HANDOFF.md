@@ -2,8 +2,8 @@
 
 > **Read this first.** This document briefs an incoming agent (Claude / Copilot / Aider / human) on the state of the project so work can resume without context loss.
 
-**Last updated:** 2026-06-04 (Round 33 SHIPPED: literal-phrase signal + strong-single-anchor path — fixes "shared 'Film Meetup' phrase didn't link" reproducer)
-**Status:** Live on Azure. Phases 1–7 shipped. Brain View now 2D (Round 27). Canvas feature gated behind `VITE_FEATURE_CANVAS` env var (Round 28). Per-user local data isolation enforced (Round 29). Voice-note audio playback CSP fixed (Round 30) + Azure Blob CORS rules added so iOS Safari can also play audio (Round 31). Bulk import script for Google Keep + Notion shipped (`docs/IMPORT.md`). Composite-scored auto-linking with phrase signal + two-path qualifier (Round 32–33 / §§ 22ar–22as). Library has instant text search. Safari mobile bfcache blank screen fixed. Backend: **1028 tests passing** (+11 Round 33). Frontend: ~858 tests, TypeScript clean.
+**Last updated:** 2026-06-04 (Round 34 SHIPPED: pipeline auto-titles, Brain View shows title under dots, mobile long-press tooltip — see DECISIONS § 22at)
+**Status:** Live on Azure. Phases 1–7 shipped. Brain View now 2D (Round 27) with title-as-label + mobile long-press (Round 34). Canvas feature gated behind `VITE_FEATURE_CANVAS` env var (Round 28). Per-user local data isolation enforced (Round 29). Voice-note audio playback CSP fixed (Round 30) + Azure Blob CORS rules added so iOS Safari can also play audio (Round 31). Bulk import script for Google Keep + Notion shipped (`docs/IMPORT.md`). Composite-scored auto-linking with phrase signal + two-path qualifier (Round 32–33 / §§ 22ar–22as). Pipeline now auto-generates meaningful titles for new notes (Round 34 / § 22at). Library has instant text search. Safari mobile bfcache blank screen fixed. Backend: **1039 tests passing** (+11 Round 34). Frontend: ~864 tests, TypeScript clean.
 
 ---
 

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { ArrowLeft, Layout, Loader2, RefreshCw, Search } from 'lucide-react';
+import { ArrowLeft, Layout, Loader2, RefreshCw, Search, X } from 'lucide-react';
 import ForceGraph2D from 'react-force-graph-2d';
 import { apiGet } from '../api/client';
 import { addCanvasItem, createCanvas } from '../api/canvas';
@@ -113,6 +113,9 @@ function categoryPositionForce(axis: 'x' | 'y', strength: number) {
 
 const NODE_RADIUS = 5;
 const LABEL_MAX_CHARS = 20;
+const LONG_PRESS_MS = 500;
+const MOVE_TOLERANCE = 10;
+const HIT_RADIUS = 10;
 
 function truncateLabel(text: string): string {
   return text.length > LABEL_MAX_CHARS ? `${text.slice(0, LABEL_MAX_CHARS)}…` : text;
@@ -126,6 +129,7 @@ type ForceGraph2DRef = {
   d3Force: (name: string, force?: unknown) => { strength?: (v: number) => void } | undefined;
   d3ReheatSimulation: () => void;
   zoomToFit: (durationMs?: number, paddingPx?: number) => void;
+  screen2GraphCoords?: (x: number, y: number) => { x: number; y: number };
 };
 
 export default function BrainViewPage(): React.ReactElement {
@@ -143,7 +147,9 @@ export default function BrainViewPage(): React.ReactElement {
   const [since, setSince] = useState<string>('');
 
   const [hoverNode, setHoverNode] = useState<FGNode | null>(null);
-  const [hoverPos] = useState<{ x: number; y: number }>({ x: 0, y: 0 });
+  const [hoverPos, setHoverPos] = useState<{ x: number; y: number }>({ x: 0, y: 0 });
+  const longPressTimer = useRef<number | null>(null);
+  const pressStart = useRef<{ x: number; y: number; time: number } | null>(null);
 
   const [isExporting, setIsExporting] = useState(false);
   const [exportError, setExportError] = useState<string | null>(null);
@@ -224,6 +230,89 @@ export default function BrainViewPage(): React.ReactElement {
   }, [graphData, search, activeCategories]);
 
   const graphVisible = !isLoading && !error && filteredGraph.nodes.length > 0;
+
+  // Track pointer position so the tooltip follows the cursor / last touch.
+  useEffect(() => {
+    const el = containerRef.current;
+    if (!el) return;
+    function onMove(e: PointerEvent) {
+      const rect = el!.getBoundingClientRect();
+      setHoverPos({ x: e.clientX - rect.left, y: e.clientY - rect.top });
+    }
+    el.addEventListener('pointermove', onMove);
+    return () => el.removeEventListener('pointermove', onMove);
+  }, []);
+
+  // Long-press on touch/pen shows the same tooltip as desktop hover.
+  useEffect(() => {
+    const el = containerRef.current;
+    if (!el) return;
+
+    function clear() {
+      if (longPressTimer.current) {
+        window.clearTimeout(longPressTimer.current);
+        longPressTimer.current = null;
+      }
+      pressStart.current = null;
+    }
+
+    function onDown(e: PointerEvent) {
+      if (e.pointerType === 'mouse') return;
+      pressStart.current = { x: e.clientX, y: e.clientY, time: Date.now() };
+      if (longPressTimer.current) window.clearTimeout(longPressTimer.current);
+      longPressTimer.current = window.setTimeout(() => {
+        const fg = fgRef.current;
+        if (!fg?.screen2GraphCoords || !pressStart.current) return;
+        const rect = el!.getBoundingClientRect();
+        const screen = {
+          x: pressStart.current.x - rect.left,
+          y: pressStart.current.y - rect.top,
+        };
+        const graph = fg.screen2GraphCoords(screen.x, screen.y);
+        let nearest: FGNode | null = null;
+        let minDist = Infinity;
+        for (const n of filteredGraph.nodes as FGNode[]) {
+          const dx = (n.x ?? 0) - graph.x;
+          const dy = (n.y ?? 0) - graph.y;
+          const d = Math.sqrt(dx * dx + dy * dy);
+          if (d < HIT_RADIUS && d < minDist) {
+            minDist = d;
+            nearest = n;
+          }
+        }
+        if (nearest) {
+          setHoverNode(nearest);
+          setHoverPos(screen);
+          if (typeof navigator !== 'undefined' && 'vibrate' in navigator) {
+            try {
+              navigator.vibrate(15);
+            } catch {
+              // Ignore unsupported vibration implementations.
+            }
+          }
+        }
+      }, LONG_PRESS_MS);
+    }
+
+    function onMove(e: PointerEvent) {
+      if (!pressStart.current) return;
+      const dx = e.clientX - pressStart.current.x;
+      const dy = e.clientY - pressStart.current.y;
+      if (Math.sqrt(dx * dx + dy * dy) > MOVE_TOLERANCE) clear();
+    }
+
+    el.addEventListener('pointerdown', onDown);
+    el.addEventListener('pointerup', clear);
+    el.addEventListener('pointercancel', clear);
+    el.addEventListener('pointermove', onMove);
+    return () => {
+      el.removeEventListener('pointerdown', onDown);
+      el.removeEventListener('pointerup', clear);
+      el.removeEventListener('pointercancel', clear);
+      el.removeEventListener('pointermove', onMove);
+      clear();
+    };
+  }, [filteredGraph.nodes]);
 
   // ---- Configure d3 forces for brain-region layout ----
   useEffect(() => {
@@ -324,7 +413,7 @@ export default function BrainViewPage(): React.ReactElement {
       ctx.globalAlpha = 1;
 
       // Truncated label below the node, scaled so it stays legible at any zoom.
-      const label = truncateLabel(n.label ?? '');
+      const label = truncateLabel(n.title ?? n.label ?? '');
       if (label) {
         const fontSize = Math.max(10 / globalScale, 2);
         ctx.font = `${fontSize}px sans-serif`;
@@ -525,9 +614,18 @@ export default function BrainViewPage(): React.ReactElement {
             {hoverNode && (
               <div
                 data-testid="node-tooltip"
-                className="pointer-events-none absolute max-w-xs rounded-md border border-slate-700 bg-slate-900/95 p-3 text-xs text-slate-200 shadow-lg"
+                className="absolute z-10 max-w-xs rounded-md border border-slate-700 bg-slate-900/95 p-3 text-xs text-slate-200 shadow-lg"
                 style={{ left: hoverPos.x + 12, top: hoverPos.y + 12 }}
               >
+                <button
+                  type="button"
+                  aria-label="Close tooltip"
+                  data-testid="node-tooltip-close"
+                  onClick={() => setHoverNode(null)}
+                  className="absolute right-1 top-1 hidden h-5 w-5 items-center justify-center rounded text-slate-400 hover:text-slate-200 motion-safe:transition-colors md:!hidden [@media(pointer:coarse)]:flex"
+                >
+                  <X className="h-3 w-3" aria-hidden="true" />
+                </button>
                 <div className="font-semibold text-slate-100">
                   {hoverNode.title ?? hoverNode.label}
                 </div>

@@ -17,7 +17,8 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, waitFor } from '@testing-library/react';
+import { act, render, screen, waitFor } from '@testing-library/react';
+import { readFileSync } from 'node:fs';
 import React from 'react';
 import { MemoryRouter } from 'react-router-dom';
 
@@ -43,6 +44,7 @@ vi.mock('react-force-graph-2d', () => {
       d3Force: () => ({ strength: () => {} }),
       d3ReheatSimulation: () => {},
       zoomToFit: () => {},
+      screen2GraphCoords: (x: number, y: number) => ({ x, y }),
     }));
 
     return React.createElement('div', {
@@ -367,10 +369,23 @@ describe('PERF-10 — BrainViewPage must be lazy-loaded', () => {
 
 import { fireEvent } from '@testing-library/react';
 
-const POLISH_GRAPH = {
+type TestGraphData = {
+  nodes: Array<{
+    id: string;
+    label: string;
+    category: string;
+    title?: string;
+    summary?: string;
+    x?: number;
+    y?: number;
+  }>;
+  links: Array<{ source: string; target: string; score: number; link_type?: string }>;
+};
+
+const POLISH_GRAPH: TestGraphData = {
   nodes: [
-    { id: 'n1', label: 'Jazz scales', category: 'Music', title: 'Jazz scales', summary: 'Practice notes about modes' },
-    { id: 'n2', label: 'Morning run', category: 'Fitness', title: 'Morning run', summary: '5k around the lake' },
+    { id: 'n1', label: 'AI summary for jazz', category: 'Music', title: 'Jazz scales', summary: 'Practice notes about modes' },
+    { id: 'n2', label: 'AI summary for run', category: 'Fitness', title: 'Morning run', summary: '5k around the lake' },
     { id: 'n3', label: 'Reading list', category: 'Learning', title: 'Reading list', summary: 'Books to read' },
   ],
   links: [
@@ -380,13 +395,13 @@ const POLISH_GRAPH = {
   ],
 };
 
-function setupPolishFetch(captureUrls?: string[]) {
+function setupPolishFetch(captureUrls?: string[], graphData: TestGraphData = POLISH_GRAPH) {
   vi.stubGlobal(
     'fetch',
     vi.fn().mockImplementation((url: string) => {
       captureUrls?.push(url);
       if (url.includes('insights/graph')) {
-        return Promise.resolve({ ok: true, status: 200, json: async () => POLISH_GRAPH });
+        return Promise.resolve({ ok: true, status: 200, json: async () => graphData });
       }
       return Promise.resolve({ ok: true, status: 200, json: async () => ({}) });
     }),
@@ -489,6 +504,11 @@ describe('BrainViewPage polish — PR 6.2 (Round 18)', () => {
     expect(parseFloat(wiki.getAttribute('data-link-width') ?? '0')).toBeGreaterThanOrEqual(2);
   });
 
+  it('renders title as the canvas label when present', () => {
+    const source = readFileSync('src/pages/BrainViewPage.tsx', 'utf8');
+    expect(source).toContain("const label = truncateLabel(n.title ?? n.label ?? '')");
+  });
+
   it('node hover shows tooltip with title + summary', async () => {
     renderBrainViewPage();
     await waitFor(() => expect(screen.getByTestId('node-n1')).toBeInTheDocument());
@@ -499,8 +519,68 @@ describe('BrainViewPage polish — PR 6.2 (Round 18)', () => {
       const tooltip = screen.getByTestId('node-tooltip');
       expect(tooltip).toBeInTheDocument();
       expect(tooltip.textContent).toMatch(/Jazz scales/);
+      expect(tooltip.textContent).not.toMatch(/AI summary for jazz/);
       expect(tooltip.textContent).toMatch(/Practice notes about modes/);
       expect(tooltip.textContent).toMatch(/Music/);
+    });
+  });
+
+  it('mobile long press shows tooltip', async () => {
+    setupPolishFetch(undefined, {
+      nodes: [
+        {
+          id: 'long-press-node',
+          label: 'Mobile long press summary',
+          category: 'Ideas',
+          title: 'Mobile long press title',
+          summary: 'Shown after holding a touch point',
+          x: 24,
+          y: 32,
+        },
+      ],
+      links: [],
+    });
+    renderBrainViewPage();
+    await waitFor(() => expect(screen.getByTestId('node-long-press-node')).toBeInTheDocument());
+
+    const graphContainer = screen.getByTestId('force-graph').parentElement as HTMLElement;
+    const makePointerEvent = (type: string) => {
+      const event = new Event(type, { bubbles: true });
+      Object.defineProperties(event, {
+        pointerType: { value: 'touch' },
+        clientX: { value: 24 },
+        clientY: { value: 32 },
+      });
+      return event;
+    };
+
+    vi.useFakeTimers();
+    try {
+      fireEvent(graphContainer, makePointerEvent('pointerdown'));
+      act(() => {
+        vi.advanceTimersByTime(500);
+      });
+      const tooltip = screen.getByTestId('node-tooltip');
+      expect(tooltip).toBeInTheDocument();
+      expect(tooltip.textContent).toMatch(/Mobile long press title/);
+      expect(tooltip.textContent).toMatch(/Shown after holding a touch point/);
+      fireEvent(graphContainer, makePointerEvent('pointerup'));
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('tooltip close button dismisses the tooltip', async () => {
+    renderBrainViewPage();
+    await waitFor(() => expect(screen.getByTestId('node-n1')).toBeInTheDocument());
+
+    fireEvent.mouseEnter(screen.getByTestId('node-n1'));
+    await waitFor(() => expect(screen.getByTestId('node-tooltip')).toBeInTheDocument());
+
+    fireEvent.click(screen.getByTestId('node-tooltip-close'));
+
+    await waitFor(() => {
+      expect(screen.queryByTestId('node-tooltip')).toBeNull();
     });
   });
 

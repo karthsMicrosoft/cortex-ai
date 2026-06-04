@@ -2,7 +2,7 @@
 
 > **Architecture decisions and deviations from spec, with rationale.** When refactoring, preserve these unless the underlying constraint has changed.
 
-**Last updated:** 2026-06-04 (Round 33 SHIPPED: phrase signal + strong-single-anchor path — see § 22as)
+**Last updated:** 2026-06-04 (Round 34 SHIPPED: auto-titles + Brain View title label + mobile long-press — see § 22at)
 
 ---
 
@@ -1563,3 +1563,93 @@ two-path qualifier for the yes/no link decision.
   reported.
 - Tunable per-user thresholds. Some users may want stricter
   linking; the current single-tenant deploy doesn't need this.
+
+---
+
+## § 22at -- Auto-titles + Brain View label + mobile long-press (Round 34, 2026-06-04)
+
+**Decision:** (1) Have the AI pipeline auto-generate a 3-8 word title for
+every new note, never overwriting user-edited titles. (2) Show the title
+(not the AI summary) below dots in Brain View. (3) Long-press on a node
+in Brain View on touch devices shows the same tooltip that hover shows
+on desktop.
+
+### Why auto-title
+- The pipeline already extracts tags + category + mood + summary in a
+  single GPT-4o-mini call. Title is one more line of JSON -- cost-
+  neutral.
+- "Untitled note" in the Library and Brain View is a papercut --
+  the user has to mentally parse the first line of body text every
+  time. A 3-8 word AI title is enough to recognise the note at a
+  glance.
+- The title becomes a strong signal for the Round 33 phrase signal
+  in semantic-link scoring -- two notes both auto-titled "Film
+  Meetup notes" share a Title-Case n-gram that boosts their link.
+
+### Why "never overwrite user-edited titles"
+- Once a human touches the title, it's a deliberate label. Re-
+  running the pipeline (e.g. after a content edit -- Round 32 G1
+  fix) must NOT clobber the user's choice. Check is simple:
+  ``if not (note.title and note.title.strip()): note.title = ...``.
+- No "auto vs manual" flag on the column; the check is the contract.
+
+### Why 3-8 words / 120 char cap
+- 120 chars matches the existing DB column constraint (PR 6.0).
+- 3-8 words is the empirically-good range for "memorable but
+  specific". Shorter -> too generic ("Meeting"). Longer -> doesn't
+  fit in Brain View label / Library card without truncation.
+
+### Why title (not summary) below Brain View dots
+- Title is short, designed to be a label. Summary is 1-2 sentences,
+  designed to be readable detail.
+- Below a 5-pixel dot, all you have room for is a label. Truncating
+  a summary loses the meaning ("Notes about the AI demo at the F..."
+  -> useless). A title fits naturally.
+- Summary stays in the hover/long-press tooltip where there's room.
+
+### Why long-press for mobile (not tap)
+- Tap is already taken: ``onNodeClick`` navigates to the note
+  detail. That's the most-used action and should stay one-tap.
+- Long-press is the universal touch equivalent of hover (matches
+  iOS contextual menus, Android tooltips, etc.).
+- 500ms is the iOS-default long-press threshold -- familiar muscle
+  memory.
+- 10px movement tolerance accounts for finger jitter; bigger
+  movements clear the timer (the user is scrolling/panning, not
+  long-pressing).
+- Mouse pointer events are filtered out (``e.pointerType ===
+  'mouse'``) because mouse already has hover -- avoids weird
+  double-tooltip on devices with both.
+
+### Why ``navigator.vibrate(15)``
+- Brief haptic confirmation that the long-press registered. iOS
+  Safari doesn't expose the Vibration API so the call is wrapped
+  in a feature check + try/catch -- no-op on iOS, friendly nudge
+  on Android.
+
+### Why drop ``pointer-events-none`` from the tooltip
+- The old tooltip was visual-only on desktop (hover dismissed on
+  mouse-out). On mobile there's no "mouse-out" -- the tooltip
+  needs a way to be dismissed. We added a small ``X`` close
+  button that only renders on coarse-pointer devices via the
+  Tailwind arbitrary variant ``[@media(pointer:coarse)]:flex``.
+- This means the tooltip can now intercept clicks on desktop too
+  (a regression risk for the old "click-through to canvas"
+  behaviour). Mitigation: tooltip is anchored 12px offset from
+  the cursor so it doesn't sit ON the node the user is hovering.
+
+### What we did NOT change
+- ``Note.title`` schema is unchanged (already ``Optional[str]
+  max_length=120`` from PR 6.0).
+- The Library page doesn't yet show titles for notes that have
+  them -- it still leads with the truncated content. That's a
+  separate UX choice (Library is a chronological feed; title
+  could be added later if useful).
+- The summary remains in the API + the hover/long-press
+  tooltip. We only changed the canvas-label rendering.
+
+### Future option (not done now)
+- "Re-generate title" button on NoteDetailPage if the user wants
+  a fresh AI attempt. ``POST /api/notes/{id}/pipeline`` already
+  exists -- could be a one-line button. Deferred until users ask.
+- Title in Library cards (mentioned above).

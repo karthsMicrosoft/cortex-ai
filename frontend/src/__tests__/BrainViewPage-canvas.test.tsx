@@ -19,6 +19,7 @@ vi.mock('react-force-graph-2d', () => {
       d3Force: () => ({ strength: () => {} }),
       d3ReheatSimulation: () => {},
       zoomToFit: () => {},
+      screen2GraphCoords: (x: number, y: number) => ({ x, y }),
     }));
 
     return React.createElement('div', {

@@ -213,9 +213,11 @@ class AIPipeline:
         logger.info("pipeline_stage_complete: organize note_id=%s", note.id)
 
     async def _auto_tag_and_categorize(self, note: Note) -> None:
-        """GPT-4o-mini JSON: extract tags, category, mood, summary, entities."""
+        """GPT-4o-mini JSON: extract title, tags, category, mood, summary, entities."""
         prompt = (
             "Analyze this note and return a JSON object with:\n"
+            "- title: a short meaningful 3-8 word title that captures the essence\n"
+            "  (e.g. \"Film Meetup notes on Lynch debate\"). NO surrounding quotes.\n"
             "- tags: array of 3-5 relevant tags (lowercase, hyphenated)\n"
             "- category: exactly one of: Music, Fitness, Journal, Ideas, Spiritual, Learning\n"
             "- mood: emotional tone (single word or short phrase)\n"
@@ -244,6 +246,14 @@ class AIPipeline:
         note.mood = result.get("mood") or None
         note.summary = result.get("summary") or None
         note.entities = result.get("entities") or []
+
+        raw_title = (result.get("title") or "").strip()
+        if raw_title.startswith('"') and raw_title.endswith('"'):
+            raw_title = raw_title[1:-1].strip()
+        if raw_title and len(raw_title) > 120:
+            raw_title = raw_title[:120]
+        if raw_title and not (note.title and note.title.strip()):
+            note.title = raw_title
 
         # Persist tags — batch upsert (PERF-01: replaces per-tag N+1 loop)
         tag_names = [

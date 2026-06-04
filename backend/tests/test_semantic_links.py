@@ -11,7 +11,9 @@ from app.services import semantic_links
 from app.services.semantic_links import (
     RelinkResult,
     composite_score,
+    extract_salient_phrases,
     passes_floor,
+    phrase_jaccard,
     rebuild_user_links,
     relink_single_note,
     tag_jaccard,
@@ -58,25 +60,162 @@ def test_title_jaccard_partial():
 
 
 def test_composite_score_weights():
-    assert composite_score(sem=1, tag=1, title=1) == 1.0
-    assert composite_score(sem=0, tag=0, title=0) == 0.0
-    assert composite_score(sem=1, tag=0, title=0) == pytest.approx(0.7)
+    # All-ones still saturates to 1.0 (weights sum to 1.0).
+    assert composite_score(sem=1, tag=1, title=1, phrase=1) == 1.0
+    assert composite_score(sem=0, tag=0, title=0, phrase=0) == 0.0
+    # Pure-semantic component contributes WEIGHT_SEMANTIC (0.55 in Round 33).
+    assert composite_score(sem=1, tag=0, title=0, phrase=0) == pytest.approx(0.55)
+    # Pure-phrase component contributes WEIGHT_PHRASE (0.20 in Round 33).
+    assert composite_score(sem=0, tag=0, title=0, phrase=1) == pytest.approx(0.20)
+    # Backwards-compat: 3-arg call (no phrase) still works, drops to 0 default.
+    assert composite_score(sem=1, tag=0, title=0) == pytest.approx(0.55)
 
 
 def test_passes_floor_semantic_anchor():
-    assert passes_floor(sem=0.7, tag=0.0, title=0.0) is True
+    # Sem floor lowered to 0.60 in Round 33.
+    assert passes_floor(sem=0.6, tag=0.0, title=0.0, phrase=0.0) is True
 
 
 def test_passes_floor_tag_anchor():
-    assert passes_floor(sem=0.0, tag=0.5, title=0.0) is True
+    assert passes_floor(sem=0.0, tag=0.5, title=0.0, phrase=0.0) is True
 
 
 def test_passes_floor_title_anchor():
-    assert passes_floor(sem=0.0, tag=0.0, title=0.5) is True
+    assert passes_floor(sem=0.0, tag=0.0, title=0.5, phrase=0.0) is True
+
+
+def test_passes_floor_phrase_anchor():
+    # Round 33: a single literal-phrase Jaccard hit (>=0.4) is enough to anchor
+    # a link, even when every other signal is zero. This is the fix for the
+    # "Film Meetup" bug — two notes that share the exact capitalized phrase
+    # link up even when their embeddings + tags differ.
+    assert passes_floor(sem=0.0, tag=0.0, title=0.0, phrase=0.4) is True
 
 
 def test_passes_floor_below_all():
-    assert passes_floor(sem=0.3, tag=0.3, title=0.3) is False
+    assert passes_floor(sem=0.3, tag=0.3, title=0.3, phrase=0.3) is False
+
+
+def test_passes_floor_backwards_compatible_three_args():
+    # Older callers that don't pass `phrase` get the conservative answer.
+    assert passes_floor(sem=0.65, tag=0.0, title=0.0) is True
+    assert passes_floor(sem=0.0, tag=0.0, title=0.0) is False
+
+
+# ---------------------------------------------------------------------------
+# Round 33: phrase signal — extract_salient_phrases + phrase_jaccard
+# ---------------------------------------------------------------------------
+
+
+def test_extract_salient_phrases_picks_multiword_capitalized():
+    # "Film Meetup" appears in the body verbatim — the user's bug-report case.
+    content = "Went to the Film Meetup last night and we discussed Project Cortex briefly."
+    phrases = extract_salient_phrases(content)
+    assert "film meetup" in phrases
+    assert "project cortex" in phrases
+
+
+def test_extract_salient_phrases_skips_single_word_caps():
+    # "Today" / "I" at sentence start would be noisy; we only capture 2+ words.
+    content = "Today I went to Park. Yesterday it Rained."
+    phrases = extract_salient_phrases(content)
+    assert "today" not in phrases
+    assert "park" not in phrases
+    assert "rained" not in phrases
+
+
+def test_extract_salient_phrases_includes_hashtags():
+    content = "Random thoughts about #film-meetup and #project_cortex"
+    phrases = extract_salient_phrases(content)
+    assert "film-meetup" in phrases
+    assert "project_cortex" in phrases
+
+
+def test_extract_salient_phrases_includes_title_and_tags():
+    # Round 33: title + tags are NOT included in the phrase set (they're
+    # already captured by title_jaccard / tag_jaccard). Confirm the kwargs
+    # are accepted for backwards compat but ignored.
+    phrases = extract_salient_phrases(
+        content="body without capitalized phrases",
+        title="My Big Idea",
+        tag_names={"film-meetup", "weekend"},
+    )
+    assert "my big idea" not in phrases
+    assert "film-meetup" not in phrases
+    assert "weekend" not in phrases
+
+
+def test_extract_salient_phrases_title_kwarg_ignored():
+    # Even when the body is empty, title shouldn't pollute the phrase set.
+    phrases = extract_salient_phrases(
+        content=None, title="Sun Morning Run", tag_names={"a"},
+    )
+    assert phrases == set()
+
+
+def test_extract_salient_phrases_lowercases():
+    content = "FILM MEETUP was great"
+    # All-caps multi-word still matches (regex allows any alphanumeric after
+    # the leading uppercase). The match is lowercased on the way into the
+    # phrase set so casing variants ("Film Meetup", "FILM MEETUP", "film
+    # meetup") all collapse to the same key.
+    phrases = extract_salient_phrases(content)
+    assert phrases == {"film meetup"}
+
+
+def test_extract_salient_phrases_handles_empty_inputs():
+    assert extract_salient_phrases(None) == set()
+    assert extract_salient_phrases("") == set()
+    assert extract_salient_phrases("   ") == set()
+    assert extract_salient_phrases(None, title=None, tag_names=set()) == set()
+
+
+def test_phrase_jaccard_basic():
+    assert phrase_jaccard(set(), set()) == 0.0
+    assert phrase_jaccard({"film meetup"}, {"film meetup"}) == 1.0
+    assert phrase_jaccard({"a", "b"}, {"a"}) == pytest.approx(0.5)
+    # Disjoint phrases (no overlap whatsoever) -> 0
+    assert phrase_jaccard({"film meetup"}, {"sunday run"}) == 0.0
+
+
+def test_film_meetup_repro_two_notes_link():
+    """Reproduces the user's bug-report case from Round 33.
+
+    Two notes both contain the literal phrase 'Film Meetup' in their bodies
+    but talk about wildly different ideas. Pre-Round-33 the cosine
+    similarity stayed below the 0.65 floor, the tags went 'movies' vs
+    'social-life', and no link was created. Round 33: the phrase signal
+    catches the explicit shared phrase and anchors the link via the
+    strong-single-signal path (phrase >= STRONG_PHRASE).
+    """
+    from app.services.semantic_links import link_qualifies
+
+    a_content = "At the Film Meetup we argued whether Lynch is overrated. Took notes."
+    a_phrases = extract_salient_phrases(a_content)
+    b_content = "Saw an AI demo at the Film Meetup. Could use it for my journaling app."
+    b_phrases = extract_salient_phrases(b_content)
+
+    assert "film meetup" in a_phrases
+    assert "film meetup" in b_phrases
+
+    # Body-only phrase extraction is NOT diluted by unrelated title/tag
+    # tokens, so the Jaccard reflects the actual literal-phrase overlap.
+    phrase = phrase_jaccard(a_phrases, b_phrases)
+    assert phrase >= 0.5, (
+        f"Two notes whose only shared multi-word phrase is 'Film Meetup' "
+        f"must produce phrase_jaccard >= 0.5. Got {phrase}."
+    )
+
+    # The strong-single-signal path (Path B) is what fires here:
+    # phrase >= STRONG_PHRASE (0.5) is enough on its own. Composite alone
+    # would be 0.55*0.4 + 0.20*1.0 = 0.42, below the 0.55 threshold —
+    # without Path B the link would still be missed.
+    sem = 0.4
+    composite = composite_score(sem=sem, tag=0.0, title=0.0, phrase=phrase)
+    assert link_qualifies(
+        sem=sem, tag=0.0, title=0.0, phrase=phrase,
+        composite=composite, threshold=0.55,
+    ) is True, "Strong-single-signal anchor must fire for the Film Meetup case."
 
 
 def _embedding_for_db(db_session):
@@ -152,7 +291,7 @@ async def test_relink_single_note_semantic_peer_creates_link(db_session, monkeyp
     peer = await _make_note(db_session, user, title="Peer", embedding=embedding)
 
     async def fake_candidates(db, note, **kwargs):
-        return [{"id": peer.id, "title": peer.title, "sem": 0.9}]
+        return [{"id": peer.id, "title": peer.title, "content": None, "sem": 0.9}]
 
     monkeypatch.setattr(semantic_links, "_fetch_vector_candidates", fake_candidates)
 
@@ -163,7 +302,10 @@ async def test_relink_single_note_semantic_peer_creates_link(db_session, monkeyp
     assert result.updated == 0
     assert len(links) == 1
     assert links[0].target_note_id == peer.id
-    assert links[0].similarity_score == pytest.approx(0.63)
+    # Round 33: when the single-signal anchor path wins, the stored score
+    # is max(composite, all signals) so pure-cosine 0.9 still surfaces as
+    # ~0.9 in Brain View, not the lower composite of 0.495.
+    assert links[0].similarity_score == pytest.approx(0.9)
 
 
 @pytest.mark.asyncio
@@ -176,8 +318,8 @@ async def test_relink_single_note_only_floor_passing_peer_linked(db_session, mon
 
     async def fake_candidates(db, note, **kwargs):
         return [
-            {"id": floor_peer.id, "title": floor_peer.title, "sem": 0.4},
-            {"id": no_floor_peer.id, "title": no_floor_peer.title, "sem": 0.4},
+            {"id": floor_peer.id, "title": floor_peer.title, "content": None, "sem": 0.4},
+            {"id": no_floor_peer.id, "title": no_floor_peer.title, "content": None, "sem": 0.4},
         ]
 
     monkeypatch.setattr(semantic_links, "_fetch_vector_candidates", fake_candidates)
@@ -198,7 +340,7 @@ async def test_relink_single_note_rerun_upserts_updates_existing(db_session, mon
     sem_value = 0.9
 
     async def fake_candidates(db, note, **kwargs):
-        return [{"id": peer.id, "title": peer.title, "sem": sem_value}]
+        return [{"id": peer.id, "title": peer.title, "content": None, "sem": sem_value}]
 
     monkeypatch.setattr(semantic_links, "_fetch_vector_candidates", fake_candidates)
 
@@ -212,7 +354,8 @@ async def test_relink_single_note_rerun_upserts_updates_existing(db_session, mon
     assert second.created == 0
     assert second.updated == 1
     assert len(links) == 1
-    assert links[0].similarity_score == pytest.approx(0.665)
+    # Round 33: max(composite, sem) wins for strong-single-signal links.
+    assert links[0].similarity_score == pytest.approx(0.95)
 
 
 @pytest.mark.asyncio

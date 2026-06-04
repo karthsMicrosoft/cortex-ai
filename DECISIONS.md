@@ -2,7 +2,7 @@
 
 > **Architecture decisions and deviations from spec, with rationale.** When refactoring, preserve these unless the underlying constraint has changed.
 
-**Last updated:** 2026-06-02 (Round 32 SHIPPED: composite-scored auto-linking — see § 22ar)
+**Last updated:** 2026-06-04 (Round 33 SHIPPED: phrase signal + strong-single-anchor path — see § 22as)
 
 ---
 
@@ -1485,3 +1485,81 @@ note_id)`. The three new tests in `test_note_update.py` pin it.
 - Cross-encoder reranker (eg. `BAAI/bge-reranker`) for the top-N
   shortlist. Big quality win, but adds latency + cost. Defer until
   we have user feedback on whether composite alone is enough.
+
+---
+
+## § 22as -- Literal-phrase signal + strong-single-anchor path (Round 33, 2026-06-04)
+
+**Decision:** Add a 4th composite signal -- ``phrase_jaccard`` over
+body-only salient phrases (multi-word capitalized + #hashtag) -- AND
+introduce a "strong single signal" alternate qualifier path so a
+single overwhelming signal can anchor a link regardless of composite
+score.
+
+### Why this matters
+Round 32 composite (``0.7*sem + 0.2*tag + 0.1*title``) missed the
+user's exact bug: 5+ notes all literally containing "Film Meetup" in
+the body but each riffing on a different idea (the meetup was the
+setting, not the topic). Cosine ~0.4-0.55 (below R32's 0.65 floor),
+tags ~zero overlap, titles ~zero overlap -> composite ~0.3 -> no
+link. The user (correctly) expected that a phrase explicitly repeated
+across notes is a strong intent signal -- "I'm tagging these in my
+own words".
+
+### Why body-only phrases (no title / no tags in the phrase set)
+- Title + tags already have their own composite signals; including
+  them in the phrase set dilutes the Jaccard.
+- Concretely: with title + tags in the set, the user's Film Meetup
+  notes produced phrase Jaccard ~0.16 (one shared "film meetup" out
+  of 6 distinct phrases) -- below any reasonable floor.
+- With body-only extraction, the same notes produce Jaccard ~0.5+
+  (one shared phrase out of 1-2 phrases each) -- safely above the
+  STRONG_PHRASE anchor of 0.50.
+
+### Why a strong-single-signal path (not just lowering the threshold)
+- Threshold of 0.55 was chosen to keep composite-driven links honest
+  -- you should see ~half of the signal "agree" before the system
+  asserts a connection.
+- But "single overwhelming signal" is a legitimate link too: a
+  perfect cosine of 0.9 between two notes IS evidence enough. Pre-
+  R33 (with R32 weights) pure-sem 0.9 gave composite 0.63 -- above
+  threshold. Post-R33 weight rebalance (sem drops 0.7 -> 0.55 to
+  make room for phrase), pure-sem 0.9 gives composite 0.495 -- BELOW
+  threshold. Without Path B that's a regression.
+- Path B values per signal (STRONG_SEMANTIC=0.75, STRONG_TAG=0.70,
+  STRONG_TITLE=0.70, STRONG_PHRASE=0.50) are tuned to be higher
+  than the floor but lower than 1.0 so they require a "obviously
+  related" level on at least one axis.
+
+### Why phrase is body-only AND extract_salient_phrases keeps title/tags as kwargs
+Backwards compatibility: R32 callers (the pipeline + relink-all
+endpoint) already passed title/tags. We accept them but ignore them
+in the new implementation, documented in the docstring. This avoids
+breaking the signature contract for any external caller while
+fixing the dilution bug.
+
+### Score stored as max(composite, sem, tag, title, phrase)
+The ``similarity_score`` column drives sort order in Brain View and
+in the BacklinksPanel. If we stored the composite (0.495 for pure-
+sem 0.9), strongly-related notes would rank lower than the actual
+strength of their connection. ``max()`` preserves the intuitive
+"highly similar notes appear first" UX while still using the
+two-path qualifier for the yes/no link decision.
+
+### What we did NOT change
+- ``note_links`` schema unchanged (no migration needed).
+- The pgvector pre-filter is unchanged (still top-20 cosine
+  candidates).
+- The 5-min rate limit on ``POST /api/notes/relink-all`` is
+  unchanged.
+- The pipeline still delegates to ``relink_single_note`` (R32
+  factoring). Only the scoring evolved.
+- Frontend untouched.
+
+### Future option (not done now)
+- Cross-encoder reranker on the top-K shortlist. Big quality win
+  but adds latency + cost. The composite + phrase + strong-anchor
+  combination should already cover the obvious cases the user
+  reported.
+- Tunable per-user thresholds. Some users may want stricter
+  linking; the current single-tenant deploy doesn't need this.

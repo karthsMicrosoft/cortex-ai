@@ -2,7 +2,7 @@
 
 > **Chronological log of what's been done.** New work appends to the end. Use this to verify "we already did X" before re-doing.
 
-**Last updated:** 2026-06-02 (Round 32 SHIPPED: composite-scored auto-linking for new + imported notes — `/api/notes/relink-all` + `backfill_semantic_links.py` + import auto-relink + G1 PUT fix)
+**Last updated:** 2026-06-04 (Round 33 SHIPPED: phrase signal + strong-single-anchor path — fixes "Film Meetup didn't link" reproducer)
 
 ---
 
@@ -1914,3 +1914,90 @@ TBD after sub-agents complete -- placeholder.
 - **G5 in-app "Re-link this note" button** -- `POST /api/notes/{id}/pipeline` already exists. UI button is a P3 nice-to-have.
 
 See `DECISIONS.md` § 22ar for full rationale on the composite-scoring weights and the rate-limit choice.
+---
+
+## Round 33 — Literal-phrase signal + strong-single-anchor path (2026-06-04) — SHIPPED
+
+User-reported reproducer: "I literally used 'Film Meetup' in a diverse set of
+individual notes. But upon creation or updation, the links were not seen in
+the Brain view. Auto tagging worked great, auto categorization worked well.
+But all those ideas were related to the same meetup -- shouldn't they be
+linked based on the explicit 'Film Meetup' word?"
+
+Round 32 added composite scoring (sem + tag + title) but missed two cases:
+1. Two notes that share a literal phrase only in the BODY (not title, not
+   auto-tag) -- "Film Meetup" appearing across 5 notes that the auto-tagger
+   labelled "movies" / "social-life" / "weekend-plans" / "tech" / "journal".
+   Pure cosine sat around 0.4-0.55, tag Jaccard was 0, title Jaccard was 0,
+   composite ~0.3 -> no link.
+2. Pure-cosine-strong notes (sem >= 0.75 alone) were also at risk after I
+   redistributed the composite weights -- a single overwhelming signal could
+   end up scoring below the 0.55 threshold.
+
+### What shipped
+
+1. **New phrase signal** in ``app/services/semantic_links.py``:
+   - ``extract_salient_phrases(content)`` regex-extracts multi-word
+     capitalized phrases (``\b[A-Z][a-zA-Z0-9'\-]+(?:\s+[A-Z][a-zA-Z0-9'\-]+)+\b``)
+     and ``#hashtag-style`` tokens from the body. Deliberately ignores title
+     + tags (those have their own signals; folding them in dilutes the
+     literal-phrase Jaccard).
+   - ``phrase_jaccard`` over the body-only phrase sets.
+   - Added to composite: ``0.55*sem + 0.15*tag + 0.10*title + 0.20*phrase``
+     (weights sum to 1.0).
+   - New ``FLOOR_PHRASE = 0.40`` so a phrase Jaccard ≥ 0.4 can anchor a link
+     via the composite path.
+
+2. **Strong-single-signal anchor path (new)** — ``link_qualifies()``:
+   - Path A (composite): ``composite >= threshold`` AND any per-component
+     floor passes. The existing R32 logic, just with the 4th signal.
+   - **Path B (strong single signal)**: ANY of ``sem >= 0.75``,
+     ``tag >= 0.70``, ``title >= 0.70``, ``phrase >= 0.50`` qualifies the
+     link regardless of composite. Catches both the "overwhelming
+     cosine match alone" case AND the "Film Meetup phrase alone" case.
+   - Score stored in ``note_links.similarity_score`` is now
+     ``max(composite, sem, tag, title, phrase)`` so Brain View's sort order
+     stays honest for single-signal-driven links.
+
+3. **Lowered ``FLOOR_SEMANTIC`` from 0.65 -> 0.60** so the composite path
+   admits one more class of "good but not great" cosine matches once the
+   phrase signal supplements it.
+
+### Files changed
+- ``backend/app/services/semantic_links.py`` — new phrase extraction, new
+  ``link_qualifies``, new ``has_strong_single_signal``, weight rebalance,
+  candidate SQL now also returns ``content`` so phrases can be extracted.
+- ``backend/tests/test_semantic_links.py`` — 11 new tests:
+  ``test_extract_salient_phrases_picks_multiword_capitalized``,
+  ``_skips_single_word_caps``, ``_includes_hashtags``,
+  ``_includes_title_and_tags`` (verifies kwargs are ignored),
+  ``_title_kwarg_ignored``, ``_lowercases``, ``_handles_empty_inputs``,
+  ``test_phrase_jaccard_basic``, ``test_passes_floor_phrase_anchor``,
+  ``test_passes_floor_backwards_compatible_three_args``, and the
+  centrepiece ``test_film_meetup_repro_two_notes_link`` that pins the
+  user's exact bug. Existing composite/floor tests updated for the new
+  weights + 4-arg signature.
+
+### Validation
+- ``test_semantic_links.py``: 29/29 pass (was 18 in R32).
+- Backend full suite: **1028 passed / 8 skipped / 1 xfailed** (R32
+  baseline 1017 -> +11 net new tests; no regressions).
+- Frontend ``tsc --noEmit`` clean (no frontend changes).
+
+### Deploy + retroactive backfill
+- Backend redeploy via the existing ``Deploy Backend`` GH Actions
+  workflow (auto-triggered on push to main).
+- After the new revision goes live, run
+  ``python -m scripts.backfill_semantic_links --email <user>`` to
+  retroactively rebuild links for existing notes. The new phrase signal
+  will retroactively connect the "Film Meetup" cluster.
+
+### What we did NOT change
+- ``note_links`` schema is unchanged. Composite + single-signal scores
+  still land in the existing ``similarity_score`` float column.
+- The pipeline's per-note ``_link_similar_notes`` still delegates to the
+  service; only the scoring math evolved.
+- ``import_notes.py`` auto-relink hook unchanged.
+
+See ``DECISIONS.md`` § 22as for the design rationale (why body-only
+phrase set, why a two-path qualifier, why max() for the stored score).

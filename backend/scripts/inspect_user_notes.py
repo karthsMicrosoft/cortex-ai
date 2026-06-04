@@ -41,15 +41,15 @@ async def main(email: str, pattern: str | None) -> int:
             results = (
                 await db.execute(
                     select(Note.id, Note.title, Note.processing_status,
-                           func.length(Note.embedding))
+                           Note.embedding.is_not(None).label("has_emb"))
                     .where(Note.user_id == user.id)
                     .where(or_(Note.content.ilike(f"%{pattern}%"),
                                Note.title.ilike(f"%{pattern}%")))
                 )
             ).all()
             print(f"Notes matching {pattern!r} ({len(results)}):")
-            for nid, title, status, emb_len in results:
-                emb_note = "yes" if emb_len else "MISSING"
+            for nid, title, status, has_emb in results:
+                emb_note = "yes" if has_emb else "MISSING"
                 title_disp = (title or "(no title)")[:60]
                 print(f"  status={status:12}  emb={emb_note}  title={title_disp}  id={nid}")
     return 0

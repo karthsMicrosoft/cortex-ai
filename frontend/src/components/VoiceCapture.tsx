@@ -1,4 +1,4 @@
-import { forwardRef, useCallback, useImperativeHandle, useRef, useState, type ForwardedRef } from 'react';
+import { useCallback, useRef, useState } from 'react';
 import { Mic, MicOff } from 'lucide-react';
 import { v4 as uuidv4 } from 'uuid';
 import { db } from '../db';
@@ -129,10 +129,6 @@ interface VoiceCaptureProps {
   mode?: 'file' | 'streaming';
 }
 
-export interface VoiceCaptureHandle {
-  start: () => Promise<void>;
-}
-
 // ---------------------------------------------------------------------------
 // Component
 // ---------------------------------------------------------------------------
@@ -152,9 +148,8 @@ export interface VoiceCaptureHandle {
  *  6. If WS failed (error/close while recording), fall back to POST /api/voice/upload
  *     and surface a degraded-mode toast.
  */
-function VoiceCaptureInner(
+export function VoiceCapture(
   { onNoteCreated, mode = 'streaming' }: VoiceCaptureProps,
-  ref: ForwardedRef<VoiceCaptureHandle>,
 ): React.ReactElement {
   const accessToken = useAuthStore((s) => s.accessToken);
 
@@ -417,14 +412,6 @@ function VoiceCaptureInner(
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [accessToken, onNoteCreated, mode, _openWs, _closeWs]);
 
-  useImperativeHandle(ref, () => ({
-    start: async () => {
-      if (!hookRef.current.isRecording && !selfRecordingRef.current) {
-        await handleToggle();
-      }
-    },
-  }), [handleToggle]);
-
   return (
     <>
       {/* Live transcription display — shown when transcript is available (§ 2.6) */}
@@ -456,8 +443,5 @@ function VoiceCaptureInner(
     </>
   );
 }
-
-export const VoiceCapture = forwardRef<VoiceCaptureHandle, VoiceCaptureProps>(VoiceCaptureInner);
-VoiceCapture.displayName = 'VoiceCapture';
 
 export default VoiceCapture;

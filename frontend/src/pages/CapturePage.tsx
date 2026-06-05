@@ -1,10 +1,10 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { useNavigate, useSearchParams } from 'react-router-dom';
+import { useNavigate } from 'react-router-dom';
 import { v4 as uuidv4 } from 'uuid';
 import { Image as ImageIcon, Send, Loader2, Mic, Type, Link as LinkIcon } from 'lucide-react';
 import { db } from '../db';
 import type { LocalNote } from '../db';
-import { VoiceCapture, type VoiceCaptureHandle } from '../components/VoiceCapture';
+import { VoiceCapture } from '../components/VoiceCapture';
 import { SyncIndicator } from '../components/SyncIndicator';
 import { ImagePreview } from '../components/ImagePreview';
 import { UrlClipForm } from '../components/UrlClipForm';
@@ -85,43 +85,14 @@ async function resizeImage(blob: Blob): Promise<Blob> {
  */
 export function CapturePage(): React.ReactElement {
   const navigate = useNavigate();
-  const [searchParams] = useSearchParams();
   const [textContent, setTextContent] = useState('');
   const [extractedDeadline, setExtractedDeadline] = useState<ExtractedDeadline | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
-  const voiceRef = useRef<VoiceCaptureHandle>(null);
-  const autostartStartedRef = useRef(false);
 
   // ---------------------------------------------------------------------- tab state (PR 5.3)
   type CaptureTab = 'text' | 'voice' | 'image' | 'url';
   const [activeTab, setActiveTab] = useState<CaptureTab>('text');
-
-  const autostart = searchParams.get('autostart') === '1';
-
-  // Round 36 — "Use record screen as launcher" workaround for iOS Shortcuts
-  // when the user's default browser is NOT Safari (e.g., Edge / Chrome). iOS
-  // Shortcuts' "Open URL" hands the URL to the default browser; the only
-  // browser-agnostic way to launch the installed PWA is the "Open App" action,
-  // which doesn't accept a URL. We make `/` auto-start the mic when this
-  // localStorage flag is set so "Open App" → Cortex behaves identically to
-  // tapping the Action Button with Safari as default.
-  const launcherRecordEnabled = (() => {
-    try {
-      return typeof window !== 'undefined'
-        && window.localStorage?.getItem('cortex_launcher_record') === '1';
-    } catch {
-      return false;
-    }
-  })();
-  const shouldAutostart = autostart || launcherRecordEnabled;
-
-  useEffect(() => {
-    if (!shouldAutostart || autostartStartedRef.current) return;
-    autostartStartedRef.current = true;
-    setActiveTab('voice');
-    void voiceRef.current?.start();
-  }, [shouldAutostart]);
 
   useEffect(() => {
     setExtractedDeadline(
@@ -493,7 +464,7 @@ export function CapturePage(): React.ReactElement {
       </main>
 
       {/* FAB */}
-      <VoiceCapture ref={shouldAutostart ? voiceRef : undefined} onNoteCreated={() => navigate('/library')} />
+      <VoiceCapture onNoteCreated={() => navigate('/library')} />
     </div>
   );
 }

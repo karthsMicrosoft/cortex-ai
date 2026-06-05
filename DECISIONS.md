@@ -2,7 +2,7 @@
 
 > **Architecture decisions and deviations from spec, with rationale.** When refactoring, preserve these unless the underlying constraint has changed.
 
-**Last updated:** 2026-06-05 (Round 35 SHIPPED: reminders + tasks + iOS Shortcuts deep link — DECISIONS § 22au)
+**Last updated:** 2026-06-05 (Round 37 SHIPPED: reverted Shortcuts code; reminders/tasks unchanged — § 22av)
 
 ---
 
@@ -1719,3 +1719,29 @@ User picked LLM-only first, then switched to hybrid + capture-UI preview after I
 - Infra: +16 guard-rail tests.
 
 See `PROGRESS.md` Round 35 + `docs/REMINDERS.md` + `docs/SHORTCUTS.md` for details.
+
+---
+
+## sec 22av -- Round 37 -- Revert iOS Shortcuts deep link + launcher toggle
+
+**Context:** User feedback: "Im not interested in the shortcuts at all if its not truely 1 click. So feel free to revert anything implemented for shortcuts to work."
+
+**Why true 1-tap was unachievable on iOS with non-Safari default browser:**
+- `Open URLs` action always uses the default browser. Edge / Chrome don't launch installed PWAs.
+- `Open App` action launches the PWA but cannot pass query parameters.
+- iOS exposes no JavaScript signal to distinguish a home-screen tap from a Shortcuts launch (`document.referrer`, `window.history.length`, `display-mode`, `performance.navigation.type` are all identical for both).
+- Therefore: the launcher-record toggle could give 1-tap from Action Button BUT auto-recorded on every home-screen tap. User correctly judged the trade-off unacceptable.
+
+**Decision:** Revert all Shortcuts-specific code. Keep the entire reminders/tasks/push feature untouched.
+
+**What this means for users:**
+- Voice capture still works as before via the home-page floating mic FAB (1 tap from anywhere inside Cortex).
+- Reminders, tasks, deadline pill, push notifications -- all still shipping.
+- The Settings `Auto-record on every launch` toggle is gone.
+- No iOS Shortcut integration exists. Users who want quick access can rely on the home-screen Cortex icon (1 tap to open, 1 tap on the FAB to record).
+
+**Orphan localStorage key:** Devices that toggled the R36 flag have `cortex_launcher_record` lingering in localStorage. No code reads it post-revert. Harmless until natural cache eviction or browser data wipe.
+
+**Tests preserved:** R35's deadline extraction, DeadlinePill, TasksPage, NoteDetailPage task panel, Library deadline pill, push services, notifier services, reminders dispatcher -- all still passing. Frontend test count: 945 -> 943 (-2 autostart, -3 launcher subsumed into 7 net removed but 5 of those collapsed). TypeScript clean.
+
+See `PROGRESS.md` Round 37.

@@ -133,35 +133,6 @@ export default function SettingsPage(): React.ReactElement {
   const [pushMessage, setPushMessage] = useState<{ kind: 'ok' | 'err'; text: string } | null>(null);
   const isIos = typeof navigator !== 'undefined' && /iPad|iPhone|iPod/.test(navigator.userAgent);
 
-  // ------------------------------------------------------------------ launcher (Round 36)
-  // Workaround for iOS Shortcuts when the user's default browser isn't Safari:
-  // "Open URL" hands the URL to the default browser (e.g. Edge), which doesn't
-  // know about the installed PWA. The browser-agnostic launch path is the
-  // Shortcuts "Open App" action — but it can't pass query params. This flag
-  // makes CapturePage auto-start the mic whenever it mounts at "/" so
-  // "Open App" → Cortex gives a true one-tap recording experience.
-  const [launcherRecord, setLauncherRecord] = useState<boolean>(() => {
-    try {
-      return typeof window !== 'undefined'
-        && window.localStorage?.getItem('cortex_launcher_record') === '1';
-    } catch {
-      return false;
-    }
-  });
-
-  function handleLauncherRecordToggle(): void {
-    setLauncherRecord((prev) => {
-      const next = !prev;
-      try {
-        if (next) window.localStorage.setItem('cortex_launcher_record', '1');
-        else window.localStorage.removeItem('cortex_launcher_record');
-      } catch {
-        // Storage unavailable (private mode / quota) — keep in-memory state only.
-      }
-      return next;
-    });
-  }
-
   useEffect(() => {
     let cancelled = false;
     async function loadPushStatus(): Promise<void> {
@@ -289,28 +260,6 @@ export default function SettingsPage(): React.ReactElement {
               title={pushCaption ?? undefined}
               onChange={() => { void handleReminderToggle(); }}
               className="mt-1 h-5 w-10 accent-indigo-500 disabled:opacity-50"
-            />
-          </div>
-
-          {/* Round 36 — launcher-record workaround for non-Safari default browsers */}
-          <div className="flex items-start justify-between gap-4 pt-3 border-t border-slate-800">
-            <div className="space-y-1">
-              <label htmlFor="launcher-record" className="text-sm font-medium text-slate-100">
-                Use record screen as launcher
-              </label>
-              <p className="text-xs text-slate-400">
-                When ON, opening Cortex (from the home screen, Action Button, or Shortcuts
-                "Open App") goes straight to recording. Useful if your iOS default browser
-                isn't Safari — pair with an "Open App → Cortex" Shortcut instead of "Open URL".
-              </p>
-            </div>
-            <input
-              id="launcher-record"
-              type="checkbox"
-              role="switch"
-              checked={launcherRecord}
-              onChange={handleLauncherRecordToggle}
-              className="mt-1 h-5 w-10 accent-indigo-500"
             />
           </div>
         </section>

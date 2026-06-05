@@ -2,7 +2,7 @@
 
 > **Chronological log of what's been done.** New work appends to the end. Use this to verify "we already did X" before re-doing.
 
-**Last updated:** 2026-06-05 (Round 36 SHIPPED: iOS Shortcuts works with non-Safari default browser via launcher-record toggle)
+**Last updated:** 2026-06-05 (Round 37 SHIPPED: reverted Shortcuts deep link + launcher toggle; reminders/tasks/push unchanged)
 
 ---
 
@@ -2144,3 +2144,52 @@ User reported the Action Button Shortcut opens the deep link in Edge (their defa
 
 ### Privacy
 - Toggle is localStorage-only. Never syncs to the server.
+
+---
+
+## Round 37 (2026-06-05) -- Revert Shortcuts deep link + launcher toggle
+
+### Why
+User: "Im not interested in the shortcuts at all if its not truely 1 click. So feel free to revert anything implemented for shortcuts to work."
+
+The Shortcuts path could not deliver true 1-tap on iOS when the user's default browser is anything other than Safari (their default is Edge). iOS Shortcuts' `Open URLs` always uses the default browser, which doesn't know about installed PWAs. The `Open App` workaround is browser-agnostic but can't pass a URL, so we'd need either the launcher-record toggle (which auto-records on every launch including home-screen taps -- surprise risk) or a 2-tap flow (Open App + tap mic FAB). Neither was true 1-tap.
+
+### What reverted
+- Removed `?autostart=1` handling from `frontend/src/pages/CapturePage.tsx`.
+- Removed the `Use record screen as launcher` / `Auto-record on every launch` Settings toggle from `frontend/src/pages/SettingsPage.tsx`.
+- Removed `VoiceCaptureHandle` interface + `forwardRef` + `useImperativeHandle` wrapper from `frontend/src/components/VoiceCapture.tsx`. `VoiceCapture` is back to a plain function component.
+- Deleted `frontend/src/__tests__/CapturePage-autostart.test.tsx` (4 tests).
+- Removed the launcher-record `describe` block from `frontend/src/__tests__/SettingsPage-push.test.tsx` (3 tests).
+- Deleted `docs/SHORTCUTS.md`.
+- Removed README.md reference to `docs/SHORTCUTS.md`.
+
+### What is kept (NOT reverted)
+Everything from Round 35's reminders + tasks feature:
+- `due_at` / `done_at` / `priority` / `recurring` / `reminder_sent_at` columns on notes.
+- `DeadlinePill` component (preview + editable modes).
+- Tasks page at `/tasks`, NoteDetail task panel, Library card pill.
+- Backend tasks API, push subscription API, notifier abstractions.
+- Container Apps Job dispatcher + reminders service.
+- Backend Python `deadline_extractor` + frontend TS `dateExtractor` (still used for capture-time pill).
+- Settings `Enable reminder notifications` toggle.
+- Docs `REMINDERS.md` (untouched).
+
+### Files changed
+- `frontend/src/components/VoiceCapture.tsx` -- revert forwardRef wrapper.
+- `frontend/src/pages/CapturePage.tsx` -- remove useSearchParams import, autostart effect, voiceRef, launcher localStorage check, conditional ref on `<VoiceCapture>`.
+- `frontend/src/pages/SettingsPage.tsx` -- remove launcher state, handler, JSX block.
+- `frontend/src/__tests__/CapturePage-autostart.test.tsx` -- deleted.
+- `frontend/src/__tests__/SettingsPage-push.test.tsx` -- remove launcher-record describe block.
+- `docs/SHORTCUTS.md` -- deleted.
+- `README.md` -- remove SHORTCUTS.md reference.
+- `PROGRESS.md`, `DECISIONS.md` sec 22av, `HANDOFF.md`.
+
+### Note on orphan localStorage key
+Any device that toggled the R36 `cortex_launcher_record` flag will still have that key in localStorage. Harmless -- no code reads it after this revert. Will eventually be cleared on browser data wipe.
+
+### Validation
+- `npx tsc --noEmit` clean.
+- Affected unit tests: 70/70 pass (CapturePage 24, VoiceCapture 16, SettingsPage 21, SettingsPage-push 9).
+
+### Deploy
+CI auto-deploys on push.

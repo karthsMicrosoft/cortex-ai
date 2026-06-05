@@ -110,7 +110,7 @@ async def backfill(
             misses = [n for n in notes if n.due_at is None]
             logger.info("LLM pass over %d regex-miss notes", len(misses))
 
-            pipeline = AIPipeline(db, get_openai_client())
+            pipeline = AIPipeline(get_openai_client(), db)
             for note in misses:
                 try:
                     await pipeline._auto_tag_and_categorize(note)

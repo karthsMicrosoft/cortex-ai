@@ -53,6 +53,11 @@ function renderAt(path: string) {
 describe('CapturePage autostart', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    try {
+      window.localStorage.removeItem('cortex_launcher_record');
+    } catch {
+      // ignore
+    }
   });
 
   it('starts voice capture when autostart=1', async () => {
@@ -64,5 +69,19 @@ describe('CapturePage autostart', () => {
     renderAt('/');
     await new Promise((resolve) => setTimeout(resolve, 0));
     expect(startMock).not.toHaveBeenCalled();
+  });
+
+  it('starts voice capture when launcher-record flag is set (no query param)', async () => {
+    window.localStorage.setItem('cortex_launcher_record', '1');
+    renderAt('/');
+    await waitFor(() => expect(startMock).toHaveBeenCalledTimes(1));
+  });
+
+  it('does not double-fire when both flag and query param are set', async () => {
+    window.localStorage.setItem('cortex_launcher_record', '1');
+    renderAt('/?autostart=1');
+    await waitFor(() => expect(startMock).toHaveBeenCalledTimes(1));
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    expect(startMock).toHaveBeenCalledTimes(1);
   });
 });

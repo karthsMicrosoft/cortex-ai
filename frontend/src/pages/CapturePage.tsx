@@ -99,12 +99,29 @@ export function CapturePage(): React.ReactElement {
 
   const autostart = searchParams.get('autostart') === '1';
 
+  // Round 36 — "Use record screen as launcher" workaround for iOS Shortcuts
+  // when the user's default browser is NOT Safari (e.g., Edge / Chrome). iOS
+  // Shortcuts' "Open URL" hands the URL to the default browser; the only
+  // browser-agnostic way to launch the installed PWA is the "Open App" action,
+  // which doesn't accept a URL. We make `/` auto-start the mic when this
+  // localStorage flag is set so "Open App" → Cortex behaves identically to
+  // tapping the Action Button with Safari as default.
+  const launcherRecordEnabled = (() => {
+    try {
+      return typeof window !== 'undefined'
+        && window.localStorage?.getItem('cortex_launcher_record') === '1';
+    } catch {
+      return false;
+    }
+  })();
+  const shouldAutostart = autostart || launcherRecordEnabled;
+
   useEffect(() => {
-    if (!autostart || autostartStartedRef.current) return;
+    if (!shouldAutostart || autostartStartedRef.current) return;
     autostartStartedRef.current = true;
     setActiveTab('voice');
     void voiceRef.current?.start();
-  }, [autostart]);
+  }, [shouldAutostart]);
 
   useEffect(() => {
     setExtractedDeadline(
@@ -476,7 +493,7 @@ export function CapturePage(): React.ReactElement {
       </main>
 
       {/* FAB */}
-      <VoiceCapture ref={autostart ? voiceRef : undefined} onNoteCreated={() => navigate('/library')} />
+      <VoiceCapture ref={shouldAutostart ? voiceRef : undefined} onNoteCreated={() => navigate('/library')} />
     </div>
   );
 }

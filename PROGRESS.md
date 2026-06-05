@@ -2,7 +2,7 @@
 
 > **Chronological log of what's been done.** New work appends to the end. Use this to verify "we already did X" before re-doing.
 
-**Last updated:** 2026-06-05 (Round 35 SHIPPED: reminders + tasks + iOS Shortcuts deep link)
+**Last updated:** 2026-06-05 (Round 36 SHIPPED: iOS Shortcuts works with non-Safari default browser via launcher-record toggle)
 
 ---
 
@@ -2118,3 +2118,29 @@ See ``DECISIONS.md`` sec 22at for design rationale.
 - Optional LLM pass: add `--include-llm` for fuzzy phrasings.
 
 See `DECISIONS.md` sec 22au for design rationale.
+
+---
+
+## Round 36 (2026-06-05) -- iOS Shortcuts works with non-Safari default browser
+
+### Why
+User reported the Action Button Shortcut opens the deep link in Edge (their default browser) instead of the installed Cortex PWA. Root cause: iOS Shortcuts' `Open URLs` action ALWAYS hands the URL to the default browser, and only Safari knows about home-screen PWAs. Edge / Chrome / etc. open the URL as a regular webpage.
+
+### What shipped
+- **`Use record screen as launcher` Settings toggle.** Persists to `localStorage.cortex_launcher_record`. When ON, `CapturePage` treats every mount at `/` as if `?autostart=1` were present, so opening Cortex (via home-screen icon, Action Button via `Open App`, anything) auto-starts the mic.
+- **Shortcuts `Open App` recipe.** Documented as the browser-agnostic path. `Open App` lists every installed app including home-screen PWAs, so it launches Cortex directly without going through any browser.
+- **`docs/SHORTCUTS.md` rewritten** with two paths: Path A (Safari default → `Open URLs` + `?autostart=1`) and Path B (non-Safari → toggle + `Open App`). Troubleshooting expanded.
+- **Bonus fix:** the original deep-link URL in `docs/SHORTCUTS.md` was `/record?autostart=1` but no `/record` route exists -- the actual URL is `/?autostart=1` (CapturePage is mounted at `/`). Corrected.
+
+### Files changed
+- `frontend/src/pages/CapturePage.tsx` -- `shouldAutostart = autostart || launcherRecordEnabled`; localStorage read wrapped in try/catch for private-mode resilience.
+- `frontend/src/pages/SettingsPage.tsx` -- new toggle in the Reminders section, persists to `localStorage.cortex_launcher_record`.
+- `frontend/src/__tests__/CapturePage-autostart.test.tsx` -- +2 cases (launcher flag fires autostart; double-trigger guard).
+- `frontend/src/__tests__/SettingsPage-push.test.tsx` -- +3 cases for the launcher toggle (init / persist / clear).
+- `docs/SHORTCUTS.md` -- full rewrite for two-path setup + URL correction.
+
+### Validation
+- Frontend: 16/16 R35+R36 targeted tests pass. TypeScript clean.
+
+### Privacy
+- Toggle is localStorage-only. Never syncs to the server.

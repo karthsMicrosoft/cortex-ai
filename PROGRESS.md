@@ -2,7 +2,7 @@
 
 > **Chronological log of what's been done.** New work appends to the end. Use this to verify "we already did X" before re-doing.
 
-**Last updated:** 2026-06-05 (Round 37 SHIPPED: reverted Shortcuts deep link + launcher toggle; reminders/tasks/push unchanged)
+**Last updated:** 2026-06-05 (Round 39 SHIPPED: fix LLM hallucinating past dates + use local TZ for deadline extraction)
 
 ---
 
@@ -2227,3 +2227,52 @@ See `docs/REMINDERS.md` plus the Round 38 plan appendix (`~/.copilot/session-sta
 2. Settings -> Reminders -> tap **Enable reminder notifications** -> tap **Allow** when iOS prompts.
 3. Create a note like `test push by tonight`.
 4. At the due time the every-minute cron picks it up and a push notification arrives.
+
+---
+
+## Round 39 (2026-06-05) -- Fix LLM hallucinating dates + use local TZ for deadline extraction
+
+### Bug report
+User: created voice note `Remind me today at 3:50pm to send an email to myself` -> got assigned `Oct 3, 2023 8:50am`.
+
+### Two root causes
+1. **Regex extractor only matched `by ...` phrasing.** `Remind me today at 3:50pm` had no `by` keyword, so it fell through to the LLM safety net.
+2. **The LLM safety net got no date context.** gpt-4o-mini's training cutoff is ~2023, so when asked "extract due_at" without a "today is N" anchor, it hallucinated something from its training era. The hour math (`3:50pm` -> `8:50am` UTC) confirms it also got the timezone wrong (subtracted offset instead of adding).
+3. **Both regex extractor + pipeline were hardcoded to `tz=UTC`** instead of the user's local TZ.
+
+### Fixes shipped
+- **Regex patterns added** to `backend/app/services/deadline_extractor.py` for the natural voice phrasing without `by`:
+  - `today at H:Mam|pm` / `at H:Mam|pm today`
+  - `tomorrow at H:Mam|pm` / `at H:Mam|pm tomorrow`
+  - Bare `today` (without time anchor) -> end of day 23:59
+- **New `settings.cortex_default_tz`** (env `CORTEX_DEFAULT_TZ`, default `UTC`). Set to `America/Los_Angeles` on both `cortexks-api` and `cortexks-reminders` via `az containerapp update`.
+- **Pipeline `_auto_tag_and_categorize` now passes `datetime.now(ZoneInfo(tz_name))` and the TZ name** to the regex extractor.
+- **LLM prompt now leads with `Current date/time: <ISO> (<tz>)`** so the model has anchor context for relative phrases. Also instructs: "Never invent a date from the past unless the note explicitly mentions one."
+
+### Files changed
+- `backend/app/services/deadline_extractor.py` (new patterns + bare-today fallback)
+- `backend/app/pipeline/processor.py` (TZ-aware `now`, date-aware LLM prompt)
+- `backend/app/config.py` (+`cortex_default_tz` setting)
+- `backend/tests/test_deadline_extractor.py` (+6 new cases; class `TestRound39TodayTomorrowAtTime`)
+- `backend/scripts/cleanup_past_due_at.py` (NEW, one-off remediation -- not needed for this user; 0 hallucinated values found)
+- `backend/scripts/inspect_recent_notes.py` (NEW, diagnostic)
+- `PROGRESS.md` (this section), `HANDOFF.md`
+
+### Validation
+- 89/89 pytest pass (test_deadline_extractor + test_pipeline_due_extraction + test_pipeline).
+- Live API revision: `cortexks-api--ci1780700727` (deployed via CI).
+- `CORTEX_DEFAULT_TZ=America/Los_Angeles` env confirmed on both API + job.
+- Local smoke (with PST anchor): 5/5 phrasings now extract correctly:
+  - "Remind me today at 3:50pm" -> 2026-06-05 15:50 PST
+  - "today at 3:50pm send email" -> 2026-06-05 15:50 PST
+  - "at 3:50pm today" -> 2026-06-05 15:50 PST
+  - "tomorrow at 9am" -> 2026-06-06 09:00 PST
+  - "remind me today" -> 2026-06-05 23:59 PST
+
+### Cleanup
+- Ran `scripts.cleanup_past_due_at --email iamkarths@gmail.com --dry-run --cutoff 2099-01-01`: 0 matches. The "Oct 3 2023" note the user saw is not actually persisted in the DB (most likely the voice note's offline sync queue hadn't flushed, or the user was looking at a transient view). No DB remediation needed.
+
+### What user should do
+1. Reload Cortex on iPhone (force-refresh the service worker if needed).
+2. Create a fresh voice note like "Remind me today at 4:30pm to test the new fix."
+3. After a few seconds the pipeline completes -> the editable DeadlinePill on the note's detail page should show today's date at 4:30pm PST.

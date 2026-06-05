@@ -2,7 +2,7 @@
 
 > **Living document.** Captures what we're building, what's done, what's next. Update as work progresses.
 
-**Last updated:** 2026-05-28 (Round 27 planned: Brain View 3D→2D rewrite — see DECISIONS.md § 22am)
+**Last updated:** 2026-06-05 (Round 40 PLANNED: privacy hardening — A docs/PRIVACY.md + C account-delete; see § 6 P5)
 
 ---
 
@@ -230,6 +230,39 @@ End-to-end happy path to validate before declaring "done":
 ### Open ops follow-ups (post-Round 20, user-runs)
 - ~~Import the workbook JSON into App Insights via `az portal workbook create`~~ ✅ Done 2026-05-14 (Round 23).
 - ~~Wire the cost-rate alert (>0.50 USD/hr → cortex-alerts-ag) via `az monitor metrics alert create`~~ ✅ Done 2026-05-14 (Round 23).
+
+### P5 — Privacy hardening (Round 40, planned 2026-06-05)
+
+User question (2026-06-05): "How safe and secure are notes saved using this app? You are easily able to read all the notes. Isn't it a privacy concern?"
+
+**Honest current state:** Cortex is **as secure as any single-tenant cloud app you own**, but is NOT zero-knowledge. The server reads plaintext note content for AI processing. Anyone with admin RBAC on the Azure subscription (= you, and tools you've delegated to like the AI agent running with your CLI creds) can read everything. Per-user isolation, HTTPS, Azure encryption-at-rest, JWT auth, and client-side cache wipe on sign-out are all in place. Azure OpenAI / Speech / Vision DO see content during the pipeline but contractually do NOT train on it.
+
+**Decision (user-approved 2026-06-05): implement A + C only. Defer B/D/E indefinitely.**
+
+19. **`docs/PRIVACY.md` transparency doc (A)** — single source of truth describing:
+   - Encryption posture (in-transit ✅, at-rest ✅, application-level ❌, E2EE ❌)
+   - Who CAN read your notes (you, anyone with Azure RBAC, Microsoft operators, Azure OpenAI/Speech/Vision contractually)
+   - Who CANNOT (other Cortex users, internet attackers, search bots)
+   - Threat model: protected against (sniffing, cross-user leak, stolen device after sign-out) vs not (lost Azure creds, cloud insider, subpoena)
+   - What the AI agent actually does with your data + how to revoke its access
+   - Settings page link to this doc
+
+20. **Self-serve account deletion (C)** — GDPR-style "permanently delete my account" button on Settings:
+   - Confirmation modal (type "DELETE" to confirm, since irreversible)
+   - Backend `DELETE /api/account` endpoint that cascading-deletes: notes, embeddings, links, tags (user-scoped), vocabulary, push subscriptions, revoked JTIs, canvases + items + edges, note_deletions tombstones, then the user row
+   - Revokes all of the user's JWTs (current access + refresh)
+   - Returns 204, client clears Dexie + caches + auth store + redirects to /register
+   - Test: full lifecycle (create user → create data → delete account → verify zero rows remain, all JWTs rejected, new sign-up with same email works clean)
+   - Estimated: ~3 hours total (1 hr backend endpoint + tests, 1 hr UI, 1 hr verification + docs)
+
+**Explicitly NOT doing this round (and probably not ever, per user):**
+- Option B (selective E2EE per-note) — too much complexity for personal use; defers AI usefulness on encrypted notes anyway.
+- Option D (full zero-knowledge rewrite) — would break every AI feature in the app; effectively a different product.
+- Option E (Azure RBAC lockdown + Key Vault audit log) — operational nice-to-have, not blocking.
+
+**When to revisit:** if Cortex ever opens to other users (multi-tenant), revisit B + E as table stakes. For single-user personal use, A + C are sufficient.
+
+Full draft of `docs/PRIVACY.md` content lives in `~/.copilot/session-state/.../plan-round40.md`.
 
 ---
 

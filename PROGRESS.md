@@ -2,7 +2,7 @@
 
 > **Chronological log of what's been done.** New work appends to the end. Use this to verify "we already did X" before re-doing.
 
-**Last updated:** 2026-06-05 (Round 39 SHIPPED: fix LLM hallucinating past dates + use local TZ for deadline extraction)
+**Last updated:** 2026-06-05 (Round 41 SHIPPED: brain icon for home-screen + apple-touch-icon link)
 
 ---
 
@@ -2276,3 +2276,42 @@ User: created voice note `Remind me today at 3:50pm to send an email to myself` 
 1. Reload Cortex on iPhone (force-refresh the service worker if needed).
 2. Create a fresh voice note like "Remind me today at 4:30pm to test the new fix."
 3. After a few seconds the pipeline completes -> the editable DeadlinePill on the note's detail page should show today's date at 4:30pm PST.
+
+---
+
+## Round 41 (2026-06-05) -- Brain icon for PWA home screen
+
+### What shipped
+- **Programmatic brain icon** in indigo gradient (#4F46E5 -> #312E81) generated via Pillow:
+  - `frontend/public/icons/icon-192.png` (192x192)
+  - `frontend/public/icons/icon-512.png` (512x512)
+  - `frontend/public/icons/icon-512-mask.png` (512x512, maskable with 12% safe-area padding)
+  - `frontend/public/icons/apple-touch-icon.png` (180x180, canonical iOS size)
+  - `frontend/public/favicon.ico` (multi-resolution 16/32/48)
+- Top-down brain design: two filled hemispheres + prominent central fissure + 3 wavy gyri per hemisphere. Reads well at 60x60 home-screen size.
+
+### rontend/index.html updates
+- Added `<link rel="apple-touch-icon" sizes="180x180" href="/icons/apple-touch-icon.png">` so iOS uses the new icon when adding to home screen (iOS uses `apple-touch-icon` over manifest icons).
+- Added iOS PWA standalone-mode meta tags:
+  - `apple-mobile-web-app-capable: yes`
+  - `apple-mobile-web-app-status-bar-style: black-translucent`
+  - `apple-mobile-web-app-title: Cortex`
+
+### Notification sound
+User asked initially, then said "fine not to add sound" after I explained the iOS PWA limitation: web push notifications on iOS use the system default sound only -- you can't bundle a custom audio file because iOS doesn't expose `Notification.sound` and doesn't allow arbitrary audio in PWA push payloads. iOS Settings -> Notifications -> Cortex -> Sound controls whether the system tone plays.
+
+### User-side step to see the new icon
+iOS does NOT refresh home-screen icons after install. To get the new brain icon:
+1. Remove the existing Cortex icon from your iPhone home screen (long-press -> Remove App -> Delete from Home Screen).
+2. Open Safari -> the Cortex URL.
+3. Share -> Add to Home Screen -> Add. The new brain icon appears.
+
+### Files changed
+- `frontend/index.html` (+5 lines for Apple touch icon link + iOS PWA meta tags)
+- `frontend/public/icons/{icon-192, icon-512, icon-512-mask, apple-touch-icon}.png` (all regenerated)
+- `frontend/public/favicon.ico` (regenerated)
+- `PROGRESS.md` (this section), `HANDOFF.md`
+
+### Validation
+- Visual preview of icon-512.png confirmed brain-recognizable shape.
+- No code changes that affect tests.

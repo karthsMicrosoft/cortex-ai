@@ -32,6 +32,7 @@ async def backfill(
     tz: str = "UTC",
 ) -> int:
     from sqlalchemy import or_, select
+    from sqlalchemy.orm import selectinload
 
     import app.database as database
     from app.models.note import Note
@@ -48,6 +49,7 @@ async def backfill(
 
         stmt = (
             select(Note)
+            .options(selectinload(Note.tags))
             .where(
                 Note.user_id == user.id,
                 Note.due_at.is_(None),

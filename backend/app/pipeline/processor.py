@@ -25,6 +25,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
+from app.config import settings
 from app.models.note import Note
 from app.pipeline.music import process_music_note
 from app.pipeline.shadow_reader import run_shadow_reader_stage
@@ -259,10 +260,21 @@ class AIPipeline:
 
     async def _auto_tag_and_categorize(self, note: Note) -> None:
         """GPT-4o-mini JSON: extract note and task metadata."""
+        # Round 39 — use the configured default timezone (PST in production)
+        # instead of UTC so phrases like "today at 3:50pm" resolve to the
+        # user's local clock, not UTC.
+        tz_name = settings.cortex_default_tz or "UTC"
+        try:
+            from zoneinfo import ZoneInfo
+            now_local = datetime.now(tz=ZoneInfo(tz_name))
+        except Exception:
+            now_local = datetime.now(tz=timezone.utc)
+            tz_name = "UTC"
+
         extracted = extract_deadline(
             note.content or "",
-            now=datetime.now(tz=timezone.utc),
-            tz="UTC",
+            now=now_local,
+            tz=tz_name,
         )
         if extracted:
             if extracted.get("due_at") is not None and _note_field_is_empty(note, "due_at"):
@@ -272,7 +284,12 @@ class AIPipeline:
             if extracted.get("recurring") is not None and _note_field_is_empty(note, "recurring"):
                 note.recurring = extracted["recurring"]
 
+        # Round 39 — give the LLM the current local date/time + TZ so it
+        # stops hallucinating dates from its training cutoff era (which is
+        # what caused "today at 3:50pm" → "Oct 3 2023 8:50am" before).
+        now_str = now_local.strftime("%Y-%m-%d %H:%M %Z")
         prompt = (
+            f"Current date/time: {now_str} ({tz_name}).\n"
             "Analyze this note and return a JSON object with:\n"
             "- title: a short meaningful 3-8 word title that captures the essence\n"
             "  (e.g. \"Film Meetup notes on Lynch debate\"). NO surrounding quotes.\n"
@@ -281,8 +298,11 @@ class AIPipeline:
             "- mood: emotional tone (single word or short phrase)\n"
             "- summary: 1-2 sentence summary\n"
             "- entities: array of {name, type} objects\n"
-            "- due_at: ISO 8601 string with offset, or null. Capture fuzzy deadlines "
-            "(\"when I land\", \"before our trip\", \"after lunch\").\n"
+            "- due_at: ISO 8601 string with the correct offset for the timezone above, "
+            "or null. Use the current date as the anchor for relative phrases "
+            "(\"today\", \"tomorrow\", \"in 2 hours\", \"this evening\", \"when I land\", "
+            "\"before our trip\"). Never invent a date from the past unless the note "
+            "explicitly mentions one.\n"
             "- priority: 1 (high), 2 (medium), 3 (low), or null\n"
             "- recurring: \"daily\", \"weekly\", or \"monthly\", or null\n\n"
             f"Note content:\n{note.content}\n\nReturn ONLY valid JSON."

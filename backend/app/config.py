@@ -48,6 +48,12 @@ class Settings(BaseSettings):
     acs_email_connection: str | None = None
     acs_email_sender: str | None = None
 
+    # Default IANA timezone for deadline extraction when the user hasn't
+    # set one (per-user TZ is a future enhancement). Used by both the regex
+    # extractor and the LLM "today is …" context. Override via env var
+    # `CORTEX_DEFAULT_TZ`.
+    cortex_default_tz: str = "UTC"
+
     model_config = {"env_file": ".env", "env_file_encoding": "utf-8", "extra": "ignore"}
 
     @field_validator("JWT_SECRET_KEY")

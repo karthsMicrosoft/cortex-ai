@@ -139,6 +139,31 @@ def _extract_due_at(text: str, now: datetime, zone: tzinfo) -> datetime | None:
     if match:
         return _parse_iso_datetime(match.group(0), zone)
 
+    # "today at 3:50pm" / "at 3:50pm today" / "remind me today at 3:50pm" —
+    # match the time-anchored "today" phrasing WITHOUT requiring the "by"
+    # keyword. Same for tomorrow. (Fixes Round 39 — voice notes like
+    # "remind me today at 3:50pm" fell through to the LLM which hallucinated
+    # a date because it didn't know what "today" was.)
+    match = re.search(rf"\btoday\s+(?:at\s+)?(?P<clock>{TIME_TOKEN})\b", text, re.IGNORECASE)
+    if match:
+        clock = _parse_time_token(match.group("clock"))
+        return _combine(now.date(), clock, zone)
+
+    match = re.search(rf"\b(?:at\s+)?(?P<clock>{TIME_TOKEN})\s+today\b", text, re.IGNORECASE)
+    if match:
+        clock = _parse_time_token(match.group("clock"))
+        return _combine(now.date(), clock, zone)
+
+    match = re.search(rf"\btomorrow\s+(?:at\s+)?(?P<clock>{TIME_TOKEN})\b", text, re.IGNORECASE)
+    if match:
+        clock = _parse_time_token(match.group("clock"))
+        return _combine(now.date() + timedelta(days=1), clock, zone)
+
+    match = re.search(rf"\b(?:at\s+)?(?P<clock>{TIME_TOKEN})\s+tomorrow\b", text, re.IGNORECASE)
+    if match:
+        clock = _parse_time_token(match.group("clock"))
+        return _combine(now.date() + timedelta(days=1), clock, zone)
+
     match = re.search(rf"\bby\s+(?P<clock>{TIME_TOKEN})\s+tomorrow\b", text, re.IGNORECASE)
     if match:
         return _combine(now.date() + timedelta(days=1), _parse_time_token(match.group("clock")), zone)
@@ -154,6 +179,12 @@ def _extract_due_at(text: str, now: datetime, zone: tzinfo) -> datetime | None:
         return _combine(now.date(), TONIGHT_TIME, zone)
 
     if re.search(r"\bby\s+today\b", text, re.IGNORECASE):
+        return _combine(now.date(), DEFAULT_TIME, zone)
+
+    # Bare "today" (without a clock anchor) → end of day. Handles voice
+    # transcripts like "remind me today to ..." where the user didn't say
+    # an explicit time but clearly meant some time today.
+    if re.search(r"\b(?:remind\s+me\s+)?today\b", text, re.IGNORECASE):
         return _combine(now.date(), DEFAULT_TIME, zone)
 
     match = re.search(

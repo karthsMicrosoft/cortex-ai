@@ -2,26 +2,45 @@
 
 > **Open work, bugs not fixed, gaps from "fully done."** Anything tagged P0/P1/P2 here is meant to be picked up by the next agent.
 
-**Last updated:** 2026-06-05 (Round 35 SHIPPED: reminders + tasks + iOS Shortcuts deep link)
+**Last updated:** 2026-06-05 (Round 38 SHIPPED: VAPID + reminders job provisioned in production)
 
 ---
 
-## 🟡 Round 35 — Operator one-time setup pending (deploy-time)
+## 🟢 Round 38 closed (2026-06-05) — VAPID + reminders Container Apps Job live
 
-Round 35 ships the reminders feature with **safe no-op notifiers** that activate the moment two sets of secrets land in Azure. Code is live; notifications are silent until:
+Round 38 finished the Round-35 operator setup. VAPID keys generated, set as secrets on `cortexks-api`, and bound to the new `cortexks-reminders` Container Apps Job (cron `* * * * *`, entrypoint `python -m scripts.dispatch_reminders`). Job smoke-tested: `dispatch_complete {found: 0, ...}` — picked up 0 due notes (correct), exited cleanly. `GET /api/push/vapid-public-key` returns the real key.
 
-1. **VAPID keys** for Web Push:
+**User-side next steps** (in the installed PWA):
+1. Settings → Reminders → tap **Enable reminder notifications** → tap **Allow** on the iOS system prompt.
+2. Create a note with a deadline ("test push by tonight").
+3. At due time, push notification arrives.
+
+See `PROGRESS.md` Round 38 for the operator gotchas discovered.
+
+---
+
+## 🟡 Still pending — Azure Communication Services Email fallback
+
+The reminders dispatcher has a clean no-op path for email when `ACS_EMAIL_CONNECTION` is unset. Push works without it. To enable the email fallback:
+
+1. Provision an Azure Communication Services Email resource + connect a sender domain (Azure-managed or your own).
+2. Grab the connection string and a sender address.
+3. Set secrets on BOTH `cortexks-api` and `cortexks-reminders`:
    ```powershell
-   web-push generate-vapid-keys
    az containerapp secret set --name cortexks-api --resource-group cortex-rg --secrets `
-     vapid-public-key=<PUBLIC> vapid-private-key=<PRIVATE> vapid-subject=mailto:admin@cortex.app
+     acs-email-connection="<CONNECTION_STRING>"
+   az containerapp job secret set --name cortexks-reminders --resource-group cortex-rg --secrets `
+     acs-email-connection="<CONNECTION_STRING>"
    ```
-   Then redeploy the Bicep so the reminders job picks up the same secrets, OR set them on the job directly.
-2. **Azure Communication Services Email** (optional fallback channel). Connection string + sender. If skipped, the email channel silently no-ops; push still works.
+4. Bind env vars on both:
+   ```powershell
+   az containerapp update --name cortexks-api --resource-group cortex-rg --set-env-vars `
+     ACS_EMAIL_CONNECTION=secretref:acs-email-connection ACS_EMAIL_SENDER=<SENDER>
+   az containerapp job update --name cortexks-reminders --resource-group cortex-rg --set-env-vars `
+     ACS_EMAIL_CONNECTION=secretref:acs-email-connection ACS_EMAIL_SENDER=<SENDER>
+   ```
 
-Once both land, the dispatcher fires reminders end-to-end. Documented in detail in `docs/REMINDERS.md`.
-
-**Severity:** P1 — feature is shipped but inactive until secrets are provisioned. Backfill (`scripts/backfill_due_dates.py`) can run safely without the secrets.
+**Severity:** P3 — optional enhancement. Push (the primary channel) is live.
 
 ---
 

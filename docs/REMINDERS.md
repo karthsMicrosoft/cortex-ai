@@ -112,7 +112,7 @@ is automatically queued.
    az containerapp secret set --name cortexks-api --resource-group cortex-rg --secrets `
      vapid-public-key=<PUBLIC> `
      vapid-private-key=<PRIVATE> `
-     vapid-subject=mailto:admin@cortex.app
+     vapid-subject=mailto:iamkarths@gmail.com
    ```
 
 3. Bind the secrets to env vars on the container revision:

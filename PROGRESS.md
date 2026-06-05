@@ -2193,3 +2193,37 @@ Any device that toggled the R36 `cortex_launcher_record` flag will still have th
 
 ### Deploy
 CI auto-deploys on push.
+
+---
+
+## Round 38 (2026-06-05) -- VAPID configured + reminders Container Apps Job provisioned
+
+### What shipped (live)
+- **VAPID key pair generated** (ephemeral, never on disk) via `py_vapid`.
+- **3 secrets on `cortexks-api`**: `vapid-public-key`, `vapid-private-key`, and indirectly `vapid-subject` (plain env var). Triggered a new API revision `cortexks-api--0000003`.
+- **`GET /api/push/vapid-public-key` now returns the real key** (verified: `{"public_key":"BNvxj_..."}`).
+- **Container Apps Job `cortexks-reminders` provisioned** via `az containerapp job create` (not Bicep). Same image as API. Cron `* * * * *`. Entrypoint `python -m scripts.dispatch_reminders`. CPU 0.25 / 0.5Gi RAM. Bound to `cortexks-env` managed environment.
+- **All required env vars wired**: `DATABASE_URL`, `AZURE_OPENAI_ENDPOINT`, `AZURE_OPENAI_API_KEY`, `AZURE_OPENAI_API_VERSION`, `JWT_SECRET_KEY`, `VAPID_PUBLIC_KEY`, `VAPID_PRIVATE_KEY`, `VAPID_SUBJECT=mailto:iamkarths@gmail.com`, `ENVIRONMENT=production`.
+- **Smoke test green**: manual `az containerapp job start` -> execution Status=Succeeded -> log `reminders.dispatch_complete {"found": 0, "claimed": 0, "sent_push": 0, "sent_email": 0, "failed": 0, "rolled": 0}`. Zero notes due, exited cleanly. Wiring confirmed.
+
+### Operator gotchas discovered (documented for next time)
+1. **`az containerapp job create --command/--args` cannot pass values that start with `-`** (the CLI's argparse intercepts them as flags). Workaround: create the job with a placeholder command, then `az containerapp job update --yaml` to patch `command: [python]` / `args: [-m, scripts.dispatch_reminders]` as proper YAML arrays.
+2. **`JWT_SECRET_KEY` is required by any container running with `ENVIRONMENT=production`** because `app/config.py::check_production_secrets` refuses to start without it -- even the dispatcher job, which never issues JWTs. Wired in as `secretref:jwt-secret-key` copied from the API container's secret.
+3. **`az containerapp job show -o yaml` redacts secret values** -- re-applying the YAML doesn't clobber the existing secrets (they stay as defined by `--secrets` flag at creation), but you can't round-trip secret VALUES through YAML edits.
+4. **`az containerapp job logs show` requires the `containerapp` preview extension** -- install via `az extension add --name containerapp`. Once installed, `--execution <name>` filters to a specific run.
+
+### Files changed
+- `PROGRESS.md` (this section), `HANDOFF.md` status line, `KNOWN_ISSUES.md` (closed VAPID half of the operator-setup P1 item).
+- No code changes.
+- Infra (Azure-side, not in repo): new `cortexks-reminders` Container Apps Job, 3 new secrets on `cortexks-api`, 3 new env vars on `cortexks-api`.
+
+### What this does NOT do
+- **ACS Email fallback** -- still no-op. If push fails or user has no subscription, no email goes out. Easy follow-up when needed: provision ACS Email resource + add 2 secrets + 2 env vars on both `cortexks-api` AND `cortexks-reminders`.
+- **Re-baseline Bicep** -- `infra/main.bicep` already declares the job correctly. Next time someone runs `az deployment group create`, it will idempotently recreate the job with the same config (VAPID + JWT secrets need to be passed as `@secure` params or the Bicep will declare them empty).
+
+### Next: user-side activation
+See `docs/REMINDERS.md` plus the Round 38 plan appendix (`~/.copilot/session-state/.../plan-round38.md`):
+1. Reload Cortex on iPhone.
+2. Settings -> Reminders -> tap **Enable reminder notifications** -> tap **Allow** when iOS prompts.
+3. Create a note like `test push by tonight`.
+4. At the due time the every-minute cron picks it up and a push notification arrives.

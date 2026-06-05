@@ -445,7 +445,6 @@ describe('NoteDetailPage — Aliases section (PR 6.4)', () => {
   });
 
   it('adds an alias and persists via updateNote after debounce', async () => {
-    vi.useFakeTimers();
     try {
       mockGetNote.mockResolvedValueOnce({
         ...SERVER_NOTE,
@@ -458,8 +457,8 @@ describe('NoteDetailPage — Aliases section (PR 6.4)', () => {
         aliases: ['Alpha', 'Gamma'],
       });
       renderPage();
-      await vi.runAllTimersAsync();
-      fireEvent.click(screen.getByRole('button', { name: /aliases/i }));
+      fireEvent.click(await screen.findByRole('button', { name: /aliases/i }));
+      vi.useFakeTimers();
       const input = screen.getByRole('textbox', { name: /add alias/i });
       fireEvent.change(input, { target: { value: 'Gamma' } });
       fireEvent.keyDown(input, { key: 'Enter' });
@@ -474,7 +473,6 @@ describe('NoteDetailPage — Aliases section (PR 6.4)', () => {
   });
 
   it('removes an alias chip and persists via updateNote', async () => {
-    vi.useFakeTimers();
     try {
       mockGetNote.mockResolvedValueOnce({
         ...SERVER_NOTE,
@@ -487,8 +485,8 @@ describe('NoteDetailPage — Aliases section (PR 6.4)', () => {
         aliases: ['Beta'],
       });
       renderPage();
-      await vi.runAllTimersAsync();
-      fireEvent.click(screen.getByRole('button', { name: /aliases/i }));
+      fireEvent.click(await screen.findByRole('button', { name: /aliases/i }));
+      vi.useFakeTimers();
       fireEvent.click(screen.getByRole('button', { name: /remove alias alpha/i }));
       await vi.advanceTimersByTimeAsync(600);
       expect(mockUpdateNote).toHaveBeenCalledWith('srv-1', {

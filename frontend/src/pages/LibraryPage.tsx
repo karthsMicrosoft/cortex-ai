@@ -3,6 +3,7 @@ import { Search, Trash2, X } from 'lucide-react';
 import { db } from '../db';
 import type { Category } from '../db';
 import { useNotes } from '../hooks/useNotes';
+import { DeadlinePill } from '../components/DeadlinePill';
 import { NoteCard } from '../components/NoteCard';
 import { SyncIndicator } from '../components/SyncIndicator';
 import { CATEGORY_COLORS } from '../utils/formatters';
@@ -275,8 +276,14 @@ export default function LibraryPage(): React.ReactElement {
         ) : (
           filteredNotes.map((note) => {
             const isSelected = selectedLocalIds.has(note.localId);
+            const hasDeadlineSignal =
+              note.due_at != null || note.priority != null || note.recurring != null;
             return (
-              <div key={note.localId} className="relative">
+              <div
+                key={note.localId}
+                data-testid={`library-note-card-${note.localId}`}
+                className={['relative', note.done_at ? 'opacity-60' : ''].join(' ')}
+              >
                 {selectMode && (
                   <div className="absolute right-2 top-2 z-10 flex items-center justify-center">
                     <input
@@ -293,7 +300,18 @@ export default function LibraryPage(): React.ReactElement {
                 <NoteCard
                   note={note}
                   onPress={selectMode ? toggleSelect : undefined}
-                />
+                >
+                  {hasDeadlineSignal ? (
+                    <DeadlinePill
+                      mode="preview"
+                      dueAt={note.due_at}
+                      priority={note.priority}
+                      recurring={note.recurring}
+                      doneAt={note.done_at}
+                      testId={`library-deadline-pill-${note.localId}`}
+                    />
+                  ) : null}
+                </NoteCard>
               </div>
             );
           })

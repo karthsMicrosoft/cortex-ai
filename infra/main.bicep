@@ -27,6 +27,25 @@ param dbAdminPassword string
 @description('JWT secret key')
 param jwtSecretKey string
 
+// ---------- Round 35 — Reminders (optional secrets; jobs no-op if unset) ----------
+@secure()
+@description('VAPID public key for Web Push (optional)')
+param vapidPublicKey string = ''
+
+@secure()
+@description('VAPID private key for Web Push (optional)')
+param vapidPrivateKey string = ''
+
+@description('VAPID subject (e.g. mailto:admin@cortex.app)')
+param vapidSubject string = ''
+
+@secure()
+@description('Azure Communication Services Email connection string (optional)')
+param acsEmailConnection string = ''
+
+@description('ACS Email sender address (optional)')
+param acsEmailSender string = ''
+
 // ---------- PostgreSQL Flexible Server ----------
 resource postgres 'Microsoft.DBforPostgreSQL/flexibleServers@2023-12-01-preview' = {
   name: '${appName}-db'
@@ -176,6 +195,10 @@ resource containerApp 'Microsoft.App/containerApps@2024-03-01' = {
         { name: 'azure-speech-key',                value: speech.listKeys().key1 }
         { name: 'azure-storage-connection-string', value: 'DefaultEndpointsProtocol=https;AccountName=${storage.name};AccountKey=${storage.listKeys().keys[0].value};EndpointSuffix=core.windows.net' }
         { name: 'azure-vision-key',                value: vision.listKeys().key1 }
+        // Round 35 — optional reminders secrets. Empty string → notifier no-ops.
+        { name: 'vapid-public-key',                value: vapidPublicKey }
+        { name: 'vapid-private-key',               value: vapidPrivateKey }
+        { name: 'acs-email-connection',            value: acsEmailConnection }
       ]
     }
     template: {
@@ -198,6 +221,12 @@ resource containerApp 'Microsoft.App/containerApps@2024-03-01' = {
             { name: 'AZURE_VISION_KEY',               secretRef: 'azure-vision-key' }
             { name: 'CORS_ORIGINS',                   value: frontendOrigin }
             { name: 'ENVIRONMENT',                    value: 'production' }
+            // Round 35 — reminders env. Notifiers no-op if values are empty.
+            { name: 'VAPID_PUBLIC_KEY',               secretRef: 'vapid-public-key' }
+            { name: 'VAPID_PRIVATE_KEY',              secretRef: 'vapid-private-key' }
+            { name: 'VAPID_SUBJECT',                  value: vapidSubject }
+            { name: 'ACS_EMAIL_CONNECTION',           secretRef: 'acs-email-connection' }
+            { name: 'ACS_EMAIL_SENDER',               value: acsEmailSender }
           ]
           probes: [
             {
@@ -234,6 +263,30 @@ resource containerApp 'Microsoft.App/containerApps@2024-03-01' = {
   }
 }
 
+// ---------- Round 35 — Reminders Container Apps Job ----------
+// Cron-triggered job that runs the dispatch_reminders script once per minute.
+// Reuses the API container image (same Python code, different entrypoint).
+module remindersJob './modules/container-app-job.bicep' = {
+  name: '${appName}-reminders-job'
+  params: {
+    appName: appName
+    location: location
+    containerEnvId: containerEnv.id
+    containerImageTag: containerImageTag
+    acrLoginServer: acr.properties.loginServer
+    acrName: acr.name
+    acrPassword: acr.listCredentials().passwords[0].value
+    databaseUrl: 'postgresql+asyncpg://cortexadmin:${dbAdminPassword}@${postgres.properties.fullyQualifiedDomainName}:5432/cortex'
+    openaiEndpoint: openai.properties.endpoint
+    openaiApiKey: openai.listKeys().key1
+    vapidPublicKey: vapidPublicKey
+    vapidPrivateKey: vapidPrivateKey
+    vapidSubject: vapidSubject
+    acsEmailConnection: acsEmailConnection
+    acsEmailSender: acsEmailSender
+  }
+}
+
 // ---------- Static Web App (OQ-6) ----------
 resource staticWebApp 'Microsoft.Web/staticSites@2023-12-01' = {
   name: '${appName}-app'
@@ -259,5 +312,6 @@ output speechRegion      string = location
 output visionEndpoint    string = vision.properties.endpoint
 output acrLoginServer    string = acr.properties.loginServer
 output containerAppFqdn  string = containerApp.properties.configuration.ingress.fqdn
+output remindersJobName  string = remindersJob.outputs.remindersJobName
 output staticWebAppName  string = staticWebApp.name
 output staticWebAppHost  string = staticWebApp.properties.defaultHostname

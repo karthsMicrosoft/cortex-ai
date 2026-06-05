@@ -47,6 +47,13 @@ def _note_to_out(note: Note) -> NoteOut:
         # Phase 6 / PR 6.0 — Title + aliases (used by wiki-style linking).
         title=getattr(note, "title", None),
         aliases=list(getattr(note, "aliases", []) or []),
+        # Round 35 — task / reminder fields. getattr() so older test fixtures
+        # without these columns still serialize cleanly.
+        due_at=getattr(note, "due_at", None),
+        done_at=getattr(note, "done_at", None),
+        priority=getattr(note, "priority", None),
+        recurring=getattr(note, "recurring", None),
+        reminder_sent_at=getattr(note, "reminder_sent_at", None),
         created_at=note.created_at,
         updated_at=note.updated_at,
     )

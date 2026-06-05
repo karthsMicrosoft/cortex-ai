@@ -39,6 +39,15 @@ class Settings(BaseSettings):
     CORS_ORIGINS: str = "https://cortex-app.azurestaticapps.net,http://localhost:5173"
     ENVIRONMENT: str = "development"
 
+    # Web Push (Round 35)
+    vapid_public_key: str | None = None
+    vapid_private_key: str | None = None
+    vapid_subject: str | None = None
+
+    # Azure Communication Services Email
+    acs_email_connection: str | None = None
+    acs_email_sender: str | None = None
+
     model_config = {"env_file": ".env", "env_file_encoding": "utf-8", "extra": "ignore"}
 
     @field_validator("JWT_SECRET_KEY")

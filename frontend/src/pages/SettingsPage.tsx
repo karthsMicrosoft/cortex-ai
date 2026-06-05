@@ -8,14 +8,23 @@
  *
  * Accessed via gear icon in the app header (no bottom-nav slot).
  */
-import { useState, type FormEvent } from 'react';
+import { useEffect, useState, type FormEvent } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { ArrowLeft, Settings, Download, Puzzle, Copy, LogOut } from 'lucide-react';
+import { ArrowLeft, Settings, Download, Puzzle, Copy, LogOut, Bell } from 'lucide-react';
 import { PersonalDictionary } from '../components/PersonalDictionary';
 import { ShadowReaderSettings } from '../components/ShadowReaderSettings';
 import { changePassword, mintClipToken } from '../api/auth';
 import { downloadExport } from '../api/export';
 import { useAuthStore } from '../store/authStore';
+import {
+  getPushStatus,
+  requestPermission,
+  subscribeToPush,
+  unsubscribeFromPush,
+  type PushStatus,
+} from '../services/push';
+
+type PushUiStatus = PushStatus | 'loading';
 
 export default function SettingsPage(): React.ReactElement {
   const navigate = useNavigate();
@@ -118,6 +127,82 @@ export default function SettingsPage(): React.ReactElement {
     }
   }
 
+  // ------------------------------------------------------------------ reminders
+  const [pushStatus, setPushStatus] = useState<PushUiStatus>('loading');
+  const [pushBusy, setPushBusy] = useState(false);
+  const [pushMessage, setPushMessage] = useState<{ kind: 'ok' | 'err'; text: string } | null>(null);
+  const isIos = typeof navigator !== 'undefined' && /iPad|iPhone|iPod/.test(navigator.userAgent);
+
+  useEffect(() => {
+    let cancelled = false;
+    async function loadPushStatus(): Promise<void> {
+      try {
+        const status = await getPushStatus();
+        if (!cancelled) setPushStatus(status);
+      } catch {
+        if (!cancelled) {
+          setPushStatus('unavailable');
+          setPushMessage({ kind: 'err', text: 'Reminder notifications are unavailable right now.' });
+        }
+      }
+    }
+    void loadPushStatus();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  async function handleReminderToggle(): Promise<void> {
+    if (pushStatus === 'loading' || pushBusy) return;
+    setPushBusy(true);
+    setPushMessage(null);
+    try {
+      if (pushStatus === 'subscribed') {
+        await unsubscribeFromPush();
+        setPushStatus('unsubscribed');
+        setPushMessage({ kind: 'ok', text: 'Reminder notifications disabled.' });
+        return;
+      }
+
+      const permission = await requestPermission();
+      if (permission !== 'granted') {
+        setPushStatus(permission === 'denied' ? 'denied' : 'unsubscribed');
+        setPushMessage({ kind: 'err', text: 'Notifications were not enabled. Allow notifications to receive reminders.' });
+        return;
+      }
+
+      const subscription = await subscribeToPush();
+      if (subscription) {
+        setPushStatus('subscribed');
+        setPushMessage({ kind: 'ok', text: 'Reminder notifications enabled.' });
+      } else {
+        setPushStatus('unavailable');
+        setPushMessage({ kind: 'err', text: 'Reminder notifications are unavailable because the server is not configured for push.' });
+      }
+    } catch (err) {
+      const text = err instanceof Error ? err.message : 'Failed to update reminder notifications.';
+      setPushMessage({ kind: 'err', text });
+      try {
+        setPushStatus(await getPushStatus());
+      } catch {
+        setPushStatus('unavailable');
+      }
+    } finally {
+      setPushBusy(false);
+    }
+  }
+
+  const pushDisabled = pushStatus === 'unsupported' || pushStatus === 'unavailable';
+  const pushCaption = pushStatus === 'unsupported'
+    ? 'This browser does not support web push notifications.'
+    : pushStatus === 'unavailable'
+      ? 'Push notifications are not configured on the server yet.'
+      : pushStatus === 'denied'
+        ? 'Notifications are blocked — enable in your browser/system settings.'
+        : pushStatus === 'loading'
+          ? 'Checking notification support…'
+          : null;
+
   return (
     <div className="min-h-screen bg-[#0F172A] text-white">
       {/* Header */}
@@ -135,6 +220,50 @@ export default function SettingsPage(): React.ReactElement {
 
       {/* Sections */}
       <main className="max-w-2xl mx-auto px-4 py-6 space-y-6">
+        {/* Reminders — Round 35 */}
+        <section className="rounded-2xl border border-slate-800 bg-slate-900 p-4 space-y-3">
+          <div className="flex items-center gap-2">
+            <Bell className="h-4 w-4 text-indigo-400" aria-hidden="true" />
+            <h2 className="text-sm font-semibold text-slate-200">Reminders</h2>
+          </div>
+          <div className="flex items-start justify-between gap-4">
+            <div className="space-y-1">
+              <label htmlFor="reminder-notifications" className="text-sm font-medium text-slate-100">
+                Enable reminder notifications
+              </label>
+              <p className="text-xs text-slate-400">
+                Used to remind you about tasks with due dates. Falls back to email if push isn't available.
+              </p>
+              {pushCaption ? (
+                <p className={pushStatus === 'denied' || pushStatus === 'unavailable' ? 'text-xs text-amber-300' : 'text-xs text-slate-500'}>
+                  {pushCaption}
+                </p>
+              ) : null}
+              {pushStatus === 'unsupported' && isIos ? (
+                <p className="text-xs text-slate-400">iOS users: add Cortex to your home screen first.</p>
+              ) : null}
+              {pushMessage ? (
+                <p
+                  role={pushMessage.kind === 'err' ? 'alert' : 'status'}
+                  className={pushMessage.kind === 'err' ? 'text-xs text-red-400' : 'text-xs text-emerald-400'}
+                >
+                  {pushMessage.text}
+                </p>
+              ) : null}
+            </div>
+            <input
+              id="reminder-notifications"
+              type="checkbox"
+              role="switch"
+              checked={pushStatus === 'subscribed'}
+              disabled={pushDisabled || pushBusy || pushStatus === 'loading'}
+              title={pushCaption ?? undefined}
+              onChange={() => { void handleReminderToggle(); }}
+              className="mt-1 h-5 w-10 accent-indigo-500 disabled:opacity-50"
+            />
+          </div>
+        </section>
+
         {/* Your Data — Round 15 / PR #23 */}
         <section className="rounded-2xl border border-slate-800 bg-slate-900 p-4 space-y-3">
           <h2 className="text-sm font-semibold text-slate-200">Your Data</h2>

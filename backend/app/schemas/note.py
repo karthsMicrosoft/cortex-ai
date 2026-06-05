@@ -13,6 +13,9 @@ from pydantic import BaseModel, Field, field_validator
 _CATEGORY_TYPE = Literal["Music", "Fitness", "Journal", "Ideas", "Spiritual", "Learning"]
 _SOURCE_TYPE = Literal["voice", "text", "image"]
 _PROCESSING_STATUS = Literal["raw", "transcribed", "processed", "enriched", "failed"]
+# Round 35 — task / reminder enums.
+_PRIORITY = Literal[1, 2, 3]
+_RECURRING = Literal["daily", "weekly", "monthly"]
 _SHADOW_READER_STATUS = Literal[
     "pending",
     "asked",
@@ -33,6 +36,13 @@ class NoteCreate(BaseModel):
     image_url: Optional[str] = None
     client_id: Optional[str] = None
     tags: Optional[list[str]] = None
+    # Round 35 — browser-extracted task hints. When present, the backend
+    # trusts these values (user already saw + confirmed them in the
+    # capture-UI deadline pill) and skips both the Python regex extractor
+    # and the LLM extraction for whichever columns are filled.
+    due_at_hint: Optional[datetime] = None
+    priority_hint: Optional[_PRIORITY] = None
+    recurring_hint: Optional[_RECURRING] = None
 
 
 class NoteUpdate(BaseModel):
@@ -55,6 +65,12 @@ class NoteUpdate(BaseModel):
     # case-insensitively in the validator below.
     title: Optional[str] = Field(default=None, max_length=120)
     aliases: Optional[list[str]] = Field(default=None, max_length=20)
+    # Round 35 — task / reminder fields. Passing `None` explicitly clears
+    # them (matches existing B8 / model_dump(exclude_unset=True) pattern).
+    due_at: Optional[datetime] = None
+    priority: Optional[_PRIORITY] = None
+    recurring: Optional[_RECURRING] = None
+    done_at: Optional[datetime] = None
 
     @field_validator("aliases")
     @classmethod
@@ -112,6 +128,12 @@ class NoteOut(BaseModel):
     # Phase 6 / PR 6.0 — Title + aliases (for wiki-style linking).
     title: Optional[str] = None
     aliases: list[str] = []
+    # Round 35 — task / reminder fields.
+    due_at: Optional[datetime] = None
+    done_at: Optional[datetime] = None
+    priority: Optional[int] = None
+    recurring: Optional[str] = None
+    reminder_sent_at: Optional[datetime] = None
     created_at: datetime
     updated_at: datetime
 

@@ -9,3 +9,4 @@ from app.models.revoked_jti import RevokedJTI  # noqa: F401
 from app.models.canvas import Canvas  # noqa: F401
 from app.models.canvas_item import CanvasItem  # noqa: F401
 from app.models.canvas_edge import CanvasEdge  # noqa: F401
+from app.models.push_subscription import PushSubscription  # noqa: F401

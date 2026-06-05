@@ -3,7 +3,7 @@ import { useNavigate, useParams } from 'react-router-dom';
 import { ArrowLeft, ChevronDown, ChevronRight, LayoutGrid, Music, Pencil, Plus, Check, X, Trash2 } from 'lucide-react';
 import { db } from '../db';
 import type { LocalNote } from '../db';
-import { deleteNote, getNote, updateNote } from '../api/notes';
+import { deleteNote, getNote, updateNote as updateNoteDetails } from '../api/notes';
 import type { NoteOut } from '../api/notes';
 import { searchSimilar } from '../api/search';
 import type { SearchResult } from '../api/search';
@@ -16,7 +16,10 @@ import { MusicPlayer } from '../components/MusicPlayer';
 import type { MusicMetadata } from '../components/MusicPlayer';
 import { ShadowReaderPrompt } from '../components/ShadowReaderPrompt';
 import { WikiContent } from '../components/WikiContent';
+import { DeadlinePill } from '../components/DeadlinePill';
 import { AddToCanvasModal } from '../components/AddToCanvasModal';
+import { toggleDone, updateNote as updateTaskNote } from '../services/api/tasks';
+import type { TaskNoteUpdate } from '../services/api/tasks';
 import { CATEGORY_COLORS, formatDateTime } from '../utils/formatters';
 import { isCanvasEnabled } from '../featureFlags';
 
@@ -43,7 +46,7 @@ function MusicLabelEditor({ noteId, metadata, onSaved }: MusicLabelEditorProps):
     setIsSaving(true);
     setSaveError(null);
     try {
-      const updated = await updateNote(noteId, {
+      const updated = await updateNoteDetails(noteId, {
         music_metadata: {
           ...(tempo ? { tempo: Number(tempo) } : {}),
           ...(key ? { key } : {}),
@@ -155,10 +158,11 @@ const TITLE_MAX = 120;
 interface TitleEditorProps {
   noteId: string;
   title: string | null | undefined;
+  isDone?: boolean;
   onSaved: (updated: NoteOut) => void;
 }
 
-function TitleEditor({ noteId, title, onSaved }: TitleEditorProps): React.ReactElement {
+function TitleEditor({ noteId, title, isDone = false, onSaved }: TitleEditorProps): React.ReactElement {
   const [isEditing, setIsEditing] = useState(false);
   const [draft, setDraft] = useState(title ?? '');
   const [isSaving, setIsSaving] = useState(false);
@@ -188,7 +192,7 @@ function TitleEditor({ noteId, title, onSaved }: TitleEditorProps): React.ReactE
     setIsSaving(true);
     setError(null);
     try {
-      const updated = await updateNote(noteId, { title: next.length > 0 ? next : null });
+      const updated = await updateNoteDetails(noteId, { title: next.length > 0 ? next : null });
       onSaved(updated);
       setIsEditing(false);
     } catch (err) {
@@ -212,6 +216,7 @@ function TitleEditor({ noteId, title, onSaved }: TitleEditorProps): React.ReactE
         className={[
           'cursor-text text-2xl font-semibold leading-tight focus:outline-none focus:ring-2 focus:ring-indigo-400 rounded-md px-1 -mx-1',
           hasTitle ? 'text-slate-100' : 'text-slate-500 italic',
+          isDone ? 'line-through decoration-emerald-400/80' : '',
         ].join(' ')}
         title="Click to edit title"
       >
@@ -305,7 +310,7 @@ function AliasesEditor({ noteId, aliases, onSaved }: AliasesEditorProps): React.
       timerRef.current = setTimeout(() => {
         void (async () => {
           try {
-            const updated = await updateNote(noteId, { aliases: next });
+            const updated = await updateNoteDetails(noteId, { aliases: next });
             onSaved(updated);
             setError(null);
           } catch (err) {
@@ -422,6 +427,201 @@ function AliasesEditor({ noteId, aliases, onSaved }: AliasesEditorProps): React.
           </div>
           {error && <p className="text-xs text-red-400">{error}</p>}
         </div>
+      )}
+    </section>
+  );
+}
+
+function toDatetimeLocalInput(value?: string | null): string {
+  if (!value) return '';
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return '';
+  const local = new Date(date.getTime() - date.getTimezoneOffset() * 60_000);
+  return local.toISOString().slice(0, 16);
+}
+
+type TaskFeedback = { kind: 'success' | 'error'; message: string };
+
+interface TaskPanelProps {
+  note: NoteOut;
+  onUpdated: (updated: NoteOut) => void;
+}
+
+function TaskPanel({ note, onUpdated }: TaskPanelProps): React.ReactElement {
+  const [isAdding, setIsAdding] = useState(false);
+  const [draftDue, setDraftDue] = useState('');
+  const [draftPriority, setDraftPriority] = useState<1 | 2 | 3 | ''>('');
+  const [draftRecurring, setDraftRecurring] = useState<'daily' | 'weekly' | 'monthly' | ''>('');
+  const [isSaving, setIsSaving] = useState(false);
+  const [feedback, setFeedback] = useState<TaskFeedback | null>(null);
+
+  const hasDeadlineSignal = note.due_at != null || note.priority != null || note.recurring != null;
+  const isFullyEmpty = !hasDeadlineSignal && note.done_at == null;
+  const canSaveDraft = draftDue !== '' || draftPriority !== '' || draftRecurring !== '';
+
+  const applyTaskUpdate = useCallback(
+    async (changes: TaskNoteUpdate) => {
+      setIsSaving(true);
+      setFeedback(null);
+      try {
+        const updated = (await updateTaskNote(note.id, changes)) as NoteOut | undefined;
+        onUpdated(updated ?? { ...note, ...changes, updated_at: new Date().toISOString() });
+        setIsAdding(false);
+        setFeedback({ kind: 'success', message: 'Reminder updated.' });
+      } catch (err) {
+        setFeedback({
+          kind: 'error',
+          message: err instanceof Error ? err.message : 'Could not update reminder.',
+        });
+      } finally {
+        setIsSaving(false);
+      }
+    },
+    [note, onUpdated],
+  );
+
+  const handleAddReminder = useCallback(() => {
+    setDraftDue(toDatetimeLocalInput(note.due_at));
+    setDraftPriority(note.priority ?? '');
+    setDraftRecurring(note.recurring ?? '');
+    setFeedback(null);
+    setIsAdding(true);
+  }, [note.due_at, note.priority, note.recurring]);
+
+  const handleSaveDraft = useCallback(async () => {
+    await applyTaskUpdate({
+      due_at: draftDue ? new Date(draftDue).toISOString() : null,
+      priority: draftPriority === '' ? null : draftPriority,
+      recurring: draftRecurring === '' ? null : draftRecurring,
+    });
+  }, [applyTaskUpdate, draftDue, draftPriority, draftRecurring]);
+
+  const handleToggleDone = useCallback(async () => {
+    setIsSaving(true);
+    setFeedback(null);
+    try {
+      const updated = (await toggleDone(note.id)) as NoteOut | undefined;
+      const fallbackDoneAt = note.done_at ? null : new Date().toISOString();
+      onUpdated(updated ?? { ...note, done_at: fallbackDoneAt, updated_at: new Date().toISOString() });
+      setFeedback({
+        kind: 'success',
+        message: note.done_at ? 'Marked not done.' : 'Marked done.',
+      });
+    } catch (err) {
+      setFeedback({
+        kind: 'error',
+        message: err instanceof Error ? err.message : 'Could not update task status.',
+      });
+    } finally {
+      setIsSaving(false);
+    }
+  }, [note, onUpdated]);
+
+  return (
+    <section className="rounded-xl border border-slate-800 bg-slate-900/40 p-3" aria-label="Task">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+        <div className="flex min-w-0 flex-1 flex-wrap items-center gap-2">
+          <span className="text-xs font-semibold uppercase tracking-wide text-slate-400">Task</span>
+          {hasDeadlineSignal ? (
+            <DeadlinePill
+              mode="editable"
+              dueAt={note.due_at ?? null}
+              priority={note.priority ?? null}
+              recurring={note.recurring ?? null}
+              doneAt={note.done_at ?? null}
+              testId="note-detail-deadline-pill"
+              onUpdate={applyTaskUpdate}
+            />
+          ) : note.done_at ? (
+            <span className="rounded-full border border-emerald-500/50 bg-emerald-950/40 px-3 py-1 text-xs font-semibold text-emerald-100 line-through">
+              Done
+            </span>
+          ) : null}
+          {isFullyEmpty && !isAdding && (
+            <button
+              type="button"
+              onClick={handleAddReminder}
+              className="rounded-full border border-dashed border-indigo-500/60 px-3 py-1 text-xs font-semibold text-indigo-200 hover:bg-indigo-950/50"
+            >
+              + Add reminder
+            </button>
+          )}
+        </div>
+        <button
+          type="button"
+          onClick={() => void handleToggleDone()}
+          disabled={isSaving}
+          className="self-start rounded-lg border border-slate-700 px-3 py-1.5 text-xs font-semibold text-slate-200 hover:border-emerald-500 hover:text-emerald-200 disabled:opacity-50 sm:self-auto"
+        >
+          {note.done_at ? 'Mark not done' : 'Mark done'}
+        </button>
+      </div>
+
+      {isAdding && (
+        <div data-testid="note-detail-task-editor" className="mt-3 grid gap-3 rounded-lg border border-slate-800 bg-slate-950/40 p-3 sm:grid-cols-3">
+          <label className="text-xs font-semibold uppercase tracking-wide text-slate-400">
+            Due
+            <input
+              type="datetime-local"
+              value={draftDue}
+              onChange={(event) => setDraftDue(event.target.value)}
+              className="mt-1 w-full rounded-lg border border-slate-700 bg-slate-950 px-2 py-1.5 text-sm text-slate-100 focus:border-indigo-500 focus:outline-none"
+            />
+          </label>
+          <label className="text-xs font-semibold uppercase tracking-wide text-slate-400">
+            Priority
+            <select
+              value={draftPriority}
+              onChange={(event) => {
+                const value = event.target.value;
+                setDraftPriority(value ? (Number(value) as 1 | 2 | 3) : '');
+              }}
+              className="mt-1 w-full rounded-lg border border-slate-700 bg-slate-950 px-2 py-1.5 text-sm text-slate-100 focus:border-indigo-500 focus:outline-none"
+            >
+              <option value="">Unset</option>
+              <option value="1">High</option>
+              <option value="2">Medium</option>
+              <option value="3">Low</option>
+            </select>
+          </label>
+          <label className="text-xs font-semibold uppercase tracking-wide text-slate-400">
+            Recurring
+            <select
+              value={draftRecurring}
+              onChange={(event) => setDraftRecurring(event.target.value as 'daily' | 'weekly' | 'monthly' | '')}
+              className="mt-1 w-full rounded-lg border border-slate-700 bg-slate-950 px-2 py-1.5 text-sm text-slate-100 focus:border-indigo-500 focus:outline-none"
+            >
+              <option value="">Unset</option>
+              <option value="daily">Daily</option>
+              <option value="weekly">Weekly</option>
+              <option value="monthly">Monthly</option>
+            </select>
+          </label>
+          <div className="flex gap-2 sm:col-span-3">
+            <button
+              type="button"
+              onClick={() => void handleSaveDraft()}
+              disabled={isSaving || !canSaveDraft}
+              className="rounded-lg bg-indigo-600 px-3 py-1 text-xs font-semibold text-white hover:bg-indigo-500 disabled:opacity-50"
+            >
+              {isSaving ? 'Saving…' : 'Save reminder'}
+            </button>
+            <button
+              type="button"
+              onClick={() => setIsAdding(false)}
+              disabled={isSaving}
+              className="rounded-lg border border-slate-700 px-3 py-1 text-xs font-semibold text-slate-300 hover:text-slate-100 disabled:opacity-50"
+            >
+              Cancel
+            </button>
+          </div>
+        </div>
+      )}
+
+      {feedback && (
+        <p className={feedback.kind === 'error' ? 'mt-2 text-xs text-red-400' : 'mt-2 text-xs text-emerald-400'}>
+          {feedback.message}
+        </p>
       )}
     </section>
   );
@@ -805,7 +1005,7 @@ export default function NoteDetailPage(): React.ReactElement {
       if (!targetServerId) {
         throw new Error('Cannot save — note is not yet synced.');
       }
-      const updated = await updateNote(targetServerId, patch);
+      const updated = await updateNoteDetails(targetServerId, patch);
       setServerNote(updated);
       // Mirror into Dexie so Library reflects the new category/tags/mood
       if (localNote) {
@@ -946,6 +1146,7 @@ export default function NoteDetailPage(): React.ReactElement {
           <TitleEditor
             noteId={serverNote?.id ?? (localNote?.serverId as string)}
             title={serverNote?.title ?? null}
+            isDone={serverNote?.done_at != null}
             onSaved={handleSaved}
           />
         )}
@@ -958,6 +1159,8 @@ export default function NoteDetailPage(): React.ReactElement {
             onSaved={handleSaved}
           />
         )}
+
+        {serverNote && <TaskPanel note={serverNote} onUpdated={handleSaved} />}
 
         {/* Timestamps */}
         <div className="flex gap-4 text-xs text-slate-500">

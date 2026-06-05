@@ -16,6 +16,7 @@ import asyncio
 import json
 import logging
 import uuid
+from datetime import datetime, timezone
 from enum import Enum
 from typing import Optional
 
@@ -28,10 +29,54 @@ from app.models.note import Note
 from app.pipeline.music import process_music_note
 from app.pipeline.shadow_reader import run_shadow_reader_stage
 from app.pipeline.wiki_links import parse_and_link_wiki_refs
+from app.services.deadline_extractor import extract as extract_deadline
 from app.services.semantic_links import relink_single_note
 from app.utils.db_helpers import get_or_create_tags_batch
 
 logger = logging.getLogger(__name__)
+
+
+def _note_field_is_empty(note: Note, field_name: str) -> bool:
+    value = getattr(note, field_name, None)
+    if value is None:
+        return True
+    if field_name == "due_at":
+        return not isinstance(value, datetime)
+    if field_name == "priority":
+        return not isinstance(value, int) or isinstance(value, bool)
+    if field_name == "recurring":
+        return not isinstance(value, str) or not value.strip()
+    return False
+
+
+def _parse_llm_due_at(value: object) -> datetime | None:
+    if not isinstance(value, str) or not value.strip():
+        return None
+    try:
+        parsed = datetime.fromisoformat(value.strip().replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed
+
+
+def _parse_llm_priority(value: object) -> int | None:
+    if isinstance(value, bool) or value is None:
+        return None
+    try:
+        priority = int(value)
+    except (TypeError, ValueError):
+        return None
+    return priority if priority in {1, 2, 3} else None
+
+
+def _parse_llm_recurring(value: object) -> str | None:
+    if not isinstance(value, str):
+        return None
+    recurring = value.strip().lower()
+    return recurring if recurring in {"daily", "weekly", "monthly"} else None
+
 
 # ---------------------------------------------------------------------------
 # Enums
@@ -213,7 +258,20 @@ class AIPipeline:
         logger.info("pipeline_stage_complete: organize note_id=%s", note.id)
 
     async def _auto_tag_and_categorize(self, note: Note) -> None:
-        """GPT-4o-mini JSON: extract title, tags, category, mood, summary, entities."""
+        """GPT-4o-mini JSON: extract note and task metadata."""
+        extracted = extract_deadline(
+            note.content or "",
+            now=datetime.now(tz=timezone.utc),
+            tz="UTC",
+        )
+        if extracted:
+            if extracted.get("due_at") is not None and _note_field_is_empty(note, "due_at"):
+                note.due_at = extracted["due_at"]
+            if extracted.get("priority") is not None and _note_field_is_empty(note, "priority"):
+                note.priority = extracted["priority"]
+            if extracted.get("recurring") is not None and _note_field_is_empty(note, "recurring"):
+                note.recurring = extracted["recurring"]
+
         prompt = (
             "Analyze this note and return a JSON object with:\n"
             "- title: a short meaningful 3-8 word title that captures the essence\n"
@@ -222,7 +280,11 @@ class AIPipeline:
             "- category: exactly one of: Music, Fitness, Journal, Ideas, Spiritual, Learning\n"
             "- mood: emotional tone (single word or short phrase)\n"
             "- summary: 1-2 sentence summary\n"
-            "- entities: array of {name, type} objects\n\n"
+            "- entities: array of {name, type} objects\n"
+            "- due_at: ISO 8601 string with offset, or null. Capture fuzzy deadlines "
+            "(\"when I land\", \"before our trip\", \"after lunch\").\n"
+            "- priority: 1 (high), 2 (medium), 3 (low), or null\n"
+            "- recurring: \"daily\", \"weekly\", or \"monthly\", or null\n\n"
             f"Note content:\n{note.content}\n\nReturn ONLY valid JSON."
         )
 
@@ -246,6 +308,21 @@ class AIPipeline:
         note.mood = result.get("mood") or None
         note.summary = result.get("summary") or None
         note.entities = result.get("entities") or []
+
+        if _note_field_is_empty(note, "due_at"):
+            llm_due_at = _parse_llm_due_at(result.get("due_at"))
+            if llm_due_at is not None:
+                note.due_at = llm_due_at
+
+        if _note_field_is_empty(note, "priority"):
+            llm_priority = _parse_llm_priority(result.get("priority"))
+            if llm_priority is not None:
+                note.priority = llm_priority
+
+        if _note_field_is_empty(note, "recurring"):
+            llm_recurring = _parse_llm_recurring(result.get("recurring"))
+            if llm_recurring is not None:
+                note.recurring = llm_recurring
 
         raw_title = (result.get("title") or "").strip()
         if raw_title.startswith('"') and raw_title.endswith('"'):

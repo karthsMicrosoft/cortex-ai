@@ -1,0 +1,166 @@
+{
+  "_comment": "Shared deadline/priority/recurring extraction matrix. Consumed by both backend/tests/test_deadline_extractor.py (Python regex) and frontend/src/__tests__/dateExtractor.test.ts (TypeScript regex) so the two implementations cannot drift. Tests pass a fixed `now` and `tz` to make results deterministic. now=2026-06-05T10:00:00-07:00 (Friday, America/Los_Angeles).",
+  "now": "2026-06-05T10:00:00-07:00",
+  "tz": "America/Los_Angeles",
+  "cases": [
+    {
+      "name": "by today",
+      "input": "Submit the expense report by today",
+      "expected": { "due_at": "2026-06-05T23:59:00-07:00" }
+    },
+    {
+      "name": "by tomorrow",
+      "input": "Call John by tomorrow",
+      "expected": { "due_at": "2026-06-06T23:59:00-07:00" }
+    },
+    {
+      "name": "by tomorrow noon",
+      "input": "Send draft by tomorrow noon",
+      "expected": { "due_at": "2026-06-06T12:00:00-07:00" }
+    },
+    {
+      "name": "by EOD",
+      "input": "Finish PR review by EOD",
+      "expected": { "due_at": "2026-06-05T17:00:00-07:00" }
+    },
+    {
+      "name": "by end of day",
+      "input": "Reply to email by end of day",
+      "expected": { "due_at": "2026-06-05T17:00:00-07:00" }
+    },
+    {
+      "name": "by tonight",
+      "input": "Pack for trip by tonight",
+      "expected": { "due_at": "2026-06-05T21:00:00-07:00" }
+    },
+    {
+      "name": "by next monday",
+      "input": "Submit quarterly review by next Monday",
+      "expected": { "due_at": "2026-06-08T23:59:00-07:00" }
+    },
+    {
+      "name": "by next friday",
+      "input": "Ship feature by next Friday",
+      "expected": { "due_at": "2026-06-12T23:59:00-07:00" }
+    },
+    {
+      "name": "by friday (this week)",
+      "input": "Finish slides by Friday",
+      "expected": { "due_at": "2026-06-05T23:59:00-07:00" }
+    },
+    {
+      "name": "by friday (next week if today is friday afternoon)",
+      "input": "Finish slides by Friday at 9am",
+      "expected": { "due_at": "2026-06-12T09:00:00-07:00" }
+    },
+    {
+      "name": "by saturday (tomorrow)",
+      "input": "Buy groceries by Saturday",
+      "expected": { "due_at": "2026-06-06T23:59:00-07:00" }
+    },
+    {
+      "name": "in 2 weeks",
+      "input": "Renew passport in 2 weeks",
+      "expected": { "due_at": "2026-06-19T23:59:00-07:00" }
+    },
+    {
+      "name": "in 3 days",
+      "input": "Call dentist in 3 days",
+      "expected": { "due_at": "2026-06-08T23:59:00-07:00" }
+    },
+    {
+      "name": "in 1 hour",
+      "input": "Leave for airport in 1 hour",
+      "expected": { "due_at": "2026-06-05T11:00:00-07:00" }
+    },
+    {
+      "name": "by 6/10 (US slash format)",
+      "input": "Submit form by 6/10",
+      "expected": { "due_at": "2026-06-10T23:59:00-07:00" }
+    },
+    {
+      "name": "by 6/10 with year",
+      "input": "Submit form by 6/10/2027",
+      "expected": { "due_at": "2027-06-10T23:59:00-07:00" }
+    },
+    {
+      "name": "ISO date",
+      "input": "Conference call on 2026-07-15",
+      "expected": { "due_at": "2026-07-15T23:59:00-07:00" }
+    },
+    {
+      "name": "ISO datetime",
+      "input": "Meeting at 2026-07-15T14:30:00-07:00",
+      "expected": { "due_at": "2026-07-15T14:30:00-07:00" }
+    },
+    {
+      "name": "by 5pm",
+      "input": "Pick up dry cleaning by 5pm",
+      "expected": { "due_at": "2026-06-05T17:00:00-07:00" }
+    },
+    {
+      "name": "by 9am tomorrow",
+      "input": "Standup notes by 9am tomorrow",
+      "expected": { "due_at": "2026-06-06T09:00:00-07:00" }
+    },
+    {
+      "name": "priority p1",
+      "input": "Fix login bug #p1",
+      "expected": { "priority": 1 }
+    },
+    {
+      "name": "priority high",
+      "input": "Ship demo #high",
+      "expected": { "priority": 1 }
+    },
+    {
+      "name": "priority p2 / medium",
+      "input": "Refactor module #p2",
+      "expected": { "priority": 2 }
+    },
+    {
+      "name": "priority p3 / low",
+      "input": "Clean up docs #p3",
+      "expected": { "priority": 3 }
+    },
+    {
+      "name": "recurring daily",
+      "input": "Drink water #daily",
+      "expected": { "recurring": "daily" }
+    },
+    {
+      "name": "recurring weekly",
+      "input": "Team standup #weekly",
+      "expected": { "recurring": "weekly" }
+    },
+    {
+      "name": "recurring monthly",
+      "input": "Pay rent #monthly",
+      "expected": { "recurring": "monthly" }
+    },
+    {
+      "name": "combined: due + priority + recurring",
+      "input": "Pay rent by tomorrow #high #monthly",
+      "expected": {
+        "due_at": "2026-06-06T23:59:00-07:00",
+        "priority": 1,
+        "recurring": "monthly"
+      }
+    },
+    {
+      "name": "no match — natural sentence with no time cue",
+      "input": "Watched a great movie tonight, must rewatch sometime.",
+      "expected": null
+    },
+    {
+      "name": "no match — fuzzy phrasing (defers to LLM)",
+      "input": "Remind me to call mom when I get home",
+      "expected": null
+    },
+    {
+      "name": "no match — phrase 'film meetup' is not a date",
+      "input": "Notes from Film Meetup on Lynch debate",
+      "expected": null
+    }
+  ]
+}

@@ -2,7 +2,26 @@
 
 > **Open work, bugs not fixed, gaps from "fully done."** Anything tagged P0/P1/P2 here is meant to be picked up by the next agent.
 
-**Last updated:** 2026-06-02 (Round 32 SHIPPED: composite-scored auto-linking for new + imported notes)
+**Last updated:** 2026-06-05 (Round 35 SHIPPED: reminders + tasks + iOS Shortcuts deep link)
+
+---
+
+## 🟡 Round 35 — Operator one-time setup pending (deploy-time)
+
+Round 35 ships the reminders feature with **safe no-op notifiers** that activate the moment two sets of secrets land in Azure. Code is live; notifications are silent until:
+
+1. **VAPID keys** for Web Push:
+   ```powershell
+   web-push generate-vapid-keys
+   az containerapp secret set --name cortexks-api --resource-group cortex-rg --secrets `
+     vapid-public-key=<PUBLIC> vapid-private-key=<PRIVATE> vapid-subject=mailto:admin@cortex.app
+   ```
+   Then redeploy the Bicep so the reminders job picks up the same secrets, OR set them on the job directly.
+2. **Azure Communication Services Email** (optional fallback channel). Connection string + sender. If skipped, the email channel silently no-ops; push still works.
+
+Once both land, the dispatcher fires reminders end-to-end. Documented in detail in `docs/REMINDERS.md`.
+
+**Severity:** P1 — feature is shipped but inactive until secrets are provisioned. Backfill (`scripts/backfill_due_dates.py`) can run safely without the secrets.
 
 ---
 

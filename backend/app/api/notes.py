@@ -14,7 +14,7 @@ to avoid leaking the existence of a note (Task 5.5 / B8).
 """
 import logging
 import uuid
-from datetime import datetime, date
+from datetime import date, datetime, timedelta, timezone
 from typing import Optional
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, status
@@ -78,6 +78,22 @@ async def _fetch_note(
     return note
 
 
+def _next_recurring_due_at(due_at: Optional[datetime], recurring: str) -> datetime:
+    base = due_at or datetime.now(timezone.utc)
+    if recurring == "daily":
+        return base + timedelta(days=1)
+    if recurring == "weekly":
+        return base + timedelta(days=7)
+    if recurring == "monthly":
+        try:
+            from dateutil.relativedelta import relativedelta
+
+            return base + relativedelta(months=1)
+        except ImportError:
+            return base + timedelta(days=30)
+    raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid recurring rule")
+
+
 # ---------------------------------------------------------------------------
 # POST /api/notes
 # ---------------------------------------------------------------------------
@@ -130,6 +146,9 @@ async def create_note(
         image_url=payload.image_url,
         client_id=payload.client_id,
         processing_status=initial_status,
+        due_at=payload.due_at_hint,
+        priority=payload.priority_hint,
+        recurring=payload.recurring_hint,
     )
     db.add(note)
     await db.flush()
@@ -261,6 +280,7 @@ async def get_note(
 # PUT /api/notes/{id}
 # ---------------------------------------------------------------------------
 
+@router.patch("/{note_id}", response_model=NoteOut)
 @router.put("/{note_id}", response_model=NoteOut)
 async def update_note(
     note_id: uuid.UUID,
@@ -307,6 +327,36 @@ async def update_note(
     await db.flush()
 
     # Reload with tags
+    result = await db.execute(
+        select(Note).options(selectinload(Note.tags)).where(Note.id == note_id)
+    )
+    note = result.scalar_one()
+    return _note_to_out(note)
+
+
+# ---------------------------------------------------------------------------
+# POST /api/notes/{id}/done
+# ---------------------------------------------------------------------------
+
+@router.post("/{note_id}/done", response_model=NoteOut)
+async def toggle_note_done(
+    note_id: uuid.UUID,
+    current_user_id: uuid.UUID = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> NoteOut:
+    """Toggle a note task done; recurring tasks roll forward instead."""
+    note = await _fetch_note(db, note_id, current_user_id)
+
+    if note.done_at is None:
+        note.done_at = datetime.now(timezone.utc)
+        if note.recurring is not None:
+            note.due_at = _next_recurring_due_at(note.due_at, note.recurring)
+            note.reminder_sent_at = None
+            note.done_at = None
+    else:
+        note.done_at = None
+
+    await db.commit()
     result = await db.execute(
         select(Note).options(selectinload(Note.tags)).where(Note.id == note_id)
     )

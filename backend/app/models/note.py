@@ -17,6 +17,7 @@ from sqlalchemy import (
     Float,
     ForeignKey,
     JSON,
+    SmallInteger,
     String,
     Text,
     Uuid,
@@ -81,6 +82,15 @@ class Note(Base):
             "shadow_reader_status IN ('pending','asked','answered','dismissed','skipped','answer_pending')",
             name="ck_notes_shadow_reader_status",
         ),
+        # Round 35 — task / reminder fields.
+        CheckConstraint(
+            "priority IS NULL OR priority IN (1, 2, 3)",
+            name="ck_notes_priority",
+        ),
+        CheckConstraint(
+            "recurring IS NULL OR recurring IN ('daily','weekly','monthly')",
+            name="ck_notes_recurring",
+        ),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(
@@ -134,6 +144,23 @@ class Note(Base):
         PG_ARRAY(Text).with_variant(JSON, "sqlite"),
         nullable=False,
         default=list,
+    )
+
+    # Round 35 — task / reminder columns. A note IS the task: nullable
+    # due_at flips the note into the Tasks list; priority is 1=high / 2=med
+    # / 3=low / NULL=none; recurring is one of 'daily'|'weekly'|'monthly' or
+    # NULL for a one-shot; reminder_sent_at is the idempotency marker used
+    # by the dispatch_reminders Container Apps Job.
+    due_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    done_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    priority: Mapped[int | None] = mapped_column(SmallInteger, nullable=True)
+    recurring: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    reminder_sent_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
     )
 
     created_at: Mapped[datetime] = mapped_column(

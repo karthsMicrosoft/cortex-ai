@@ -1,3 +1,4 @@
+import type { ReactNode } from 'react';
 import { useNavigate } from 'react-router-dom';
 import type { LocalNote } from '../db';
 import { ProcessingBadge } from './ProcessingBadge';
@@ -18,6 +19,7 @@ export interface LocalNoteWithAI extends LocalNote {
 
 interface NoteCardProps {
   note: LocalNoteWithAI;
+  children?: ReactNode;
   /** Optional override for tap behavior (e.g. in tests); if not provided, navigates */
   onPress?: (localId: string) => void;
 }
@@ -38,7 +40,7 @@ interface NoteCardProps {
  *
  * Tapping opens the detail page (/note/:localId) or calls onPress if provided.
  */
-export function NoteCard({ note, onPress }: NoteCardProps): React.ReactElement {
+export function NoteCard({ note, children, onPress }: NoteCardProps): React.ReactElement {
   const navigate = useNavigate();
   const colors = CATEGORY_COLORS[note.category];
   const isAISuggestedCategory = note.aiSuggestedFields?.includes('category');
@@ -97,7 +99,17 @@ export function NoteCard({ note, onPress }: NoteCardProps): React.ReactElement {
       </div>
 
       {/* Content snippet */}
-      <p className="mb-3 text-sm leading-relaxed text-slate-200">{snippet}</p>
+      <p
+        className={[
+          'text-sm leading-relaxed text-slate-200',
+          children ? 'mb-0' : 'mb-3',
+          note.done_at ? 'line-through' : '',
+        ].join(' ')}
+      >
+        {snippet}
+      </p>
+
+      {children ? <div className="mb-3 mt-2 flex flex-wrap items-center gap-2">{children}</div> : null}
 
       {/* Footer row */}
       <div className="flex items-center justify-between gap-2">

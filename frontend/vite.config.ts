@@ -56,6 +56,7 @@ export default defineConfig({
       workbox: {
         clientsClaim: true,
         skipWaiting: true,
+        importScripts: ['sw-push-handlers.js'],
         runtimeCaching: [
           {
             // NetworkFirst for all /api/* requests

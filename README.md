@@ -21,6 +21,12 @@ For incoming agents/contributors, read in this order:
 4. **[DECISIONS.md](./DECISIONS.md)** — architecture decisions, deviations from spec, OQ/B/SEC/PERF/QA tags
 5. **[KNOWN_ISSUES.md](./KNOWN_ISSUES.md)** — open work, test failures, prioritized backlog
 
+Feature guides:
+- **[docs/REMINDERS.md](./docs/REMINDERS.md)** — Round 35: write "submit by tomorrow #high #weekly" and Cortex extracts the deadline + priority + recurrence as you type. Push notifications (with email fallback) fire at the due time. Editable pill on every note. Full task model (`/tasks` page, mark done, recurring rollover) shipped on the existing notes table.
+- **[docs/SHORTCUTS.md](./docs/SHORTCUTS.md)** — Round 35: bind your iPhone 15 Pro Max Action Button (or Back Tap / Control Center) to a Shortcut that opens `/record?autostart=1` in the installed PWA — mic starts capturing the moment the app launches.
+- **[docs/IMPORT.md](./docs/IMPORT.md)** — bulk import from Google Keep + Notion via `backend/scripts/import_notes.py`.
+- **[docs/DEPLOYMENT.md](./docs/DEPLOYMENT.md)** — Azure setup runbook.
+
 Build specs (canonical source of truth):
 - [SECOND_BRAIN_BUILD_SPEC.md](./SECOND_BRAIN_BUILD_SPEC.md) — main spec
 - [SECOND_BRAIN_BUILD_SPEC_ADDENDUM.md](./SECOND_BRAIN_BUILD_SPEC_ADDENDUM.md) — Personal Dictionary + Shadow Reader

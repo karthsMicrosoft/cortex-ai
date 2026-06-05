@@ -2,7 +2,7 @@
 
 > **Architecture decisions and deviations from spec, with rationale.** When refactoring, preserve these unless the underlying constraint has changed.
 
-**Last updated:** 2026-06-04 (Round 34 SHIPPED: auto-titles + Brain View title label + mobile long-press — see § 22at)
+**Last updated:** 2026-06-05 (Round 35 SHIPPED: reminders + tasks + iOS Shortcuts deep link — DECISIONS § 22au)
 
 ---
 
@@ -1653,3 +1653,69 @@ on desktop.
   a fresh AI attempt. ``POST /api/notes/{id}/pipeline`` already
   exists -- could be a one-line button. Deferred until users ask.
 - Title in Library cards (mentioned above).
+---
+
+## sec 22au -- Round 35 -- Tasks live ON notes, hybrid save-first deadline extraction, Container Apps Job dispatcher
+
+**Context:** User asked for two features in plan mode:
+1. Scheduled reminder notifications for time-sensitive notes (push preferred on iPhone), with a full task model (done / priority / recurring) and a separate tasks page.
+2. iPhone 15 Pro Max Action Button -> record a voice note via iOS Shortcuts.
+
+**Decisions (with explicit user picks during plan-mode interview):**
+
+### Tasks live ON the notes table, not a separate tasks table
+- A note IS the task. One URL, one detail page, one history, no joins for the common case.
+- 5 nullable columns on `notes`: `due_at`, `done_at`, `priority` (1/2/3/NULL), `recurring` ('daily'/'weekly'/'monthly'/NULL), `reminder_sent_at`.
+- Two check constraints: `ck_notes_priority`, `ck_notes_recurring`.
+- Two indexes: `ix_notes_user_due_at` (Tasks page query) and partial `ix_notes_reminder_pending` (dispatcher hot path) so the row set the cron job scans stays tiny.
+
+### Hybrid extraction, save-first, source-agnostic
+User picked LLM-only first, then switched to hybrid + capture-UI preview after I argued the productivity case, then refined to **save-first** to eliminate data-loss risk while waiting on user pill interaction.
+- Shared regex matrix (`backend/tests/fixtures/deadline_extractor_cases.json`) consumed by BOTH TypeScript (`frontend/src/services/dateExtractor.ts`) and Python (`backend/app/services/deadline_extractor.py`). 31 cases. The two implementations cannot drift -- if you change the regex on one side, the cross-language test fails.
+- Pipeline order per note: **hint (browser) > Python regex > LLM > user edit**. Each layer only fills columns the prior layer left NULL. Re-pipeline on PUT (R32 G1) stays safe.
+- Capture-UI pill is non-blocking. Note saves IMMEDIATELY with hints. Pill on NoteDetail + Library cards becomes editable for correction.
+- Same pipeline path handles voice transcripts, OCR text, share-target, URL import, bulk import -- no source-specific code.
+
+### Container Apps Job (cron) for dispatch, NOT APScheduler in-process
+- Survives API restarts; no in-process timer drift; independent scaling; matches existing Azure-native pattern.
+- Cron `* * * * *` (every minute). `replicaCompletionCount=1`, `parallelism=1`, `replicaTimeout=300s`.
+- Reuses the API container image (same Dockerfile, different entrypoint: `python -m scripts.dispatch_reminders`).
+- Race-safe claim via `UPDATE notes SET reminder_sent_at = now() WHERE id = ANY(:ids) AND reminder_sent_at IS NULL RETURNING id` -- a retry or overlapping run cannot double-send.
+
+### Web push first, email fallback
+- Push has the best UX on iPhone PWA installed to home screen (iOS 16.4+).
+- Email is the universal safety net via Azure Communication Services.
+- Dispatcher fires push first; falls back to email only if NO subscription succeeded or there's no active subscription. Never spams both for the same reminder.
+- Notifier abstractions (`app/services/notify/webpush.py`, `app/services/notify/email.py`) NO-OP cleanly when their env secrets aren't set. This decouples shipping the feature from the operator wiring -- code merges + deploys safely before VAPID keys / ACS connection string are provisioned.
+- 410 Gone from push service auto-deletes the dead subscription.
+
+### Recurring rollover semantics
+- Only `daily` / `weekly` / `monthly` this round. Full RRULE deferred.
+- When a recurring reminder fires (or user taps Done), advance `due_at` by the period, reset `done_at` + `reminder_sent_at` to NULL. No history of past instances kept -- keeps schema simple; the note itself is the task.
+
+### Auto-extracted fields never overwrite user edits
+- Same guard pattern as R34 auto-title: `if not (note.due_at): ...`. Applied in the pipeline AND in the notifier hint persistence. User PATCH always wins.
+
+### iOS Shortcut = deep link, not Web Share Target
+- Web Share Target API is not supported by Safari/iOS PWAs. Documented as dead end during plan mode.
+- Single new query param `/record?autostart=1`. Manifest scope is `/` so the URL opens the home-screen PWA in standalone mode (not Safari).
+- No iOS-side native code; pure web. Action Button -> Shortcut -> Open URL -> mic starts inside the PWA.
+
+### Why we kept Workbox `generateSW` and used `importScripts` for push handlers
+- Simpler diff than switching to `injectManifest`.
+- Preserves the existing precache + the R29 runtime caches (`api-cache`, `blob-cache`).
+- The push + notificationclick listeners live in `frontend/public/sw-push-handlers.js` and are imported by the auto-generated SW via `additionalManifestEntries` + `importScripts` config in `vite.config.ts`.
+
+### What we did NOT do
+- Per-user time zone (defaults to UTC for now). LLM gets the user's locale once user-tz lands.
+- RRULE / cron-style recurring patterns.
+- "+ Add reminder" button when pill is empty is implemented; in-app re-link-this-note button (deferred from R32) is still deferred.
+- Bidirectional `(existing-> new)` semantic links from R32 G3 -- still deferred (Brain View edge-count symmetry only).
+- Library page cards still lead with truncated content + a small pill, not the title -- minor UX touch noted for a future round.
+
+### Test growth
+- Backend: +99 tests (1138 vs 1039 R34 baseline).
+- Frontend: +89 tests, 7 pre-existing failures unchanged (api-ai jsdom ReadableStream).
+- Infra: +16 guard-rail tests.
+
+See `PROGRESS.md` Round 35 + `docs/REMINDERS.md` + `docs/SHORTCUTS.md` for details.

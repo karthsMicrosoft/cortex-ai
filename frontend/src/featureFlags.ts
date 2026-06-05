@@ -1,9 +1,9 @@
 /**
  * featureFlags.ts — runtime feature flags driven by Vite env vars.
  *
- * Flags default OFF. Flip a flag by setting the corresponding env var to
- * `"true"` in `.env.production` (or any `.env.*` file Vite picks up) and
- * rebuilding the frontend.
+ * Most flags default OFF. Flip a default-off flag by setting the corresponding
+ * env var to `"true"` in `.env.production` (or any `.env.*` file Vite picks up)
+ * and rebuilding the frontend. Default-on flags document their disable values.
  *
  * Why a function (not a const): so tests can `vi.stubEnv('VITE_FEATURE_…', 'true')`
  * before render and have the flag respect the override without module-reload
@@ -29,4 +29,13 @@
  */
 export function isCanvasEnabled(): boolean {
   return import.meta.env.VITE_FEATURE_CANVAS === 'true';
+}
+
+/**
+ * Tasks (Round 35 reminders/tasks) — enabled by default.
+ * Set `VITE_FEATURE_TASKS=false` or `VITE_FEATURE_TASKS=0` to hide the Tasks UI.
+ */
+export function isTasksEnabled(): boolean {
+  const value = import.meta.env.VITE_FEATURE_TASKS;
+  return value !== 'false' && value !== '0';
 }

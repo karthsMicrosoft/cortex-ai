@@ -37,6 +37,7 @@ const LibraryPage = lazyRetry(() => import('./pages/LibraryPage'));
 const SearchPage = lazyRetry(() => import('./pages/SearchPage'));
 const AskPage = lazyRetry(() => import('./pages/AskPage'));
 const SharePage = lazyRetry(() => import('./pages/SharePage'));
+const TasksPage = lazy(() => import('./pages/TasksPage'));
 const CanvasListPage = lazyRetry(() => import('./pages/CanvasListPage'));
 const CanvasEditorPage = lazyRetry(() => import('./pages/CanvasEditorPage'));
 
@@ -136,6 +137,22 @@ export default function App(): React.ReactElement {
           element={
             <AuthGate>
               <NoteDetailPage />
+            </AuthGate>
+          }
+        />
+        <Route
+          path="/notes/:id"
+          element={
+            <AuthGate>
+              <NoteDetailPage />
+            </AuthGate>
+          }
+        />
+        <Route
+          path="/tasks"
+          element={
+            <AuthGate>
+              <TasksPage />
             </AuthGate>
           }
         />

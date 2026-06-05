@@ -9,6 +9,8 @@ export type Category = 'Music' | 'Fitness' | 'Journal' | 'Ideas' | 'Spiritual' |
 export type SyncStatus = 'pending' | 'synced' | 'conflict';
 export type ProcessingStatus = 'raw' | 'transcribed' | 'processed' | 'enriched' | 'failed';
 export type SyncOperation = 'create' | 'update' | 'delete';
+export type DeadlinePriority = 1 | 2 | 3;
+export type DeadlineRecurring = 'daily' | 'weekly' | 'monthly';
 
 export interface LocalNote {
   /** Auto-assigned UUID — primary key in IndexedDB */
@@ -25,8 +27,16 @@ export interface LocalNote {
   imageBlob?: Blob;
   tags: string[];
   mood?: string;
+  due_at?: string | null;
+  done_at?: string | null;
+  priority?: DeadlinePriority | null;
+  recurring?: DeadlineRecurring | null;
+  reminder_sent_at?: string | null;
   syncStatus: SyncStatus;
   processingStatus: ProcessingStatus;
+  due_at_hint?: string;
+  priority_hint?: DeadlinePriority;
+  recurring_hint?: DeadlineRecurring;
   /** Frozen server payload for conflict resolution (set when syncStatus='conflict') */
   conflictServerVersion?: unknown;
   createdAt: Date;

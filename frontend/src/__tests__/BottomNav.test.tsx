@@ -9,7 +9,7 @@
  *   - Visible on every page (rendered inside protected layout)
  */
 
-import { describe, it, expect, vi, beforeEach, afterAll } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach, afterAll } from 'vitest';
 import { render, screen } from '@testing-library/react';
 import React from 'react';
 import { MemoryRouter, Routes, Route } from 'react-router-dom';
@@ -40,7 +40,12 @@ function renderBottomNav(initialPath = '/') {
 
 describe('BottomNav (Task 5 / 3.1)', () => {
   beforeEach(() => {
+    vi.unstubAllEnvs();
     vi.clearAllMocks();
+  });
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
   });
 
   // --- Renders ---
@@ -57,12 +62,12 @@ describe('BottomNav (Task 5 / 3.1)', () => {
     expect(nav.className).toMatch(/fixed|bottom/i);
   });
 
-  // --- Five visible tabs (default; Canvas hidden behind VITE_FEATURE_CANVAS, Round 28) ---
+  // --- Six visible tabs by default (Tasks enabled; Canvas hidden behind VITE_FEATURE_CANVAS) ---
 
-  it('renders exactly five nav tab links by default (Canvas hidden)', () => {
+  it('renders exactly six nav tab links by default (Tasks visible, Canvas hidden)', () => {
     renderBottomNav();
     const links = screen.getAllByRole('link');
-    expect(links.length).toBe(5);
+    expect(links.length).toBe(6);
   });
 
   it('does NOT render a Canvas tab by default', () => {
@@ -78,6 +83,11 @@ describe('BottomNav (Task 5 / 3.1)', () => {
   it('has a Library tab', () => {
     renderBottomNav();
     expect(screen.getByRole('link', { name: /library/i })).toBeInTheDocument();
+  });
+
+  it('has a Tasks tab', () => {
+    renderBottomNav();
+    expect(screen.getByRole('link', { name: /^tasks$/i })).toBeInTheDocument();
   });
 
   it('has an Insights tab', () => {
@@ -129,6 +139,12 @@ describe('BottomNav (Task 5 / 3.1)', () => {
     expect(link.getAttribute('href')).toBe('/library');
   });
 
+  it('Tasks tab links to /tasks', () => {
+    renderBottomNav();
+    const link = screen.getByRole('link', { name: /^tasks$/i });
+    expect(link.getAttribute('href')).toBe('/tasks');
+  });
+
   it('Insights tab links to /insights', () => {
     renderBottomNav();
     const link = screen.getByRole('link', { name: /insights/i });
@@ -160,6 +176,14 @@ describe('BottomNav (Task 5 / 3.1)', () => {
     expect(isActive).toBe(true);
   });
 
+  it('Tasks tab is active when at /tasks', () => {
+    renderBottomNav('/tasks');
+    const link = screen.getByRole('link', { name: /^tasks$/i });
+    const isActive =
+      link.getAttribute('aria-current') === 'page' || link.className.includes('active');
+    expect(isActive).toBe(true);
+  });
+
   it('Insights tab is active when at /insights', () => {
     renderBottomNav('/insights');
     const link = screen.getByRole('link', { name: /insights/i });
@@ -183,7 +207,7 @@ describe('BottomNav (Task 5 / 3.1)', () => {
     const nav = screen.getByRole('navigation');
     // Lucide icons render as SVG elements
     const icons = nav.querySelectorAll('svg');
-    expect(icons.length).toBeGreaterThanOrEqual(5);
+    expect(icons.length).toBeGreaterThanOrEqual(6);
   });
 
   // --- Accessibility ---
@@ -218,6 +242,10 @@ describe('BottomNav (Task 5 / 3.1)', () => {
 // ---------------------------------------------------------------------------
 
 describe('BottomNav — Canvas feature flag (Round 28)', () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
   afterAll(() => {
     vi.unstubAllEnvs();
   });
@@ -226,20 +254,53 @@ describe('BottomNav — Canvas feature flag (Round 28)', () => {
     vi.stubEnv('VITE_FEATURE_CANVAS', 'true');
     renderBottomNav();
     expect(screen.getByRole('link', { name: /^canvas$/i })).toBeInTheDocument();
-    expect(screen.getAllByRole('link').length).toBe(6);
+    expect(screen.getAllByRole('link').length).toBe(7);
   });
 
   it('hides the Canvas tab when VITE_FEATURE_CANVAS is unset', () => {
     vi.stubEnv('VITE_FEATURE_CANVAS', '');
     renderBottomNav();
     expect(screen.queryByRole('link', { name: /^canvas$/i })).toBeNull();
-    expect(screen.getAllByRole('link').length).toBe(5);
+    expect(screen.getAllByRole('link').length).toBe(6);
   });
 
   it('hides the Canvas tab when VITE_FEATURE_CANVAS=false', () => {
     vi.stubEnv('VITE_FEATURE_CANVAS', 'false');
     renderBottomNav();
     expect(screen.queryByRole('link', { name: /^canvas$/i })).toBeNull();
-    expect(screen.getAllByRole('link').length).toBe(5);
+    expect(screen.getAllByRole('link').length).toBe(6);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Round 35 — Tasks feature flag (VITE_FEATURE_TASKS)
+// ---------------------------------------------------------------------------
+
+describe('BottomNav — Tasks feature flag (Round 35)', () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  it('renders the Tasks tab by default', () => {
+    renderBottomNav();
+    expect(screen.getByRole('link', { name: /^tasks$/i })).toBeInTheDocument();
+  });
+
+  it('renders the Tasks tab when VITE_FEATURE_TASKS=true', () => {
+    vi.stubEnv('VITE_FEATURE_TASKS', 'true');
+    renderBottomNav();
+    expect(screen.getByRole('link', { name: /^tasks$/i })).toBeInTheDocument();
+  });
+
+  it('hides the Tasks tab when VITE_FEATURE_TASKS=false', () => {
+    vi.stubEnv('VITE_FEATURE_TASKS', 'false');
+    renderBottomNav();
+    expect(screen.queryByRole('link', { name: /^tasks$/i })).toBeNull();
+  });
+
+  it('hides the Tasks tab when VITE_FEATURE_TASKS=0', () => {
+    vi.stubEnv('VITE_FEATURE_TASKS', '0');
+    renderBottomNav();
+    expect(screen.queryByRole('link', { name: /^tasks$/i })).toBeNull();
   });
 });

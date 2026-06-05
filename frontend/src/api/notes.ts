@@ -8,6 +8,8 @@ export type SourceType = 'voice' | 'text' | 'image';
 export type Category = 'Music' | 'Fitness' | 'Journal' | 'Ideas' | 'Spiritual' | 'Learning';
 export type ProcessingStatus = 'raw' | 'transcribed' | 'processed' | 'enriched' | 'failed';
 export type ShadowReaderStatus = 'pending' | 'asked' | 'answered' | 'dismissed' | 'skipped';
+export type TaskPriority = 1 | 2 | 3;
+export type TaskRecurring = 'daily' | 'weekly' | 'monthly';
 
 export interface NoteLink {
   id: string;
@@ -46,6 +48,11 @@ export interface NoteOut {
   // Phase 6 / PR 6.0 — Title + aliases (used by wiki-style linking).
   title?: string;
   aliases?: string[];
+  due_at?: string | null;
+  done_at?: string | null;
+  priority?: TaskPriority | null;
+  recurring?: TaskRecurring | null;
+  reminder_sent_at?: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -71,6 +78,11 @@ export interface NoteUpdate {
   // Phase 6 / PR 6.4 — Title + aliases editing.
   title?: string | null;
   aliases?: string[];
+  due_at?: string | null;
+  done_at?: string | null;
+  priority?: TaskPriority | null;
+  recurring?: TaskRecurring | null;
+  reminder_sent_at?: string | null;
 }
 
 export interface NotesListResponse {

@@ -2,7 +2,7 @@
 
 > **Chronological log of what's been done.** New work appends to the end. Use this to verify "we already did X" before re-doing.
 
-**Last updated:** 2026-06-04 (Round 34 SHIPPED: auto-titles + Brain View title-as-label + mobile long-press tooltip)
+**Last updated:** 2026-06-05 (Round 35 SHIPPED: reminders + tasks + iOS Shortcuts deep link)
 
 ---
 
@@ -2065,3 +2065,56 @@ TBD after sub-agents complete.
 - After live: ``az containerapp exec --command "python -m scripts.backfill_titles --email iamkarths@gmail.com"`` so existing notes get retroactive AI titles.
 
 See ``DECISIONS.md`` sec 22at for design rationale.
+---
+
+## Round 35 (2026-06-05) — Reminders & Tasks + iOS Shortcuts deep link
+
+### What shipped
+- **Full task model on existing notes table.** 5 new columns: `due_at`, `done_at`, `priority` (1=high/2=med/3=low/NULL), `recurring` (daily/weekly/monthly/NULL), `reminder_sent_at`. New `push_subscriptions` table. Alembic migration `013_tasks_and_push`.
+- **Hybrid, save-first, source-agnostic deadline extraction.** Shared regex matrix (`backend/tests/fixtures/deadline_extractor_cases.json`) drives both the TypeScript extractor (`frontend/src/services/dateExtractor.ts`) and the Python extractor (`backend/app/services/deadline_extractor.py`) so the two cannot drift. Pipeline order: browser hint > Python regex > LLM safety net (in `_auto_tag_and_categorize`). User edits always win. Same universal path serves typed text, voice transcript, OCR text, share-target, URL import, bulk import.
+- **Capture-UI deadline pill.** Renders `DeadlinePill` in `preview` mode under the text input as you type. Non-blocking, informational. Note saves immediately with hints riding on POST. Editable pill on NoteDetail + Library cards.
+- **Tasks API.** `GET /api/tasks?status=open|overdue|done|all` with priority filter + pagination. `POST /api/notes/{id}/done` toggles done with atomic recurring rollover.
+- **Push subscriptions API.** `POST/DELETE /api/push/subscribe` + `GET /api/push/vapid-public-key`. Upsert on `(user_id, endpoint)`.
+- **Notifier abstractions with safe no-ops.** `app/services/notify/webpush.py` (pywebpush + VAPID; 410-Gone subscriptions auto-deleted) and `app/services/notify/email.py` (Azure Communication Services). Both no-op cleanly when their env secrets aren't yet provisioned — ships before operator wiring.
+- **Reminders dispatcher.** `app/services/reminders.py` (race-safe `UPDATE … RETURNING` claim; webpush first, email fallback; recurring rollover) + `scripts/dispatch_reminders.py` (Container Apps Job entrypoint).
+- **Azure Container Apps Job.** `infra/modules/container-app-job.bicep` (cron `* * * * *`, same container image, VAPID + ACS env via secret refs). 16 guard-rail tests in `test_infra_reminders_job.py`.
+- **Frontend Tasks page.** `/tasks` route with Open/Overdue/Done tabs, priority filter, BottomNav tab gated on `VITE_FEATURE_TASKS` (default on).
+- **NoteDetail task panel.** Editable DeadlinePill + Mark Done button + "+ Add reminder" affordance when empty.
+- **Settings push toggle.** `services/push.ts` (VAPID-based subscribe/unsubscribe + iOS user-agent install hint). Service worker push + notificationclick handlers via Workbox `importScripts` (preserves api-cache/blob-cache).
+- **iOS Shortcuts deep link.** `/record?autostart=1` auto-starts mic on `CapturePage` mount. Documented in `docs/SHORTCUTS.md` with Action Button / Back Tap / Control Center setup.
+- **Operator runbook.** `docs/REMINDERS.md` covers regex patterns, web-push install, ACS Email setup, dispatch job manual run, backfill.
+- **Backfill.** `scripts/backfill_due_dates.py` runs the regex extractor on existing notes (free, fast). `--include-llm` adds the LLM fuzzy-phrasing pass.
+
+### Files changed
+- Backend foundation: `alembic/versions/013_tasks_and_push.py` (NEW), `app/models/note.py` (+5 cols + 2 check constraints), `app/models/push_subscription.py` (NEW), `app/models/__init__.py`, `app/schemas/note.py` (NoteCreate hint fields, NoteUpdate task fields, NoteOut surfaces all), `app/api/_note_serializers.py`.
+- Backend services: `app/services/deadline_extractor.py` (NEW), `app/services/notify/__init__.py` (NEW), `app/services/notify/webpush.py` (NEW), `app/services/notify/email.py` (NEW), `app/services/reminders.py` (NEW), `app/pipeline/processor.py` (regex pass + extended LLM JSON schema + non-overwrite guard).
+- Backend APIs: `app/api/notes.py` (POST persists hints, `POST /{id}/done` endpoint), `app/api/tasks.py` (NEW), `app/api/push.py` (NEW), `app/main.py` (router wiring), `app/schemas/task.py` (NEW), `app/schemas/push.py` (NEW), `app/config.py` (+VAPID + ACS settings).
+- Backend scripts: `scripts/dispatch_reminders.py` (NEW), `scripts/backfill_due_dates.py` (NEW).
+- Backend tests (NEW): `test_deadline_extractor.py`, `test_pipeline_due_extraction.py`, `test_api_tasks.py`, `test_api_notes_hints.py`, `test_api_push.py`, `test_notify_webpush.py`, `test_notify_email.py`, `test_reminders.py`, `test_dispatch_reminders_script.py`, `test_backfill_due_dates.py`, `test_infra_reminders_job.py`.
+- Backend test fixture: `tests/fixtures/deadline_extractor_cases.json` (NEW — shared by Python + TypeScript tests).
+- Infra: `infra/modules/container-app-job.bicep` (NEW), `infra/main.bicep` (job module + VAPID/ACS env on API container).
+- Frontend services + components: `services/dateExtractor.ts` (NEW), `services/push.ts` (NEW), `services/api/tasks.ts` (NEW), `components/DeadlinePill.tsx` (NEW, two modes), `components/NoteCard.tsx` (due pill rendering), `featureFlags.ts` (+isTasksEnabled), `db.ts` (+5 task fields on LocalNote), `sync/syncManager.ts`, `api/notes.ts`.
+- Frontend pages: `pages/CapturePage.tsx` (autostart + pill + hints), `pages/VoiceCapture.tsx`, `pages/TasksPage.tsx` (NEW), `pages/NoteDetailPage.tsx` (task panel), `pages/LibraryPage.tsx` (pill), `pages/SettingsPage.tsx` (push toggle), `App.tsx` (lazy `/tasks` route), `components/BottomNav.tsx` (Tasks tab).
+- Frontend SW: `public/sw-push-handlers.js` (NEW), `vite.config.ts` (importScripts wiring).
+- Frontend tests (NEW): `dateExtractor.test.ts`, `DeadlinePill.test.tsx`, `CapturePage-autostart.test.tsx`, `CapturePage-deadline-hint.test.tsx`, `TasksPage.test.tsx`, `NoteDetailPage-task.test.tsx`, `LibraryPage-deadline.test.tsx`, `push.test.ts`, `SettingsPage-push.test.tsx`. Existing: BottomNav extended.
+- Docs: `docs/SHORTCUTS.md` (NEW), `docs/REMINDERS.md` (NEW), this file, `DECISIONS.md` sec 22au, `KNOWN_ISSUES.md`, `HANDOFF.md`, `README.md`.
+
+### Validation
+- Backend: 1138 passing (+99 from Round 34's 1039 baseline), 8 skipped, 1 xfailed, 0 new regressions.
+- Frontend: 945 passing, 7 known pre-existing failures (api-ai jsdom `ReadableStream`), TypeScript clean.
+- Infra: 16/16 guard-rail tests pass.
+
+### Operator one-time setup (post-deploy)
+1. Generate VAPID keys: `web-push generate-vapid-keys` (or pywebpush helper).
+2. `az containerapp secret set --name cortexks-api --resource-group cortex-rg --secrets vapid-public-key=... vapid-private-key=... vapid-subject=mailto:admin@cortex.app`
+3. Same for `cortexks-reminders` job (via re-deploying `main.bicep` with the params).
+4. (Optional) ACS Email connection string + sender for fallback channel.
+5. PWA → Settings → "Enable reminder notifications" → tap Allow.
+6. iPhone Shortcut → Open URL `https://gentle-river-06c1e4e10.7.azurestaticapps.net/record?autostart=1` → assign to Action Button.
+
+### Deploy + backfill
+- Git push to main → CI auto-deploys backend + frontend.
+- After live: `az containerapp exec --name cortexks-api --resource-group cortex-rg --command "python -m scripts.backfill_due_dates --email iamkarths@gmail.com"` to fill due_at on older notes (regex pass).
+- Optional LLM pass: add `--include-llm` for fuzzy phrasings.
+
+See `DECISIONS.md` sec 22au for design rationale.

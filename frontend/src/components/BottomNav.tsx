@@ -1,6 +1,6 @@
 import { NavLink } from 'react-router-dom';
-import { Mic, BookOpen, BarChart2, PenSquare, MessageCircle, Layout } from 'lucide-react';
-import { isCanvasEnabled } from '../featureFlags';
+import { Mic, BookOpen, BarChart2, PenSquare, MessageCircle, Layout, CheckSquare } from 'lucide-react';
+import { isCanvasEnabled, isTasksEnabled } from '../featureFlags';
 
 // ---------------------------------------------------------------------------
 // Tab config
@@ -9,6 +9,7 @@ import { isCanvasEnabled } from '../featureFlags';
 const ALL_TABS = [
   { to: '/',          label: 'Capture',  Icon: Mic,           flag: 'always' as const },
   { to: '/library',   label: 'Library',  Icon: BookOpen,      flag: 'always' as const },
+  { to: '/tasks',     label: 'Tasks',    Icon: CheckSquare,   flag: 'tasks' as const },
   { to: '/canvases',  label: 'Canvas',   Icon: Layout,        flag: 'canvas' as const },
   { to: '/ask',       label: 'Ask',      Icon: MessageCircle, flag: 'always' as const },
   { to: '/insights',  label: 'Insights', Icon: BarChart2,     flag: 'always' as const },
@@ -17,7 +18,10 @@ const ALL_TABS = [
 
 function visibleTabs() {
   const canvasOn = isCanvasEnabled();
-  return ALL_TABS.filter((t) => t.flag === 'always' || (t.flag === 'canvas' && canvasOn));
+  const tasksOn = isTasksEnabled();
+  return ALL_TABS.filter(
+    (t) => t.flag === 'always' || (t.flag === 'canvas' && canvasOn) || (t.flag === 'tasks' && tasksOn),
+  );
 }
 
 // ---------------------------------------------------------------------------

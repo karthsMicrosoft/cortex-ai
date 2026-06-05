@@ -23,6 +23,9 @@ interface NoteCreatePayload {
   client_id: string;
   tags?: string[];
   category?: string;
+  due_at_hint?: string;
+  priority_hint?: 1 | 2 | 3;
+  recurring_hint?: 'daily' | 'weekly' | 'monthly';
 }
 
 interface NoteOut {
@@ -30,6 +33,11 @@ interface NoteOut {
   content: string;
   processing_status: string;
   updated_at: string;
+  due_at?: string | null;
+  done_at?: string | null;
+  priority?: 1 | 2 | 3 | null;
+  recurring?: 'daily' | 'weekly' | 'monthly' | null;
+  reminder_sent_at?: string | null;
   [key: string]: unknown;
 }
 
@@ -176,6 +184,13 @@ function mapServerToLocal(
   }
   if (tags) merged.tags = tags;
   if (typeof serverNote.mood === 'string') merged.mood = serverNote.mood;
+  if (serverNote.due_at !== undefined) merged.due_at = serverNote.due_at;
+  if (serverNote.done_at !== undefined) merged.done_at = serverNote.done_at;
+  if (serverNote.priority !== undefined) merged.priority = serverNote.priority;
+  if (serverNote.recurring !== undefined) merged.recurring = serverNote.recurring;
+  if (serverNote.reminder_sent_at !== undefined) {
+    merged.reminder_sent_at = serverNote.reminder_sent_at;
+  }
   return merged;
 }
 
@@ -371,6 +386,9 @@ export class SyncManager {
       client_id: note.localId,
       tags: note.tags,
       category: note.category,
+      ...(note.due_at_hint ? { due_at_hint: note.due_at_hint } : {}),
+      ...(note.priority_hint ? { priority_hint: note.priority_hint } : {}),
+      ...(note.recurring_hint ? { recurring_hint: note.recurring_hint } : {}),
     });
 
     // Immediately merge whatever the server returned (status will be 'raw' or

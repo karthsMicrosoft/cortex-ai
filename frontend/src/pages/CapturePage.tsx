@@ -1,14 +1,16 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import { v4 as uuidv4 } from 'uuid';
 import { Image as ImageIcon, Send, Loader2, Mic, Type, Link as LinkIcon } from 'lucide-react';
 import { db } from '../db';
 import type { LocalNote } from '../db';
-import { VoiceCapture } from '../components/VoiceCapture';
+import { VoiceCapture, type VoiceCaptureHandle } from '../components/VoiceCapture';
 import { SyncIndicator } from '../components/SyncIndicator';
 import { ImagePreview } from '../components/ImagePreview';
 import { UrlClipForm } from '../components/UrlClipForm';
+import { DeadlinePill } from '../components/DeadlinePill';
 import { syncManager } from '../sync/syncManager';
+import { extract, type ExtractedDeadline } from '../services/dateExtractor';
 
 // ---------------------------------------------------------------------------
 // Image-resize constants (Round 15 / PR #24)
@@ -83,13 +85,35 @@ async function resizeImage(blob: Blob): Promise<Blob> {
  */
 export function CapturePage(): React.ReactElement {
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
   const [textContent, setTextContent] = useState('');
+  const [extractedDeadline, setExtractedDeadline] = useState<ExtractedDeadline | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const voiceRef = useRef<VoiceCaptureHandle>(null);
+  const autostartStartedRef = useRef(false);
 
   // ---------------------------------------------------------------------- tab state (PR 5.3)
   type CaptureTab = 'text' | 'voice' | 'image' | 'url';
   const [activeTab, setActiveTab] = useState<CaptureTab>('text');
+
+  const autostart = searchParams.get('autostart') === '1';
+
+  useEffect(() => {
+    if (!autostart || autostartStartedRef.current) return;
+    autostartStartedRef.current = true;
+    setActiveTab('voice');
+    void voiceRef.current?.start();
+  }, [autostart]);
+
+  useEffect(() => {
+    setExtractedDeadline(
+      extract(textContent, {
+        now: new Date(),
+        tz: Intl.DateTimeFormat().resolvedOptions().timeZone,
+      }),
+    );
+  }, [textContent]);
 
   // ---------------------------------------------------------------------- image-flow state
 
@@ -115,6 +139,17 @@ export function CapturePage(): React.ReactElement {
     setIsSubmitting(true);
     const localId = uuidv4();
     const now = new Date();
+    const deadlineForSubmit = extract(content, {
+      now,
+      tz: Intl.DateTimeFormat().resolvedOptions().timeZone,
+    });
+    const deadlineHints = deadlineForSubmit
+      ? {
+          ...(deadlineForSubmit.due_at ? { due_at_hint: deadlineForSubmit.due_at } : {}),
+          ...(deadlineForSubmit.priority ? { priority_hint: deadlineForSubmit.priority } : {}),
+          ...(deadlineForSubmit.recurring ? { recurring_hint: deadlineForSubmit.recurring } : {}),
+        }
+      : {};
 
     const localNote: LocalNote = {
       localId,
@@ -126,6 +161,7 @@ export function CapturePage(): React.ReactElement {
       processingStatus: 'raw',
       createdAt: now,
       updatedAt: now,
+      ...deadlineHints,
     };
 
     await db.notes.add(localNote);
@@ -139,6 +175,7 @@ export function CapturePage(): React.ReactElement {
     });
 
     setTextContent('');
+    setExtractedDeadline(null);
     setIsSubmitting(false);
     void syncManager.pushChanges();
     navigate('/library');
@@ -327,6 +364,15 @@ export function CapturePage(): React.ReactElement {
               }
             }}
           />
+          <div className="mt-2">
+            <DeadlinePill
+              mode="preview"
+              dueAt={extractedDeadline?.due_at}
+              priority={extractedDeadline?.priority}
+              recurring={extractedDeadline?.recurring}
+              testId="deadline-pill-preview"
+            />
+          </div>
           <div className="mt-3 flex items-center justify-between">
             {/* Image upload — label wraps visually-styled button + hidden input */}
             <label
@@ -430,7 +476,7 @@ export function CapturePage(): React.ReactElement {
       </main>
 
       {/* FAB */}
-      <VoiceCapture onNoteCreated={() => navigate('/library')} />
+      <VoiceCapture ref={autostart ? voiceRef : undefined} onNoteCreated={() => navigate('/library')} />
     </div>
   );
 }

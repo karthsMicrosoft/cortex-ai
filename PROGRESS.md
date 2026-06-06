@@ -2,7 +2,7 @@
 
 > **Chronological log of what's been done.** New work appends to the end. Use this to verify "we already did X" before re-doing.
 
-**Last updated:** 2026-06-05 (Round 41 SHIPPED: brain icon for home-screen + apple-touch-icon link)
+**Last updated:** 2026-06-05 (Round 42 SHIPPED: brain icon switched to Lucide SVG)
 
 ---
 
@@ -2315,3 +2315,31 @@ iOS does NOT refresh home-screen icons after install. To get the new brain icon:
 ### Validation
 - Visual preview of icon-512.png confirmed brain-recognizable shape.
 - No code changes that affect tests.
+
+---
+
+## Round 42 (2026-06-05) -- Replace programmatic brain icon with Lucide Brain SVG
+
+### Why
+User asked for a brain icon like icons8.com/icons/set/brain--white. Icons8's free tier requires attribution in the app footer/credits, adding compliance burden. Cortex already uses `lucide-react` throughout the app -- Lucide has a `Brain` icon under the MIT license (no attribution required) that matches the same clean white-outline aesthetic.
+
+### What shipped
+- **Lucide Brain SVG** (https://github.com/lucide-icons/lucide MIT) rendered on the Cortex indigo gradient via `resvg-py` (pure Rust SVG renderer, no native dep). Stroke width thickened slightly (1.6 vs 2.0 source) for visibility at small sizes.
+- All 5 icons regenerated:
+  - `icon-192.png`, `icon-512.png` (PWA manifest)
+  - `icon-512-mask.png` (maskable, brain at 50% scale for safe area)
+  - `apple-touch-icon.png` (iOS, 180x180)
+  - `favicon.ico` (multi-res 16/32/48 with denser 75% brain scale for tiny sizes)
+
+### Why not icons8 directly
+- Free tier requires attribution.
+- Lucide's brain icon is visually equivalent and license-clean.
+- Lucide is already a runtime dependency of the app, so we're not pulling in new third-party IP.
+
+### Files changed
+- `frontend/public/icons/{icon-192, icon-512, icon-512-mask, apple-touch-icon}.png` (regenerated)
+- `frontend/public/favicon.ico` (regenerated)
+- `PROGRESS.md` (this section), `HANDOFF.md`
+
+### User-side step to see the new icon
+Same as R41 -- iOS doesn't refresh home-screen icons. Long-press existing Cortex icon -> Remove App -> reinstall via Safari -> Share -> Add to Home Screen.

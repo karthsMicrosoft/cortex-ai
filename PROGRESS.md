@@ -2,7 +2,7 @@
 
 > **Chronological log of what's been done.** New work appends to the end. Use this to verify "we already did X" before re-doing.
 
-**Last updated:** 2026-06-05 (Round 42 SHIPPED: brain icon switched to Lucide SVG)
+**Last updated:** 2026-06-11 (Round 43 SHIPPED: voice note content edits no longer reverted by pipeline)
 
 ---
 

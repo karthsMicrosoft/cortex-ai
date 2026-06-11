@@ -201,6 +201,11 @@ async def test_patch_note_other_user_404(
 # semantic links + tags + embedding stay in sync with the new text. Previously
 # `processing_status` got reset to 'raw' but nothing actually scheduled
 # `_run_pipeline`, so edited notes drifted out of the auto-link graph.
+#
+# Round 43 update: status is now 'processed' (not 'raw') after a content
+# edit, so the pipeline skips Stage 1 CAPTURE (which would overwrite voice
+# note content from raw_transcription) but still runs Stage 2 ORGANIZE
+# (re-tag / re-embed / re-link — which is what G1 was about).
 # ---------------------------------------------------------------------------
 
 class TestUpdateNoteSchedulesPipeline:
@@ -230,7 +235,7 @@ class TestUpdateNoteSchedulesPipeline:
         )
         assert resp.status_code == 200, resp.text
         assert resp.json()["content"] == "totally new content that should re-trigger linking"
-        assert resp.json()["processing_status"] == "raw"
+        assert resp.json()["processing_status"] == "processed"
         assert calls == [("run_pipeline", note["id"])], (
             "PUT with new content must schedule _run_pipeline once "
             "so semantic links + embedding are recomputed (Round 32 / G1)."

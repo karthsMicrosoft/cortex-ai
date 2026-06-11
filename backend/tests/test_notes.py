@@ -416,10 +416,15 @@ class TestUpdateNote:
         )
 
     @pytest.mark.asyncio
-    async def test_update_note_content_resets_processing_status(
+    async def test_update_note_content_change_sets_processed_status(
         self, client: AsyncClient, auth_headers: dict
     ):
-        """Changing content must reset processing_status to 'raw' (re-pipeline trigger)."""
+        """Round 43 — Content change must set processing_status='processed'
+        (NOT 'raw'). 'raw' would re-enter Stage 1 CAPTURE, which for voice
+        notes re-cleans raw_transcription via LLM and overwrites the user's
+        edited content. 'processed' enters at Stage 2 ORGANIZE (re-tag,
+        re-embed, re-link) which is what we want on a content edit.
+        """
         create_resp = await _create_note(client, auth_headers, content="Original")
         note_id = create_resp.json()["id"]
 
@@ -429,8 +434,9 @@ class TestUpdateNote:
             headers=auth_headers,
         )
         body = resp.json()
-        assert body.get("processing_status") == "raw", (
-            f"Content change must reset processing_status to 'raw', got: {body.get('processing_status')}"
+        assert body.get("processing_status") == "processed", (
+            f"Round 43: Content change must set processing_status='processed' "
+            f"to skip Stage 1 CAPTURE. Got: {body.get('processing_status')}"
         )
 
     @pytest.mark.asyncio

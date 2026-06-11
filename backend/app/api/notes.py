@@ -313,10 +313,19 @@ async def update_note(
             content_changed = True
         setattr(note, field, value)
 
-    # If content changed, reset pipeline status AND schedule a re-run so
-    # the AI pipeline regenerates the embedding + semantic links + tags.
+    # If content changed, schedule a pipeline re-run so the AI pipeline
+    # regenerates tags + embedding + semantic links (Round 32 G1).
+    #
+    # Round 43 — set status='processed' (NOT 'raw') so the pipeline SKIPS
+    # Stage 1 CAPTURE. Stage 1 for voice notes re-reads the original
+    # `raw_transcription` and asks GPT-4o-mini to "clean" it, then
+    # overwrites `note.content` with the LLM result — silently discarding
+    # the user's edit. Setting status='processed' enters the state machine
+    # directly at Stage 2 ORGANIZE (re-tag, re-embed, re-link), which is
+    # what we want on a content edit. Stage 1 for text/image is already
+    # a no-op so this is mathematically identical for those source types.
     if content_changed:
-        note.processing_status = "raw"
+        note.processing_status = "processed"
         background_tasks.add_task(_run_pipeline, note_id)
 
     # Delta-apply tags if provided
